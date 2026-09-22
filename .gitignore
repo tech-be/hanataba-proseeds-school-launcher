@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+config*.yaml
+out/
+*.sql.gz
+*.sql
+# 暫定対応で決めた値。個人情報（メールアドレス）を含む
+overrides*.csv

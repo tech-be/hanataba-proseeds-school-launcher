@@ -1,0 +1,46 @@
+# 移行ツールの設定。接続情報は環境変数（SOURCE_DB_URL / TARGET_DB_URL）で渡す。
+# 仕様: docs/migration-spec.md
+
+tenant:
+  legacy_id: 12        # lw2 の tenant_id（recademy）
+  slug: recademy       # 新環境の tenants.slug。既存ツールが引くキー
+  name: ReCADemy       # tenants.name。tenant_name が NULL のときの投入値
+
+# 決定論 ULID の名前空間。採番規則を変えたらこの値も変えること
+ulid_namespace: lw2
+
+work_dir: ./out
+
+# 運営から受け取る対応表（docs/db/01-foundation/migration-spec.md 1-1）
+mappings:
+  role:
+    source: "ローカル DB の role_master（本番ダンプで再確認する）"
+    # lw2 role_id -> school-launcher の user_roles.code
+    # ローカル DB の role_master 実データで確定（3 と 8 は del_chk=1 の削除済み）
+    values:
+      1: system_admin       # SYSTEM_MANAGER   システム管理者
+      2: tenant_admin       # TOTAL_MANAGER    全体管理者
+      3: facility_manager   # FACILITY_MANAGER 運営管理者（削除済み）
+      4: company_manager    # COMPANY_MANAGER  求人企業
+      5: instructor         # INSTRUCTOR       講座管理者
+      6: group_manager      # GROUP_MANAGER    グループ管理者
+      7: learner            # STUDENT          受講者
+      8: supporter          # SUPPORTER        サポーター（削除済み）
+  # パスワードの再ハッシュ。既定は新環境と同じ 10（`bcrypt.DefaultCost`）。
+  # **下げると弱くなる。** テストを速くする目的以外で触らない。
+  # password:
+  #   bcrypt_cost: 10
+
+  # 都道府県は**書かなければ旧 DB の `pref_master` から引く**（48件。`description` が名称）。
+  # ここに values を書いた場合はそちらが優先される。
+  # prefecture:
+  #   source: "運営から受け取った対応表"
+  #   values:
+  #     1: 北海道
+
+# **この移行元に無いと分かっているテーブル。** 書いた分のデータは移らない。
+# 事前検査が Step の読むテーブルの実在を確かめ、ここに無い欠落があれば停止する。
+# 本番では空にして、実際に有るかを確かめること。
+# source:
+#   absent_tables:
+#     - user_login_chk_log   # 20230821_cdss.sql で追加。staging には無い
