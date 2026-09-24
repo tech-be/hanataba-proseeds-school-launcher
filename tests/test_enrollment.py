@@ -1,0 +1,219 @@
+"""受講区分の変換テスト。**取り違えると気づかないまま誤データになるもの**に絞る。
+
+lw2 の列名は素直に読むと誤るものが多い。ここで固定しているのは
+「旧アプリの実装を読んで決めた」3点で、**列名から推測し直すと壊れる**。
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import unittest
+from datetime import date, datetime
+
+from migrator.config import Config, TenantConfig
+from migrator.context import build_context
+from migrator.db.target import TargetDatabase
+from migrator.steps.enrollment import progress as en_progress
+from migrator.steps.enrollment import rights as en_rights
+from tests.fakes import FakeSource
+
+CONFIG = Config(
+    tenant=TenantConfig(legacy_id=12, slug="recademy", name="ReCADemy"),
+    ulid_namespace="lw2-test",
+    mappings={"role": {"values": {7: "learner"}}, "prefecture": {"values": {}}},
+)
+
+
+def make_ctx(tables=None):
+    ctx = build_context(CONFIG, FakeSource(tables or {}), TargetDatabase(None, dry_run=True),
+                        logging.getLogger("test"))
+    ctx.tenant_id.resolve("01ARZ3NDEKTSV4RRFFQ69G5FAV")
+    return ctx
+
+
+def authority(**over):
+    row = {
+        "authority_id": 1, "authority_key": "k1", "user_id": 100, "item_id": 5,
+        "application_id": None, "lesson_id": 200,
+        "authority_start_date": date(2020, 1, 1), "authority_end_date": date(2021, 1, 1),
+        "payment_authority_end_date": date(2021, 1, 1),
+        "cancel_chk": 1, "no_limit_chk": 0, "payment_no_limit_chk": 0,
+        "remote_chk": 0, "del_chk": 0,
+    }
+    row.update(over)
+    return row
+
+
+class RightsTest(unittest.TestCase):
+    def _records(self, rows):
+        ctx = make_ctx()
+        return en_rights.EnrollmentRightsStep().transform(ctx, rows)
+
+    def test_cancel_chk_is_not_a_cancellation(self) -> None:
+        """**`cancel_chk = 1` を取り消しにしない。**
+
+        作成時に定数で入るだけの列で、UPDATE されない。取り消しと読むと
+        実測 3,684 行中 3,064 行（83%）が `canceled` になる。
+        """
+        [rec] = self._records([authority(cancel_chk=1, del_chk=0)])
+        self.assertNotEqual(rec.values["status"], "revoked")
+
+    def test_del_chk_is_the_cancellation(self) -> None:
+        """**実質の取り消しは `del_chk`。**
+
+        `enrollment_statuses` に `canceled` は無い（`active` / `expired` /
+        `refunded` / `revoked`）。**`canceled` を入れると FK で落ちる。**
+        """
+        [rec] = self._records([authority(cancel_chk=0, del_chk=1)])
+        self.assertEqual(rec.values["status"], "revoked")
+
+    def test_rows_are_folded_by_user_and_course(self) -> None:
+        """**lw2 と同じ粒度に畳む**（`LessonModel::1804` の `GROUP BY`）。"""
+        recs = self._records([
+            authority(authority_id=1, item_id=5),
+            authority(authority_id=2, item_id=9),   # 別商品・同じ講座
+            authority(authority_id=3, lesson_id=201),
+        ])
+        self.assertEqual(len(recs), 2)
+
+    def test_expiry_takes_the_max(self) -> None:
+        """**期限は `MAX()`。** 短い方を採ると受講できる期間が縮む。"""
+        [rec] = self._records([
+            authority(authority_id=1, authority_end_date=date(2021, 1, 1)),
+            authority(authority_id=2, authority_end_date=date(2023, 6, 30)),
+        ])
+        self.assertEqual(rec.values["expires_at"].date(), date(2023, 6, 30))
+
+    def test_expiry_is_end_of_day_in_jst(self) -> None:
+        """**終了日は JST の 23:59:59 で補い、UTC で持つ。**
+
+        00:00 にすると期限日当日が切れる。JST を UTC に直すと**前日 15:00**に
+        なるので、境界を明示しないと1日ずれる（`DateBoundary`）。
+        """
+        [rec] = self._records([authority(authority_end_date=date(2021, 1, 1))])
+        self.assertEqual(rec.values["expires_at"], datetime(2021, 1, 1, 14, 59, 59))
+
+    def test_unlimited_clears_the_expiry(self) -> None:
+        """`no_limit_chk = 1` は無期限。**元の値は settings に残す。**"""
+        [rec] = self._records([authority(no_limit_chk=1)])
+        self.assertIsNone(rec.values["expires_at"])
+        self.assertTrue(json.loads(rec.values["settings"])["unlimited"])
+
+    def test_deleted_rows_do_not_hide_a_live_one(self) -> None:
+        """生きている行が1つでもあれば `active`。"""
+        [rec] = self._records([
+            authority(authority_id=1, del_chk=1),
+            authority(authority_id=2, del_chk=0),
+        ])
+        self.assertNotEqual(rec.values["status"], "revoked")
+
+    def test_past_expiry_becomes_expired(self) -> None:
+        """期限切れは `expired`。実測で 1,874組中 1,603組（86%）が該当する。"""
+        [rec] = self._records([authority(authority_end_date=date(2021, 1, 1))])
+        self.assertEqual(rec.values["status"], "expired")
+
+    def test_future_expiry_stays_active(self) -> None:
+        [rec] = self._records([authority(authority_end_date=date(2099, 1, 1))])
+        self.assertEqual(rec.values["status"], "active")
+
+    def test_unlimited_is_active(self) -> None:
+        """無期限は `expires_at` が NULL なので、期限切れ判定に落ちない。"""
+        [rec] = self._records([authority(no_limit_chk=1)])
+        self.assertEqual(rec.values["status"], "active")
+
+    def test_far_future_expiry_is_treated_as_unlimited(self) -> None:
+        """**`TIMESTAMP` の上限を超える期限は無期限に寄せる。**
+
+        旧は無期限を100年後の日付で表す（実測 2124-06-24）。そのまま入れると
+        実 INSERT で `Incorrect datetime value` になる。
+        """
+        [rec] = self._records([authority(authority_end_date=date(2124, 6, 24))])
+        self.assertIsNone(rec.values["expires_at"])
+        self.assertEqual(rec.values["status"], "active")
+        settings = json.loads(rec.values["settings"])
+        self.assertTrue(settings["unlimited"])
+        self.assertIn("2124-06-24", settings["legacy_expires_at_beyond_timestamp"])
+
+    def test_source_is_purchase(self) -> None:
+        """`manual` という値は存在しない（`enrollment_sources` の5値）。"""
+        [rec] = self._records([authority()])
+        self.assertEqual(rec.values["source"], "purchase")
+
+    def test_legacy_item_ids_are_kept(self) -> None:
+        """**畳んだ商品を捨てない。** 課金（4）の移行後に紐付け直す。"""
+        [rec] = self._records([
+            authority(authority_id=1, item_id=5),
+            authority(authority_id=2, item_id=9),
+        ])
+        self.assertEqual(json.loads(rec.values["settings"])["legacy_item_ids"], [5, 9])
+
+
+def unit_row(**over):
+    row = {
+        "user_learning_unit_id": 1, "user_learning_lesson_id": 10, "unit_id": 300,
+        "learning_status": 1, "complete_date": datetime(2021, 5, 1, 12, 0),
+        "progress_status": 2, "score": None, "suspend_data": None,
+        "update_date": datetime(2021, 5, 1, 12, 0), "del_chk": 0,
+    }
+    row.update(over)
+    return row
+
+
+class ProgressTest(unittest.TestCase):
+    def _records(self, rows, kinds=None, owners=None):
+        ctx = make_ctx()
+        step = en_progress.LessonProgressStep()
+        step._owners = owners or {10: 100}
+        step._kinds = kinds or {300: 2}
+        return step.transform(ctx, rows)
+
+    def test_progress_status_keeps_the_unit_kind(self) -> None:
+        """**種別を落とすと意味が復元できない。**
+
+        同じ `2` がテストなら「受験中」、アンケートなら「回答済」。
+        """
+        [quiz] = self._records([unit_row()], kinds={300: 2})
+        [survey] = self._records([unit_row()], kinds={300: 3})
+        self.assertEqual(quiz.values["progress_status"], "quiz:2")
+        self.assertEqual(survey.values["progress_status"], "survey:2")
+        self.assertEqual(json.loads(quiz.values["settings"])["progress_label"], "受験中")
+        self.assertEqual(json.loads(survey.values["settings"])["progress_label"], "回答済")
+
+    def test_lecture_progress_is_not_guessed(self) -> None:
+        """**講義（`unit_type_id = 1`）は定数ファイルに定義が無い。** 畳まない。"""
+        [rec] = self._records([unit_row()], kinds={300: 1})
+        self.assertEqual(rec.values["progress_status"], "lecture:2")
+        self.assertTrue(json.loads(rec.values["settings"])["progress_label_unknown"])
+
+    def test_completed_at_follows_learning_status(self) -> None:
+        """**修了は `learning_status`。** 実測で `complete_date` と完全に一致する。"""
+        [done] = self._records([unit_row(learning_status=1)])
+        [todo] = self._records([unit_row(learning_status=0, complete_date=None)])
+        self.assertIsNotNone(done.values["completed_at"])
+        self.assertIsNone(todo.values["completed_at"])
+
+    def test_suspend_data_does_not_go_to_last_position(self) -> None:
+        """**SCORM の中断データを再生位置に入れない。** 形式が違う。"""
+        [rec] = self._records([unit_row(suspend_data="lesson_location=5;score=80")])
+        self.assertIsNone(rec.values["last_position"])
+        self.assertEqual(
+            json.loads(rec.values["settings"])["suspend_data"], "lesson_location=5;score=80")
+
+    def test_duplicates_keep_the_newest(self) -> None:
+        """`(会員, ユニット)` は UNIQUE。**制約は緩めず、新しい方を残す。**"""
+        recs = self._records([
+            unit_row(user_learning_unit_id=1, update_date=datetime(2020, 1, 1), progress_status=1),
+            unit_row(user_learning_unit_id=2, update_date=datetime(2022, 1, 1), progress_status=3),
+        ])
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0].values["progress_status"], "quiz:3")
+
+    def test_deleted_rows_are_migrated_with_a_marker(self) -> None:
+        """**削除済みも移す**（移行の原則の1）。`deleted_at` で表す。"""
+        [rec] = self._records([unit_row(del_chk=1)])
+        self.assertIsNotNone(rec.values["deleted_at"])
+
+
+if __name__ == "__main__":
+    unittest.main()
