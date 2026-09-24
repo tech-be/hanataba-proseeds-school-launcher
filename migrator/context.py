@@ -66,6 +66,18 @@ class RunContext:
             self.logger.info("country_master から国名 %d 件を読んだ", len(self._countries))
         return self._countries
 
+    def provisional(self, key: str):
+        """**暫定対応で入れる仮の値。** 設定 `provisional` から読む。
+
+        対応表やデータが届くまでの仮置きで、**届いたら差し替える**。
+        設定に無ければ `None`（列が NULL 可ならそのまま入り、NOT NULL なら
+        制約チェックが止める — 黙って既定値を作らない）。
+
+        入れた件数は Step が記録に残すこと。あとで「どれが仮か」を追えないと、
+        差し替えのときに全件を見直すはめになる。
+        """
+        return (self.config.provisional or {}).get(key)
+
     def exclusions(self):
         """制約に当たって移さなかった行の一覧（`work_dir/移行しない行.csv`）。"""
         if self._exclusions is None:
