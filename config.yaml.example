@@ -43,4 +43,3 @@ mappings:
 # 本番では空にして、実際に有るかを確かめること。
 # source:
 #   absent_tables:
-#     - user_login_chk_log   # 20230821_cdss.sql で追加。staging には無い

@@ -43,6 +43,17 @@ SECRET_SOURCES: tuple[tuple[str, str, str], ...] = (
     ("site", "linkpreview_api_key", "linkpreview_api_key"),
 )
 
+#: SNS ログインの認証情報（`sns_setting`）。**テナント単位で1行**。
+#: `sercret` は lw2 側の綴り誤りで、列名はそのまま
+SNS_SECRET_SOURCES: tuple[tuple[str, str], ...] = (
+    ("facebook_consumer_key", "facebook_client_id"),
+    ("facebook_consumer_sercret_key", "facebook_client_secret"),
+    ("twitter_consumer_key", "twitter_client_id"),
+    ("twitter_consumer_sercret_key", "twitter_client_secret"),
+    ("instagram_consumer_key", "instagram_client_id"),
+    ("instagram_consumer_sercret_key", "instagram_client_secret"),
+)
+
 
 class TenantLimitsStep(Step):
     """`tenant_limit_value` の上限5種を `tenant_limits` に移す。"""
@@ -112,11 +123,16 @@ class FieldDefaultsStep(Step):
 
 
 class TenantSecretsStep(Step):
-    """外部サービスの API キーを `tenant_secrets` に移す（A3）。
+    """外部サービスの認証情報を `tenant_secrets` に移す（A3 / A7）。
 
-    **「移行できないもの」の平文4件とは別物。** あちらは lw2 自身の DB 接続情報と
-    旧アプリに紐づく SNS シークレットで、移しても機能しない。ここで扱うのは
-    第三者サービス（LinkPreview）の鍵で、**新環境でもそのまま使える**。
+    扱うのは2種類。
+
+    - `site.linkpreview_api_key` … 第三者サービスの API キー
+    - `sns_setting` の6列 … SNS ログインのアプリ認証情報（Facebook / X / Instagram）
+
+    **どちらも新環境でそのまま使える。** 移行できないのは lw2 自身の DB 接続情報だけで、
+    SNS の鍵は「移せない」のではない（[移行の原則](../../docs/00-template/review.md)の1）。
+    ただし**認証を動かすには、SNS 側でコールバック URL の追加が別途要る**。
 
     値そのものはログに出さない（長さだけ記録する）。
     """
@@ -136,6 +152,17 @@ class TenantSecretsStep(Step):
                 if value:
                     rows.append({"kind": kind, "value": value})
                     ctx.logger.info("%s.%s を移す（%d 文字）", table, column, len(value))
+
+        # SNS ログインの認証情報。テナント単位なのでテナントで絞って読む
+        sns = source.fetch_for_tenant(
+            "sns_setting", ("tenant_id",) + tuple(c for c, _ in SNS_SECRET_SOURCES)
+        )
+        for row in sns:
+            for column, kind in SNS_SECRET_SOURCES:
+                value = (row.get(column) or "").strip()
+                if value:
+                    rows.append({"kind": kind, "value": value})
+                    ctx.logger.info("sns_setting.%s を移す（%d 文字）", column, len(value))
         return rows
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:

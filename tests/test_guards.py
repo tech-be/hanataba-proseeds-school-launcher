@@ -14,11 +14,14 @@ class ForbiddenColumnTest(unittest.TestCase):
         with self.assertRaises(ForbiddenColumnError):
             guards.check_forbidden_columns("SELECT db_server, password FROM site WHERE tenant_id = 12")
 
-    def test_sns_secret_is_blocked(self) -> None:
-        with self.assertRaises(ForbiddenColumnError):
-            guards.check_forbidden_columns(
-                "SELECT facebook_sercret_key FROM sns_setting WHERE tenant_id = 12"
-            )
+    def test_sns_secret_is_readable(self) -> None:
+        """**SNS の認証情報は読む。** 新環境でもそのまま使えるため移行対象。
+
+        「読み出さない」のは lw2 自身の DB 接続情報と、失効済みの認証コードだけ。
+        """
+        guards.check_forbidden_columns(
+            "SELECT facebook_consumer_sercret_key FROM sns_setting WHERE tenant_id = 12"
+        )
 
     def test_input_password_is_blocked(self) -> None:
         with self.assertRaises(ForbiddenColumnError):
