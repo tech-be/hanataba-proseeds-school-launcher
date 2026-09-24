@@ -14,15 +14,6 @@ from ..errors import ExcludedTableError, ForbiddenColumnError, TenantScopeError
 FORBIDDEN_COLUMNS: dict[str, tuple[str, ...]] = {
     # lw2 自身の DB 接続情報。新環境は別サーバー・別 DB で、移しても機能しない
     "site": ("db_server", "user_id", "password", "database"),
-    # 旧アプリに紐づく SNS シークレット。新環境ではアプリを登録し直すため使えない
-    "sns_setting": (
-        "facebook_consumer_key",
-        "facebook_sercret_key",
-        "twitter_consumer_key",
-        "twitter_sercret_key",
-        "instagram_consumer_key",
-        "instagram_sercret_key",
-    ),
     # 会員が入力したパスワードの平文。保存してよい場所が新環境に無い
     "user_login_log": ("input_password",),
     # 認証コードの平文

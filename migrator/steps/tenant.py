@@ -147,6 +147,8 @@ class TenantStep(Step):
                 table="tenants",
                 values={
                     "id": tenant_id,
+                    # 旧 ID。バッジ API の URL が /tenant/{lw2 の tenant_id}/... （A24）
+                    "legacy_id": config.tenant.legacy_id,
                     "slug": config.tenant.slug,
                     "name": name,
                     "short_name": row.get("tenent_name_short"),
@@ -163,6 +165,11 @@ class TenantStep(Step):
         ]
 
     def load(self, ctx: RunContext, records: list[Record]) -> int:
+        if not records:
+            # 制約に当たって1件も残らなかった。**ここでは落とさない** —
+            # 何が当たったかは `out/not-migrated.csv` に出ており、
+            # tenant_id は `run()` が移行先から引き直す
+            return 0
         record = records[0]
         self._guard_duplicate_name(ctx, str(record.values["name"]))
         return ctx.target.insert_many(records)
