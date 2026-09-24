@@ -25,6 +25,7 @@ from __future__ import annotations
 import re
 
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from ..core.records import Record
 
@@ -36,6 +37,8 @@ class ColumnSpec:
     has_default: bool
     #: `AUTO_INCREMENT` や `CURRENT_TIMESTAMP` のように DB が埋める列
     auto: bool
+    #: `information_schema.columns.data_type`（`timestamp` / `datetime` など）
+    data_type: str = ""
 
     @property
     def must_be_written(self) -> bool:
@@ -106,7 +109,7 @@ class SchemaReader:
         columns = {}
         for row in self._target.query(
             "SELECT column_name AS name, is_nullable AS nullable, column_default AS dflt, "
-            "extra AS extra FROM information_schema.columns "
+            "extra AS extra, data_type AS dtype FROM information_schema.columns "
             "WHERE table_schema = DATABASE() AND table_name = %s",
             (table,),
         ):
@@ -116,6 +119,7 @@ class SchemaReader:
                 nullable=str(row["nullable"]).upper() == "YES",
                 has_default=row.get("dflt") is not None,
                 auto="auto_increment" in extra or "default_generated" in extra,
+                data_type=str(row.get("dtype") or "").lower(),
             )
 
         checks: list[CheckConstraint] = []
@@ -213,6 +217,7 @@ def filter_valid(
         return records, []
     violations: dict[int, Violation] = {}
     _not_null(records, schema, violations)
+    _datetime_range(records, schema, violations)
     _checks(records, schema, violations)
     _unique(records, schema, target, violations)
     _foreign_keys(records, schema, target, violations)
@@ -242,6 +247,39 @@ def _not_null(records: list[Record], schema: TableSchema, out: dict[int, Violati
             detail = "値が NULL" if written else "INSERT の列に入っていない"
             out.setdefault(
                 index, Violation(schema.table, f"NOT NULL `{column.name}`", detail, _key_of(record))
+            )
+
+
+#: MySQL の `TIMESTAMP` が持てる範囲（UTC）。`DATETIME` は 1000〜9999 年なので見ない
+_TIMESTAMP_MIN = datetime(1970, 1, 1, 0, 0, 1)
+_TIMESTAMP_MAX = datetime(2038, 1, 19, 3, 14, 7)
+
+
+def _datetime_range(records: list[Record], schema: TableSchema, out: dict[int, Violation]) -> None:
+    """`TIMESTAMP` の範囲を外れる日時を拾う。
+
+    **旧環境は「無期限」を100年後の日付で表すことがある**（`payment_item_lesson_authority`
+    は実測 2124-06-24 まで）。`TIMESTAMP` の上限は 2038-01-19 で、超えると
+    `Incorrect datetime value` になる。**型の話なので NOT NULL や CHECK では拾えず、
+    dry-run を素通りして実 INSERT で初めて落ちる**（受講の予行がこれで停止した）。
+    """
+    for column in schema.columns.values():
+        if column.data_type != "timestamp":
+            continue
+        for index, record in enumerate(records):
+            value = record.values.get(column.name)
+            if not isinstance(value, datetime):
+                continue
+            if _TIMESTAMP_MIN <= value <= _TIMESTAMP_MAX:
+                continue
+            out.setdefault(
+                index,
+                Violation(
+                    schema.table,
+                    f"TIMESTAMP の範囲外 `{column.name}`",
+                    f"{value.isoformat()}（1970-01-01〜2038-01-19）",
+                    _key_of(record),
+                ),
             )
 
 
