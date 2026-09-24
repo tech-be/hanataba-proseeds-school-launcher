@@ -158,6 +158,12 @@ CONTENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
 #: **対応する migration はまだ無い。** `doctor` が TODO で出すのが正しい状態
 #: （区分3 を作り直す回で `*_lw2_enrollment_additions.sql` を書く）。
 ENROLLMENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
+    # 受講権限（A8）
+    ("enrollments", "settings"),
+    # 学習履歴（A9）
+    ("lesson_progress", "progress_status"),
+    ("lesson_progress", "settings"),
+    ("lesson_progress", "deleted_at"),
     # テスト結果
     ("quiz_attempts", "passed"),
     ("quiz_attempts", "duration_sec"),

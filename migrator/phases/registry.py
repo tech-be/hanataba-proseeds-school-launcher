@@ -39,7 +39,9 @@ from ..steps.content import masters as ct_masters
 from ..steps.content import quizzes as ct_quizzes
 from ..steps.content import surveys as ct_surveys
 from ..steps.enrollment import certificates as en_certificates
+from ..steps.enrollment import progress as en_progress
 from ..steps.enrollment import results as en_results
+from ..steps.enrollment import rights as en_rights
 from ..steps.schema import SchemaCheckStep
 from ..steps.support import library as sp_library
 from ..steps.tenant import TenantStep
@@ -109,9 +111,10 @@ def build_sections() -> list[Section]:
             title="受講",
             doc="docs/db/03-enrollment/migration-spec.md",
             phases=[
-                Phase(1, "受講権限", "受け皿講座への受講登録（J01 の本体は未実装）",
-                      steps=ct_live_courses.enrollments()),
-                Phase(2, "学習履歴", "ユニット進捗（未実装）", steps=[]),
+                Phase(1, "受講権限", "購入で得た受講権限と、受け皿講座への受講登録",
+                      steps=en_rights.build() + ct_live_courses.enrollments()),
+                Phase(2, "学習履歴", "ユニットごとの学習状況を移す",
+                      steps=en_progress.build()),
                 Phase(3, "テスト結果", "受験・設問別回答・選んだ選択肢を移す",
                       steps=en_results.quizzes()),
                 Phase(4, "課題提出", "提出・提出ファイル・添削を移す",
