@@ -103,6 +103,7 @@ class SourceDatabase:
         parent: str,
         on: str,
         where: str = "",
+        via: list[tuple[str, str, str]] | None = None,
     ) -> list[dict]:
         """**`tenant_id` を持たない子テーブル**を、親と join してテナントで絞る。
 
@@ -110,10 +111,23 @@ class SourceDatabase:
         **join を落とすと他テナントの行を拾う**（最大 2,083 倍。ETL設計 付録A）。
 
         `on` は `c` (子) と `p` (親) の別名で書く。例: ``"c.group_id = p.group_id"``
+
+        **親が `tenant_id` を持たないときは `via` で中間テーブルを挟む。**
+        `lecture` は `unit` にぶら下がり、`unit` は `lesson` にぶら下がる、のように
+        2段たどらないとテナントに届かない経路がある。`via` は `(テーブル, 別名, 結合条件)`
+        の並びで、最後の要素が `tenant_id` を持つこと。
+
+            fetch_joined(
+                "lecture", COLUMNS,
+                parent="lesson", on="u.lesson_id = p.lesson_id",
+                via=[("unit", "u", "c.unit_id = u.unit_id")],
+            )
         """
         cols = ", ".join(f"c.`{c}`" for c in columns)
+        joins = "".join(f"INNER JOIN `{t}` AS {alias} ON {cond} " for t, alias, cond in (via or ()))
         sql = (
             f"SELECT {cols} FROM `{table}` AS c "
+            f"{joins}"
             f"INNER JOIN `{parent}` AS p ON {on} "
             f"WHERE p.tenant_id = %s"
         )
@@ -124,8 +138,8 @@ class SourceDatabase:
     def missing_tables(self, tables: Iterable[str]) -> list[str]:
         """指定したテーブルのうち、**この移行元に存在しないもの**を返す。
 
-        環境によってテーブルの有無が違う（`user_login_chk_log` は
-        `20230821_cdss.sql` で足された）。読む前に確かめて、原因の分かる形で止める。
+        環境によってテーブルの有無が違う（lw2 は個別 SQL でテーブルを足すことがあり、
+        ステージングと本番で構成が揃っていない）。読む前に確かめて、原因の分かる形で止める。
         """
         names = sorted({t for t in tables if t})
         if not names:
