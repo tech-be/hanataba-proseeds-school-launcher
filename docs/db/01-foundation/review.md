@@ -11,11 +11,11 @@
 - **移行ツールが書き込むのは 22 テーブル**（`migrator/phases/registry.py` の `foundation.1`〜`5`）。ETL設計 §4 は `users` / `login_history` / `user_preferences` の3つしか想定していないが、**受け皿が無いものは追加して受ける**方針のため対象が広い。スキーマ追加（A1〜A21）は school-launcher 側の migration で入れる（[マイグレーション対象](schema-additions.md)）
 - **NOT NULL / UNIQUE / 外部キーに当たる行は移さない。** 移行ツールは値を作り替えず、`out/not-migrated.csv` に「誰が・なぜ」を出すだけ。直すのは**移行の外の暫定対応**（`fixups`）で、そのあと再実行すれば入る（[移行仕様 3.3](migration-spec.md#33-投入load)）
 - **旧32件のうち新側に受け皿があるのは 4件**（`tenant` / `role_master` / `user` / `user_login_log`）。**残り28件は受け皿が無い**
-- **[移行の原則](../00-template/review.md#移行の原則)に従う。** 対象外区分のデータ以外はすべて移行し、受け皿が無ければ追加し、元の構造を維持する。追加するテーブル・カラムと、それに伴って直す機能は [新環境に追加するテーブル・カラム](#新環境に追加するテーブルカラム)（**A1〜A23**）にまとめた。**移行しないのは例外**で、同じ節の[移行の対象外](#移行の対象外移行できないもの--移行しないもの)に理由つきで 13 件（移行できないもの 6 件 / 方針として移行しないもの 7 件）ある
+- **[移行の原則](../00-template/review.md#移行の原則)に従う。** 対象外区分のデータ以外はすべて移行し、受け皿が無ければ追加し、元の構造を維持する。追加するテーブル・カラムと、それに伴って直す機能は [新環境に追加するテーブル・カラム](#新環境に追加するテーブルカラム)（**A1〜A23**。うち A17 は取り消し）にまとめた。**移行しないのは例外**で、同じ節の[移行の対象外](#移行の対象外移行できないもの--移行しないもの)に理由つきで 12 件（移行できないもの 5 件 / 方針として移行しないもの 7 件）ある
 - **グループの階層は `group.parent_group_id` が正本**（`group_structure` は派生データなので移行しない）。SSO・ログイン時間制限・2FA は**移行と同時に受け皿を作る**（2FA は受け皿だけで、移す行は無い）
-- **純ログは移行しない。** `user_login_log`（1,326,645行）/ `user_login_log_monthly` / `twostepverification_log` の3件が該当し、[移行の対象外](#移行の対象外移行できないもの--移行しないもの)に入れてある。**`user_login_chk_log` は名前が `_log` だが「ログイン有効期間の変更履歴」なので移行する**
+- **純ログは移行しない。** `user_login_log`（1,326,645行）/ `user_login_log_monthly` / `twostepverification_log` の3件が該当し、[移行の対象外](#移行の対象外移行できないもの--移行しないもの)に入れてある。**`user_login_chk_log` も移行しない** — 名前のとおりバッチが作るログで、**ステージングの lw2 には存在しない**（受け皿も作らない）
 - **U1 会員基本情報は全列を移す。** 列を落とさず、複数列を1列に畳まない（`tel` / `mobile_tel`、`user_img_file_name` の2枚、`valid_chk` / `del_chk` など）
-- 例外の中に**平文の認証情報が4か所**ある（`site` の DB 接続パスワード、`sns_setting` の SNS シークレットキー、`user_login_log.input_password`、2段階認証ログの正解コード）。**移行しないだけでなく、抽出時にも読み出さない設計にすること**
+- 例外の中に**平文の認証情報が3か所**ある（`site` の DB 接続パスワード、`user_login_log.input_password`、2段階認証ログの正解コード）。**移行しないだけでなく、抽出時にも読み出さない設計にすること**。**`sns_setting` の6列と `user.password` は読む** — どちらも移行対象のため
 
 ---
 
@@ -254,7 +254,7 @@
 
 `sns_setting` (9列) ／ ローカルデータ数 63 / C
 
-**該当テーブルなし。** SNS ログインの設定を持つが、**キーは旧アプリに紐づくため移行しない**（再発行が原則）。
+**該当テーブルなし。** SNS ログインのアプリ認証情報（6列）を持つ。**受け皿を追加して移行する** — `tenant_secret_kinds` に `facebook_client_id` など6種別を足し、`tenant_secrets` に入れる（A7）。
 
 > **recademy は Facebook と Twitter の consumer key が設定済み**（instagram は空。ステージング実測）。
 > 使っているのは `LoginController` の SNS ログインと `RegistrationController` の SNS 登録で、
@@ -671,11 +671,11 @@
 
 `user_login_chk_log` (9列) ／ ローカルデータ数 - / -
 
-**該当テーブルなし。** ローカルデータ数が `-` なのは **2026-07-28 ダンプ以降に追加されたテーブル**で実測値が無いため。
+**該当テーブルなし。** ローカルデータ数が `-` なのは **2026-07-28 ダンプ以降に追加されたテーブル**で実測値が無いため。**ステージングの lw2 にも存在しない。**
 
 | 旧カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|:--:|---|---|
-| `login_chk` / `entry_date` / `limit_date` / `valid_chk` / `effective_date` / `batch_date` | 性質 | 中 | **名前が `_log` だがログではなく「ログイン有効期間の変更履歴」**（バッチが `batch_date` 単位で作る）。`user.entry_date` / `limit_date` / `valid_chk` の変遷を追える唯一のテーブルで、**アカウント停止の証跡としての価値がある** | **純ログではないので移行する。** `user_login_periods` を新設してログイン有効期間の変更履歴を移す（→ [追加一覧](#新環境に追加するテーブルカラム) A17） |
+| `login_chk` / `entry_date` / `limit_date` / `valid_chk` / `effective_date` / `batch_date` | 性質 | 中 | **日次バッチ（`UserLoginChkLogBatch`）が作るログ。** `user.entry_date` / `limit_date` / `valid_chk` の状態が前回記録から変わったときだけ1行追加する。現在値は `user` 側にあり、ここにあるのは過去の変遷のみ | **移行しない**（[対象外 B](#移行の対象外移行できないもの--移行しないもの)）。**ステージングの lw2 に存在しない** — `database/20230821_cdss.sql` に DDL はあるが、ステージングの DB には適用されていない。**受け皿も作らない**（当初 A17 として `user_login_periods` を新設したが、移す行が無く新環境に読む実装も無いため取り消した） |
 
 **まとめ**: 受け皿が無い列 9 / 高 0 件
 
@@ -822,7 +822,7 @@
 | # | 追加するもの | 旧環境の対応 | 変更が必要な機能 |
 |---|---|---|---|
 | **A6** | `tenant_sso_configs`（`tenant_id` + `provider` + `metadata` JSON + `active`）＋ `auth_methods` に `saml` | `sso_config`（`sso_type` / `sso_parameter`） | ・ログイン画面に SSO の導線を出す<br>・SAML の認証開始とコールバック<br>・IdP メタデータの登録画面<br>・`auth_outcomes` への結果記録 |
-| **A7** | `auth_methods` に `facebook` / `twitter` / `instagram`、`tenant_secret_kinds` に各 `*_client_secret` と `linkpreview_api_key` | `sns_setting` の6列、`site.linkpreview_api_key` | ・OAuth の開始・コールバック（Google / LINE と同じ経路に相乗り）<br>・ログイン画面のボタン<br>・**シークレットは移行せず再発行**する運用手順 |
+| **A7** | `auth_methods` に `facebook` / `twitter` / `instagram`、`tenant_secret_kinds` に `facebook_client_id` / `facebook_client_secret` / `twitter_client_id` / `twitter_client_secret` / `instagram_client_id` / `instagram_client_secret` と `linkpreview_api_key` | `sns_setting` の6列、`site.linkpreview_api_key` | ・OAuth の開始・コールバック（Google / LINE と同じ経路に相乗り）<br>・ログイン画面のボタン<br>・**移行後、SNS 側の管理画面でコールバック URL を新環境のものに修正する**（データを移しただけでは認証が通らない）<br>・シークレットの**保管と表示のマスク**（`tenant_secrets` は `is_sensitive=TRUE`） |
 | **A8** | `tenant_login_windows`（`tenant_id` + `day_of_week` + `start_time` + `end_time`） | `login_limit_*` の5列 | ・ログイン時の時間帯判定<br>・拒否時のメッセージ<br>・管理画面の設定 UI<br>**recademy はローカルデータ数0で移行するデータが無い**ため、優先度は低い |
 
 ### M4 会員項目・状態の定義
@@ -847,9 +847,9 @@
 | **A14** | `users.is_lockout` / `failed_login_started_at` / `failed_login_count` / `last_login_at` / `last_access_at` / `total_login_count` | `user.is_lockout` / `start_date_failing_login` / `number_of_failing_login` / `recent_login_date` / `recent_access_time` / `total_login_count` | ・ログイン失敗時のロックアウト判定としきい値（lw2 は開始日時と連続失敗回数の2本立て）<br>・管理画面からのロック解除<br>・最終ログイン / 最終アクセスの表示と休眠会員の抽出<br>・`total_login_count` の加算箇所（ログイン成功時）
 | **A22** | `users.language_code` | `user_nationality_info.language_code`（ステージング実測 `ja` 133名 / `th` 1名） | ・**言語の判定を「cookie → 会員の既定 → テナントの既定（A2）→ `defaultLocale`」に直す**（`btoc-frontend/src/i18n/request.ts`）<br>・会員値をフロントに渡す経路（バックエンドの構造体 / repo / DTO / フロント型の4か所）<br>・プロフィール編集での言語選択 |
 | **A23** | `tenant_field_defaults`（`tenant_id` + `field_code` + `default_value`） | `user_item_default`（`item_name` は `profile_item` ではなく **`user` の列名**） | ・会員登録時に既定値を当てる処理<br>・テナント管理画面での既定値設定<br>・**`tenant_profile_items.default_value` と混同しない**（あちらはプロフィール項目の既定値） |
+| **A24** | `users.legacy_id` ＋ `UNIQUE (tenant_id, legacy_id)`、`tenants.legacy_id` ＋ `UNIQUE` | 旧 `user.user_id` / `tenant.tenant_id` | ・**外部のバッジシステムを引き続き参照する**（`BadgeApi` は `/tenant/{旧テナントID}/user/{旧会員ID}/badges`。バッジキーも `LESSON_{旧 lesson_id}_COMPLETION`）。**これが無いと「誰のバッジか」を新環境から引けない**<br>・移行後の問い合わせ調査で「旧 ID からこの会員を探す」<br>・`courses.legacy_id` / `lessons.legacy_id` はオンデマンドで追加済みだが、**会員とテナントには無かった** |
 | **A15** | `user_two_factor_secrets` ＋ `auth_methods` に `totp` | `twostepverification`（ステージング実測 18行。**受け皿を作るだけで、移す行は無い**） | ・2FA の登録・検証フロー<br>・ログイン後のチャレンジ画面<br>・リカバリコードの発行と再設定<br>・テナント単位で 2FA を必須にするかの設定 |
 | **A16** | `login_history` に `input_login_id` / `logged_out_at` / `session_id` / `site_type` / `last_access_at` を追加、**`user_id` を NULL 可に**<br>**※ 移行のためではなく、新環境の運用のための改善** | `user_login_log` の該当列（**ログは移行しないので、データは入らない**） | ・**存在しない ID でのログイン試行を記録できるようにする**（現状は `user_id` NOT NULL + FK で記録できず、`auth_outcomes` の `user_not_found` が使えない）<br>・失敗ログを会員に紐付けずに一覧・集計する画面<br>・滞在時間の集計（ログイン〜ログアウト）<br>・セッション追跡とログアウト記録
-| **A17** | `user_login_periods`（`user_id` + `entry_date` / `limit_date` / `valid` / `effective_date` / `batch_date`） | `user_login_chk_log` | ・ログイン可能期間の判定<br>・期限切れ会員の扱い（ログイン拒否か閲覧のみか）<br>・期間変更の履歴表示 |
 
 | **A20** | `users` への列追加: `login_id` / `mobile_email` / `mobile_phone` / `nickname` / `gender` / `blood_type` / `self_introduction` / `login_start_date` / `login_end_date` / `admin_memo` / `external_data` / `password_changed_at` / `is_valid` / `is_new` | `user` の対応する各列（[全列の行き先](#全列の行き先)を参照） | ・**`login_id` でのログイン**（新はメールのみ。lw2 は `utf8_bin` で大文字小文字を区別する）<br>・携帯メール / 携帯電話の入力欄と、通知の宛先切り替え（lw2 は PC / 携帯で通知先を分けている）<br>・ログイン可能期間（`login_start_date` / `login_end_date`）の判定と、期限切れ時の挙動<br>・運営メモ（`admin_memo`）を出す管理画面<br>・`external_data`（連携用フィールド）の用途確認と受け渡し先<br>・会員プロフィールの表示項目（ニックネーム / 性別 / 血液型 / 自己PR） |
 
@@ -872,7 +872,6 @@
 | 対象 | なぜ移行できないか |
 |---|---|
 | `site.db_server` / `user_id` / `password` / `database` | **lw2 自身の DB への接続情報**で、新環境は別サーバー・別 DB。**移しても接続先が違って機能しない。** 加えて平文で保持されているため、**抽出 → 中間ファイル → 再投入という経路に乗せること自体が漏洩面を増やす**。新環境の接続情報は `tenant_secrets`（`kind='db_dsn'`）に運用で登録するもので、旧環境から移すものではない。**抽出クエリで SELECT しない** |
-| `sns_setting` のシークレット6列（Facebook / Twitter / Instagram） | **旧アプリに紐づくシークレット。** 新環境はドメインもコールバック URL も違うため、**各プラットフォームでアプリを登録し直すのが前提**で、旧アプリの値をそのまま使えない。**一度平文で DB に保存されていた資格情報は再発行が原則**。機能は A7 で追加し、**値は再発行して管理画面から登録する**（同じアプリを継続する場合も、ETL の経路には乗せない）。**抽出クエリで SELECT しない** |
 | `user_login_log.input_password` | **会員が入力したパスワードの平文。** 新環境に保存してよい場所が無く、作ってもいけない。**抽出クエリで SELECT しない** |
 | `twostepverification_log` の `input_code` / `correct_code` | **認証コードの平文ログ。** 同上。**抽出クエリで SELECT しない** |
 | `twostepverification.verification_code` | **発行中の認証コード**で、有効期限つきの一時値。**移した時点ですでに無効**。機能は A15 で追加する |
@@ -885,6 +884,7 @@
 | 対象 | 理由 |
 |---|---|
 | `user_login_log` 全体 | **純ログ**（1,326,645行）。受け皿（`login_history`）はあるが移さず、**cutover 後の認証から記録を始める** |
+| `user_login_chk_log` 全体 | **日次バッチが作るログ**（`UserLoginChkLogBatch`）。ログイン可否の状態変化を記録するもので、**ステージングの lw2 には存在しない**（`20230821_cdss.sql` に DDL はあるが未適用）。受け皿（`user_login_periods`）も**作らない** — 移す行が無く、新環境に読む実装も無いため |
 | `user_login_log_monthly` 全体 | **純ログの月次集計。** `login_history` から都度計算できる |
 | `twostepverification_log` 全体 | **純ログ**（加えて上記 A のとおり平文の認証コードを含む） |
 | `group_structure` 全体 | **派生データ**（1,313行）。`group.parent_group_id` から作り直される閉包テーブルで、lw2 自身がグループの作成・削除のたびに全消し＋再生成している |

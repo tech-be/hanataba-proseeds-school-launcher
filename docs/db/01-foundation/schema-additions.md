@@ -466,7 +466,7 @@ CREATE TABLE attribute_required_courses (
 
 ---
 
-## M8. 会員に紐づく残り（A13 / A17 / A18）
+## M8. 会員に紐づく残り（A13 / A18）
 
 **必須。**
 
@@ -485,22 +485,6 @@ CREATE TABLE user_field_visibility (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT = '[会員が他人に見せる項目] 旧 user.*_open_chk を行に展開したもの。';
 
-CREATE TABLE user_login_periods (
-    id             CHAR(26) NOT NULL PRIMARY KEY,
-    tenant_id      CHAR(26) NOT NULL,
-    user_id        CHAR(26) NOT NULL,
-    login_allowed  BOOLEAN NOT NULL DEFAULT TRUE,  -- 旧 login_chk
-    start_date     DATE NULL,                      -- 旧 entry_date
-    end_date       DATE NULL,                      -- 旧 limit_date
-    is_valid       BOOLEAN NOT NULL DEFAULT TRUE,  -- 旧 valid_chk
-    effective_date DATE NULL,
-    batch_date     DATE NULL,                      -- 旧 batch_date（履歴の単位）
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    KEY ix_user_login_periods (user_id, batch_date),
-    CONSTRAINT fk_user_login_periods_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id),
-    CONSTRAINT fk_user_login_periods_user   FOREIGN KEY (user_id)   REFERENCES users(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-  COMMENT = '[ログイン有効期間の履歴] 現在値は users 側。batch_date 単位で履歴を持つ。';
 
 CREATE TABLE instructor_assignments (
     id               CHAR(26) NOT NULL PRIMARY KEY,
@@ -632,6 +616,35 @@ ALTER TABLE users DROP COLUMN language_code;
 > `btoc-frontend/src/i18n/request.ts` の判定と、会員値をフロントに渡す経路が要る。
 
 適用済みの migration: `20260922070755_add_user_language_and_tenant_field_defaults.sql`
+
+---
+
+## M11. 会員・テナントの旧 ID（A24）
+
+**必須。** 2026-09-24 追加。
+
+```sql
+-- +goose Up
+ALTER TABLE users
+    ADD COLUMN legacy_id INT NULL COMMENT '旧 user.user_id (移行で作られた行のみ)',
+    ADD UNIQUE KEY uk_users_legacy (tenant_id, legacy_id);
+
+ALTER TABLE tenants
+    ADD COLUMN legacy_id INT NULL COMMENT '旧 tenant.tenant_id (移行で作られた行のみ)',
+    ADD UNIQUE KEY uk_tenants_legacy (legacy_id);
+
+-- +goose Down
+ALTER TABLE users DROP INDEX uk_users_legacy, DROP COLUMN legacy_id;
+ALTER TABLE tenants DROP INDEX uk_tenants_legacy, DROP COLUMN legacy_id;
+```
+
+> **外部のバッジシステムが lw2 の ID で付与実績を持っている。**
+> `BadgeApi` は `/tenant/{lw2 の tenant_id}/user/{lw2 の user_id}/badges` を叩き、
+> バッジキーも `LESSON_{lw2 の lesson_id}_COMPLETION` の形。
+> `courses.legacy_id` / `lessons.legacy_id` は[コンテンツ](../02-content/schema-additions.md)で足したが、
+> **会員とテナントには無く、このままでは「誰のバッジか」を引けない**。
+>
+> **バッジ以外にも効く。** 移行後の問い合わせ調査は「旧 ID でこの会員を探す」から始まることが多い。
 
 ---
 
