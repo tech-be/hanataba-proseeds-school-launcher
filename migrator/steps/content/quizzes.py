@@ -108,7 +108,7 @@ TEST_SUB_QUESTION_COLUMNS = ("test_sub_question_id", "test_sub_id", "question_id
 QUESTION_TYPES: dict[int, str] = {
     1: "single_choice",
     2: "multiple_choice",
-    3: "text_free",
+    3: "free_text",
 }
 
 #: `test_sub_type_id` のうち、`test_sub_question` に問題の実体を持つもの。
@@ -412,9 +412,16 @@ class QuizOptionsStep(Step):
     """選択肢を横持ち（`selection1..20`）から縦持ち（`quiz_options`）へ展開する。
 
     **有効な数は `selection_num`。** 21列目以降は存在しないので見ない。
-    正解は `question.answer` に**パイプ区切りの選択肢番号**で入っている
-    （単一選択は `"2"`、複数選択は `"2|5"`）。**記述式（`text_free`）は選択肢が無く、
-    `answer` は期待する文字列そのもの**なので展開しない。
+    正解は `question.answer` に**パイプ区切り**で入っている。
+
+    - 選択式（`single_choice` / `multiple_choice`）… 選択肢**番号**（`"2"` / `"2|5"`）
+    - 記述式（`free_text`）… **正解の文字列そのもの**（複数可。`"はい|Yes"` など）
+
+    **記述式も `quiz_options` に展開する。** lw2 は記述式を自動採点しており
+    （`UserLearningLessonModel::_markAnswers` が `question_type_id == 3` のとき
+    `explode('|', answer)` した候補に `in_array` で完全一致を見る）、
+    移行先も**正解候補を `is_correct = TRUE` の行として持つ**作りになっている。
+    展開しないと**正解候補がどこにも運ばれず、記述式が採点できなくなる**。
     """
 
     name = "content.quiz_options"
@@ -433,16 +440,20 @@ class QuizOptionsStep(Step):
         for row in rows:
             sub, question = row["_sub"], row["_question"]
             question_type = QUESTION_TYPES[int(question["question_type_id"])]
-            if question_type == "text_free":
-                continue  # 選択肢を持たない
+            question_ulid = _question_ulid(
+                ctx, sub["test_sub_id"], row["question_id"], int(row.get("sort_no") or 0)
+            )
+            if question_type == "free_text":
+                # **記述式は `answer` が正解候補そのもの。** 候補1件 = 1行で入れる
+                records.extend(
+                    _free_text_options(ctx, tenant_id, question, question_ulid)
+                )
+                continue
             correct = _correct_numbers(question.get("answer"))
             count = int(question.get("selection_num") or 0)
             if count <= 0:
                 no_options += 1
                 continue
-            question_ulid = _question_ulid(
-                ctx, sub["test_sub_id"], row["question_id"], int(row.get("sort_no") or 0)
-            )
             for number in range(1, count + 1):
                 body = question.get(f"selection{number}")
                 if body is None:
@@ -504,6 +515,49 @@ def _check_type(question: dict) -> None:
             f"question_type_id {type_id} が対応表に無い（question_id={question['question_id']}）。"
             "受け皿の種別を決めてから流す"
         )
+
+
+def _free_text_options(ctx, tenant_id: str, question: dict, question_ulid: str) -> list[Record]:
+    """記述式の正解候補を `quiz_options` の行にする。
+
+    **lw2 は記述式を自動採点している。** `UserLearningLessonModel::_markAnswers` が
+    `question_type_id == 3` のとき `explode('|', answer)` した候補に対して
+    `in_array`（完全一致）で判定する。移行先も同じ形（`is_correct = TRUE` の行）
+    で候補を持つので、**そのまま行に展開すれば採点の挙動が変わらない**。
+
+    **候補はすべて正解。** 記述式に「不正解の選択肢」は無い。
+    """
+    raw = question.get("answer")
+    if raw is None:
+        return []
+    records: list[Record] = []
+    sort_order = 0
+    seen: set[str] = set()
+    for part in str(raw).split("|"):
+        # **前後の空白だけ落とす。** 中の空白は答えの一部なので触らない
+        body = part.strip()
+        if not body or body in seen:
+            continue  # 空の候補と重複は入れない（UNIQUE には当たらないが無意味）
+        seen.add(body)
+        sort_order += 1
+        records.append(
+            Record(
+                table="quiz_options",
+                values={
+                    "id": ctx.ulid.for_row("question_answer", f"{question_ulid}:{sort_order}"),
+                    "tenant_id": tenant_id,
+                    "question_id": question_ulid,
+                    "body": body,
+                    # 記述式の候補はすべて正解
+                    "is_correct": True,
+                    "sort_order": sort_order,
+                    "image_url": None,
+                },
+                natural_key=("id",),
+                source_key=int(question["question_id"]),
+            )
+        )
+    return records
 
 
 def _correct_numbers(answer: object) -> set[int]:
