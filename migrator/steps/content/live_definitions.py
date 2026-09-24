@@ -1,0 +1,341 @@
+"""live.4 — ライブの分類・公開範囲・連日設定。
+
+**どれも `lessons`(type=live) が入ったあと。** カテゴリだけはライブより先でも入るが、
+割当（`live_lesson_category_links`）がレッスンを参照するので、この段にまとめる。
+
+**`del_chk = 0` の行だけ読む表がある。** 旧は保存のたびに旧行を `del_chk = 1` にして
+積む作りで、除外日は 128行のうち110行が削除済み（生きているのは18行）。
+全部読むと `uk_llre_lesson_date` に当たる。
+"""
+
+from __future__ import annotations
+
+from ...context import RunContext
+from ...core.datetimes import ColumnKind, convert
+from ...core.records import Record
+from ..base import Step
+
+CATEGORY_COLUMNS = (
+    "live_lesson_cate_id",
+    "live_lesson_cate_name",
+    "sort_no",
+    "del_chk",
+    "regist_user_id",
+    "regist_date",
+)
+LINK_COLUMNS = ("live_lesson_id", "live_lesson_cate_id", "regist_date")
+GROUP_COLUMNS = ("live_lesson_id", "group_id", "del_chk", "regist_date")
+RULE_COLUMNS = (
+    "live_lesson_date_setting_id",
+    "live_lesson_id",
+    "date_setting_type",
+    "seq_no",
+    "starting_date",
+    "del_chk",
+    "regist_date",
+)
+DETAIL_COLUMNS = (
+    "live_lesson_date_setting_id",
+    "date_setting_type",
+    "sort_no",
+    "target_youbi",
+    "timing_month",
+    "timing_day",
+    "target_time_from",
+    "target_time_to",
+    "del_chk",
+    "regist_date",
+)
+EXCLUSION_COLUMNS = ("live_lesson_id", "exclusion_date", "del_chk", "regist_date")
+
+
+def _live_ulid(ctx: RunContext, live_lesson_id: object) -> str:
+    return ctx.ulid.for_row("live_lesson", int(live_lesson_id))
+
+
+class CategoriesStep(Step):
+    """`live_lesson_cate` を `live_lesson_categories` に移す。"""
+
+    name = "content.live_categories"
+    description = "ライブのカテゴリを移す"
+    source_table = "live_lesson_cate"
+    target_table = "live_lesson_categories"
+    depends_on = ("content.live_lessons",)
+
+    def extract(self, ctx: RunContext) -> list[dict]:
+        return ctx.require_source().fetch_for_tenant("live_lesson_cate", CATEGORY_COLUMNS)
+
+    def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
+        tenant_id = ctx.tenant_id.value
+        return [
+            Record(
+                table="live_lesson_categories",
+                values={
+                    "id": ctx.ulid.for_row("live_lesson_cate", row["live_lesson_cate_id"]),
+                    "tenant_id": tenant_id,
+                    "legacy_id": int(row["live_lesson_cate_id"]),
+                    "name": row.get("live_lesson_cate_name") or "",
+                    "sort_order": int(row.get("sort_no") or 0),
+                    "created_by": _user(ctx, row.get("regist_user_id")),
+                    "deprecated_at": (
+                        convert(row.get("regist_date"), ColumnKind.DATETIME)
+                        if int(row.get("del_chk") or 0) == 1
+                        else None
+                    ),
+                    "created_at": convert(row.get("regist_date"), ColumnKind.DATETIME),
+                },
+                natural_key=("tenant_id", "legacy_id"),
+                source_key=int(row["live_lesson_cate_id"]),
+            )
+            for row in rows
+        ]
+
+
+class CategoryLinksStep(Step):
+    """`live_lesson_lesson_cate` を移す。**ライブとカテゴリは多対多。**
+
+    `live_lesson.live_lesson_cate_id` ではなくこちらが正（前者は使われていない）。
+    """
+
+    name = "content.live_category_links"
+    description = "ライブとカテゴリの割当を移す"
+    source_table = "live_lesson_lesson_cate"
+    target_table = "live_lesson_category_links"
+    depends_on = ("content.live_categories",)
+
+    def extract(self, ctx: RunContext) -> list[dict]:
+        return ctx.require_source().fetch_joined(
+            "live_lesson_lesson_cate",
+            LINK_COLUMNS,
+            parent="live_lesson",
+            on="c.live_lesson_id = p.live_lesson_id",
+        )
+
+    def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
+        tenant_id = ctx.tenant_id.value
+        return [
+            Record(
+                table="live_lesson_category_links",
+                values={
+                    "lesson_id": _live_ulid(ctx, row["live_lesson_id"]),
+                    "category_id": ctx.ulid.for_row(
+                        "live_lesson_cate", row["live_lesson_cate_id"]
+                    ),
+                    "tenant_id": tenant_id,
+                    "created_at": convert(row.get("regist_date"), ColumnKind.DATETIME),
+                },
+                natural_key=("lesson_id", "category_id"),
+                source_key=int(row["live_lesson_id"]),
+            )
+            for row in rows
+        ]
+
+
+class GroupTargetsStep(Step):
+    """`live_lesson_group` を移す。**ステージング実測0件**なので本番で効く。"""
+
+    name = "content.live_group_targets"
+    description = "ライブの公開グループを移す"
+    source_table = "live_lesson_group"
+    target_table = "live_lesson_group_targets"
+    depends_on = ("content.live_lessons",)
+
+    def extract(self, ctx: RunContext) -> list[dict]:
+        rows = ctx.require_source().fetch_joined(
+            "live_lesson_group",
+            GROUP_COLUMNS,
+            parent="live_lesson",
+            on="c.live_lesson_id = p.live_lesson_id",
+            where="c.del_chk = 0",
+        )
+        if not rows:
+            ctx.logger.info("ライブの公開グループは0件（ステージングと同じ）")
+        return rows
+
+    def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
+        tenant_id = ctx.tenant_id.value
+        return [
+            Record(
+                table="live_lesson_group_targets",
+                values={
+                    "lesson_id": _live_ulid(ctx, row["live_lesson_id"]),
+                    # 基盤（A10）で移したグループ
+                    "group_id": ctx.ulid.for_row("group", row["group_id"]),
+                    "tenant_id": tenant_id,
+                    "created_at": convert(row.get("regist_date"), ColumnKind.DATETIME),
+                },
+                natural_key=("lesson_id", "group_id"),
+                source_key=int(row["live_lesson_id"]),
+            )
+            for row in rows
+        ]
+
+
+class RecurrenceRulesStep(Step):
+    """`live_lesson_date_setting` を移す（開催回の生成ルール）。
+
+    **生成された開催回は実体化済み**なので過去の予約には影響しないが、
+    これが無いと cutover 後に開催回を増やせない。
+    """
+
+    name = "content.live_recurrence_rules"
+    description = "連日設定（開催回の生成ルール）を移す"
+    source_table = "live_lesson_date_setting"
+    target_table = "live_lesson_recurrence_rules"
+    depends_on = ("content.live_lessons",)
+
+    def extract(self, ctx: RunContext) -> list[dict]:
+        return ctx.require_source().fetch_joined(
+            "live_lesson_date_setting",
+            RULE_COLUMNS,
+            parent="live_lesson",
+            on="c.live_lesson_id = p.live_lesson_id",
+        )
+
+    def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
+        tenant_id = ctx.tenant_id.value
+        return [
+            Record(
+                table="live_lesson_recurrence_rules",
+                values={
+                    "id": ctx.ulid.for_row(
+                        "live_lesson_date_setting", row["live_lesson_date_setting_id"]
+                    ),
+                    "tenant_id": tenant_id,
+                    "lesson_id": _live_ulid(ctx, row["live_lesson_id"]),
+                    "legacy_id": int(row["live_lesson_date_setting_id"]),
+                    # 0=設定しない 1=毎日 2=毎週 3=毎月 4=毎年
+                    "rule_type": int(row.get("date_setting_type") or 0),
+                    "seq_no": int(row.get("seq_no") or 0),
+                    "starting_on": row.get("starting_date"),
+                    "deleted_at": _deleted(row),
+                    "created_at": convert(row.get("regist_date"), ColumnKind.DATETIME),
+                },
+                natural_key=("tenant_id", "legacy_id"),
+                source_key=int(row["live_lesson_date_setting_id"]),
+            )
+            for row in rows
+        ]
+
+
+class RecurrenceDetailsStep(Step):
+    """`live_lesson_date_setting_detail` を移す（曜日・時間帯）。"""
+
+    name = "content.live_recurrence_details"
+    description = "連日設定の明細を移す"
+    source_table = "live_lesson_date_setting_detail"
+    target_table = "live_lesson_recurrence_details"
+    depends_on = ("content.live_recurrence_rules",)
+
+    def extract(self, ctx: RunContext) -> list[dict]:
+        return ctx.require_source().fetch_joined(
+            "live_lesson_date_setting_detail",
+            DETAIL_COLUMNS,
+            parent="live_lesson",
+            on="s.live_lesson_id = p.live_lesson_id",
+            via=[
+                (
+                    "live_lesson_date_setting",
+                    "s",
+                    "c.live_lesson_date_setting_id = s.live_lesson_date_setting_id",
+                )
+            ],
+        )
+
+    def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
+        return [
+            Record(
+                table="live_lesson_recurrence_details",
+                values={
+                    "rule_id": ctx.ulid.for_row(
+                        "live_lesson_date_setting", row["live_lesson_date_setting_id"]
+                    ),
+                    "sort_order": int(row.get("sort_no") or 0),
+                    "rule_type": int(row.get("date_setting_type") or 0),
+                    # 対象曜日。旧はカンマ区切りの text。**解釈せずそのまま残す**
+                    "target_days": row.get("target_youbi"),
+                    "timing_month": row.get("timing_month"),
+                    "timing_day": row.get("timing_day"),
+                    # 'HH:MM' の文字列のまま（旧が varchar(10)）
+                    "time_from": row.get("target_time_from"),
+                    "time_to": row.get("target_time_to"),
+                    "deleted_at": _deleted(row),
+                    "created_at": convert(row.get("regist_date"), ColumnKind.DATETIME),
+                },
+                natural_key=("rule_id", "sort_order"),
+                source_key=int(row["live_lesson_date_setting_id"]),
+            )
+            for row in rows
+        ]
+
+
+class RecurrenceExclusionsStep(Step):
+    """`live_lesson_exclusion_date` を移す（開催しない日）。
+
+    **`del_chk = 0` の行だけ読む。** 旧は同じ (ライブ, 日付) が何行も積まれていて
+    （ステージング実測 128行 / 22ペア、最多8行）、全部読むと
+    `uk_llre_lesson_date` に当たる。生きている行だけなら18行・重複ゼロ。
+    """
+
+    name = "content.live_recurrence_exclusions"
+    description = "開催しない日を移す"
+    source_table = "live_lesson_exclusion_date"
+    target_table = "live_lesson_recurrence_exclusions"
+    depends_on = ("content.live_recurrence_rules",)
+
+    def extract(self, ctx: RunContext) -> list[dict]:
+        return ctx.require_source().fetch_for_tenant(
+            "live_lesson_exclusion_date", EXCLUSION_COLUMNS, where="del_chk = 0"
+        )
+
+    def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
+        tenant_id = ctx.tenant_id.value
+        records: list[Record] = []
+        for row in rows:
+            if row.get("exclusion_date") is None:
+                continue  # 日付が入っていない行は意味を持たない
+            records.append(
+                Record(
+                    table="live_lesson_recurrence_exclusions",
+                    values={
+                        # **旧に主キーが無い。** (ライブ, 日付) の組から採番する
+                        "id": ctx.ulid.for_row(
+                            "live_lesson_exclusion_date",
+                            f"{int(row['live_lesson_id'])}:{row['exclusion_date']}",
+                        ),
+                        "tenant_id": tenant_id,
+                        "lesson_id": _live_ulid(ctx, row["live_lesson_id"]),
+                        "excluded_on": row["exclusion_date"],
+                        "deleted_at": None,  # del_chk = 0 の行だけ読んでいる
+                        "created_at": convert(row.get("regist_date"), ColumnKind.DATETIME),
+                    },
+                    natural_key=("lesson_id", "excluded_on"),
+                    source_key=int(row["live_lesson_id"]),
+                )
+            )
+        return records
+
+
+def _deleted(row: dict):
+    return (
+        convert(row.get("regist_date"), ColumnKind.DATETIME)
+        if int(row.get("del_chk") or 0) == 1
+        else None
+    )
+
+
+def _user(ctx: RunContext, value: object) -> str | None:
+    if value is None or int(value) == 0:
+        return None
+    return ctx.ulid.for_row("user", int(value))
+
+
+def build() -> list[Step]:
+    return [
+        CategoriesStep(),
+        CategoryLinksStep(),
+        GroupTargetsStep(),
+        RecurrenceRulesStep(),
+        RecurrenceDetailsStep(),
+        RecurrenceExclusionsStep(),
+    ]
