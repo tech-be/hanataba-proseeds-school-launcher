@@ -45,8 +45,8 @@ def run_all(ctx: RunContext) -> list[CheckResult]:
 def _source_tables(ctx: RunContext) -> CheckResult:
     """**Step が読むテーブルが移行元にそろっているか。**
 
-    環境によってテーブルの有無が違う（`user_login_chk_log` は `20230821_cdss.sql` で
-    足されたもので、ステージングには無い）。読みに行ってから落ちると、原因が
+    環境によってテーブルの有無が違う（lw2 は個別 SQL でテーブルを足すことがあり、
+    ステージングと本番で構成が揃っていない）。読みに行ってから落ちると、原因が
     ドライバのエラーとしてしか出ない。ここで先にまとめて出す。
 
     設定 `source.absent_tables` に書いたものだけ「無いと分かっている」として通す。
@@ -150,7 +150,7 @@ def _unique_conflicts(ctx: RunContext) -> CheckResult:
 
 
 #: テナントの1行を作るフェーズ。**ここを含むかどうかで「初回」か「続き」かが決まる**
-TENANT_PHASE = "foundation.2"
+TENANT_PHASE = "foundation.1"
 
 
 def _target_is_seeded(ctx: RunContext) -> CheckResult:

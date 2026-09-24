@@ -32,6 +32,8 @@ REQUIRED_SCHEMA: tuple[tuple[str, str | None], ...] = (
     ("tenant_profile_item_labels", None),
     ("user_profile_values", None),
     # A12 会員の氏名・会員番号
+    ("users", "legacy_id"),
+    ("tenants", "legacy_id"),
     ("users", "name_last"),
     ("users", "name_first"),
     ("users", "name_kana_last"),
@@ -72,9 +74,8 @@ REQUIRED_SCHEMA: tuple[tuple[str, str | None], ...] = (
     ("tenant_attributes", None),
     ("user_attribute_values", None),
     ("attribute_required_courses", None),
-    # A13 / A17 / A18 会員に紐づく残り
+    # A13 / A18 会員に紐づく残り
     ("user_field_visibility", None),
-    ("user_login_periods", None),
     ("instructor_assignments", None),
     # A3 外部サービスの API キー
     ("tenant_secrets", None),
@@ -82,6 +83,128 @@ REQUIRED_SCHEMA: tuple[tuple[str, str | None], ...] = (
     ("tenant_sso_configs", None),
     ("tenant_login_windows", None),
 )
+
+#: コンテンツ（2）の追加。オンデマンド講座・テスト/課題定義・アンケート定義・ライブ講座。
+#: **school-launcher の `*_lw2_content_additions.sql` と1対1で対応させる。**
+#: ここに書き漏らすと `common.0` の存在確認を素通りして、実 INSERT で初めて落ちる。
+CONTENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
+    # A3 カテゴリ
+    ("course_categories", "image_url"),
+    ("course_categories", "created_by"),
+    # A1 講座
+    ("courses", "legacy_id"),
+    ("courses", "allowed_ip_address"),
+    ("courses", "is_used"),
+    ("courses", "settings"),
+    ("course_tags", None),
+    ("course_tag_links", None),
+    # A4 レッスン
+    ("lessons", "legacy_id"),
+    ("lessons", "open_at"),
+    ("lessons", "close_at"),
+    ("lessons", "close_after_days"),
+    ("lessons", "drip_delay_basis"),
+    ("lessons", "complete_message"),
+    ("lessons", "search_keyword"),
+    ("lessons", "duration_min"),
+    ("lessons", "settings"),
+    # A5 動画
+    ("video_lessons", "complete_type"),
+    ("video_lessons", "skip_prevention"),
+    ("video_lessons", "settings"),
+    # A15 受講制御（免除は受け皿の形が違うので作っていない）
+    ("lesson_preconditions", None),
+    # A6 / A7 / A8 テスト定義（共有問題バンクと出題条件）
+    ("quiz_question_categories", None),
+    ("quiz_question_banks", None),
+    ("quiz_question_rules", None),
+    ("quiz_questions", "bank_id"),
+    ("quiz_questions", "image_url"),
+    ("quiz_questions", "name"),
+    ("quiz_questions", "hint"),
+    ("quiz_questions", "required"),
+    ("quiz_options", "image_url"),
+    ("quizzes", "max_attempts"),
+    ("quizzes", "suspend_enabled"),
+    ("quizzes", "display_settings"),
+    # A13 課題定義（提出側は受講（3）の担当）
+    ("assignments", "due_after_days"),
+    ("assignments", "video_url"),
+    ("assignments", "settings"),
+    ("assignment_materials", None),
+    # A12 アンケート定義（回答側は受講（3）の担当）
+    ("survey_pages", None),
+    ("survey_lessons", "name"),
+    ("survey_questions", "page_id"),
+    ("survey_questions", "image_url"),
+    ("survey_question_options", "image_url"),
+    # ライブ講座（2-4）
+    ("live_lessons", "legacy_id"),
+    ("live_lessons", "settings"),
+    ("live_lesson_categories", None),
+    ("live_lesson_category_links", None),
+    ("live_lesson_group_targets", None),
+    ("live_lesson_occurrences", "deleted_at"),
+    ("live_lesson_occurrences", "remind_enabled"),
+    ("live_lesson_occurrences", "settings"),
+    ("live_lesson_recurrence_rules", None),
+    ("live_lesson_recurrence_details", None),
+    ("live_lesson_recurrence_exclusions", None),
+)
+
+#: 区分ごとの必須スキーマ。**その区分を流すときだけ確認する**
+#: （基盤だけを流し直すのに、オンデマンドの追加を待つ必要は無い）
+#: 受講（3）の追加。テスト結果・課題提出・アンケート回答・ライブ予約・修了証。
+#: **対応する migration はまだ無い。** `doctor` が TODO で出すのが正しい状態
+#: （区分3 を作り直す回で `*_lw2_enrollment_additions.sql` を書く）。
+ENROLLMENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
+    # テスト結果
+    ("quiz_attempts", "passed"),
+    ("quiz_attempts", "duration_sec"),
+    ("quiz_answers", "is_correct"),
+    ("quiz_answers", "option_order"),
+    ("quiz_answers", "sort_no"),
+    ("quiz_answers", "pre_question_pass"),
+    # 課題提出
+    ("submissions", "score"),
+    ("submissions", "settings"),
+    ("submission_files", None),
+    ("submission_feedbacks", "question_comments"),
+    # アンケート回答
+    ("survey_responses", "entity_type"),
+    ("survey_responses", "entity_id"),
+    ("survey_responses", "suspended"),
+    # ライブ予約
+    ("live_reservations", "verification_key"),
+    ("live_reservations", "settings"),
+    ("live_lesson_reviews", None),
+)
+
+#: 課金（4）の追加。チケット
+BILLING_SCHEMA: tuple[tuple[str, str | None], ...] = (
+    ("ticket_types", "legacy_id"),
+    ("ticket_types", "legacy_type"),
+    ("ticket_grants", "starts_at"),
+    ("monthly_ticket_allowances", None),
+)
+
+#: サポート機能（5）の追加。教材・ライブラリの公開対象。
+#: **対応する migration はまだ無い**（区分5 を作り直す回で書く）。
+#: 属性単位の公開（`library_folder_attribute_targets`）は**旧に対応データが無い**ので作らない。
+SUPPORT_SCHEMA: tuple[tuple[str, str | None], ...] = (
+    ("library_folder_group_targets", None),
+    ("library_material_lesson_targets", None),
+)
+
+#: **キーは `Phase.key` の接頭辞と一致させること。** `SchemaCheckStep.run()` が
+#: `ctx.selected` を `.` で分割して突き合わせるので、**ずれても例外にならず確認が素通りする**
+SCHEMA_BY_SECTION: dict[str, tuple[tuple[str, str | None], ...]] = {
+    "foundation": REQUIRED_SCHEMA,
+    "content": CONTENT_SCHEMA,
+    "enrollment": ENROLLMENT_SCHEMA,
+    "billing": BILLING_SCHEMA,
+    "support": SUPPORT_SCHEMA,
+}
 
 #: **移行では使わない**もの（新環境の運用のための改善）。欠けていても止めない
 PLANNED_SCHEMA: tuple[tuple[str, str | None, str], ...] = (
@@ -131,14 +254,20 @@ class SchemaCheckStep(SchemaStep):
 
     def run(self, ctx: RunContext) -> StepResult:
         result = StepResult(step=self.name)
-        lacking = missing(ctx, REQUIRED_SCHEMA)
+        # **これから流す区分の分だけ確認する。** 基盤を流し直すのに、
+        # オンデマンドの追加が当たっているかは関係ない
+        sections = {key.split(".")[0] for key in ctx.selected} or set(SCHEMA_BY_SECTION)
+        entries: list[tuple[str, str | None]] = []
+        for section in sorted(sections & set(SCHEMA_BY_SECTION)):
+            entries += list(SCHEMA_BY_SECTION[section])
+        lacking = missing(ctx, tuple(entries))
         if lacking:
             raise PreflightError(
                 "新環境に追加スキーマが入っていない: "
                 + ", ".join(lacking)
-                + "。docs/db/01-foundation/schema-additions.md の migration を先に当てる"
+                + "。該当区分の schema-additions.md の migration を先に当てる"
             )
-        result.note(f"必須 {len(REQUIRED_SCHEMA)} 件を確認")
+        result.note(f"必須 {len(entries)} 件を確認（区分: {', '.join(sorted(sections)) or '全部'}）")
         planned = missing(ctx, PLANNED_SCHEMA)
         if planned:
             result.note(f"未実装 Step 用の {len(planned)} 件は未適用（移行には影響しない）")
