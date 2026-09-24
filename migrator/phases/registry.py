@@ -5,17 +5,18 @@
 - **区分をまたぐ順序**（docs/migration-spec.md 1章）: 共通 → 基盤 → オンデマンド / 運営 → …
 - **区分の中の順序**（docs/db/NN-*/migration-spec.md 2章）: テナント → マスタ → 定義 → 会員 → …
 
-識別子は `foundation.2` のように**区分.フェーズ番号**。区分が増えても番号がずれない。
+識別子は `foundation.1` のように**区分.フェーズ番号**。区分が増えても番号がずれない。
+
+**区分とフェーズは移行計画の5グループ / 20項目に対応する。**
 
 ```
 common.0       スキーマ確認（追加は移行直前に migration で実施）
-foundation.1   マスタの追加値           ← FK の参照先をそろえる
-foundation.2   tenants の1行            ← ここで tenant_id が決まる
-foundation.3   テナント設定・定義系
-foundation.4   会員
-foundation.5   会員に紐づくもの
-ondemand.*     未作成（突き合わせに修正方法の列が無い）
-...
+foundation.1   マスター      ← マスタ・テナント・テナント設定。ここで tenant_id が決まる
+foundation.2   ユーザ
+content.1-4    オンデマンド講座 / テスト定義・課題定義 / アンケート定義 / ライブ講座
+enrollment.1-7 受講権限 / 学習履歴 / テスト結果 / 課題提出 / アンケート回答 / ライブ予約 / 修了証
+billing.1-3    チケット / 決済 / 帳票
+support.1-7    LINE / クーポン / お知らせ / 問い合わせ / ファイル / 就業支援 / コミュニティ
 ```
 
 `login_history` は純ログのため移行しない。フェーズ表に現れない。
@@ -25,7 +26,22 @@ from __future__ import annotations
 
 from ..errors import DependencyError, MigrationError
 from ..steps import auth_config, masters, org, tenant_config, user_related, users
+from ..steps.billing import extras as bl_extras
+from ..steps.billing import tickets as bl_tickets
+from ..steps.content import assignments as ct_assignments
+from ..steps.content import courses as ct_courses
+from ..steps.content import instructors as ct_instructors
+from ..steps.content import lessons as ct_lessons
+from ..steps.content import live_courses as ct_live_courses
+from ..steps.content import live_definitions as ct_live_definitions
+from ..steps.content import live_lessons as ct_live_lessons
+from ..steps.content import masters as ct_masters
+from ..steps.content import quizzes as ct_quizzes
+from ..steps.content import surveys as ct_surveys
+from ..steps.enrollment import certificates as en_certificates
+from ..steps.enrollment import results as en_results
 from ..steps.schema import SchemaCheckStep
+from ..steps.support import library as sp_library
 from ..steps.tenant import TenantStep
 from ..validation import postcheck
 from .base import Phase, Section
@@ -48,35 +64,98 @@ def build_sections() -> list[Section]:
                 )
             ],
         ),
+        # --- 1 基盤 ---------------------------------------------------------
         Section(
             key="foundation",
             order=1,
             title="基盤",
             doc="docs/db/01-foundation/migration-spec.md",
             phases=[
-                # マスタが先。FK の参照先をすべてそろえてから、それを使う行を作る
-                Phase(1, "マスタ", "user_roles / tenant_statuses / auth_methods / email_kinds に不足値を足す",
-                      steps=masters.build()),
-                Phase(2, "テナント", "tenants の1行を作り、tenant_id を確定させる",
-                      steps=[TenantStep()], checks=(postcheck.target_tenant_once,)),
-                Phase(3, "テナント設定・定義",
-                      "上限・プロフィール項目・グループ・属性・認証設定を移す",
-                      steps=tenant_config.build() + org.definitions() + auth_config.build()),
-                Phase(4, "会員", "users と対応表を移す",
-                      steps=users.build(),
+                # マスタ → テナント → テナント設定。**この順でないと FK が揃わない**
+                # （`tenants` の1行が入らないと、FK を持つ子は1行も入らない）
+                Phase(1, "マスター", "ルックアップの不足値・テナント・テナント設定を入れる",
+                      steps=(masters.build() + [TenantStep()] + tenant_config.build()
+                             + org.definitions() + auth_config.build()),
+                      checks=(postcheck.target_tenant_once,)),
+                Phase(2, "ユーザ", "会員と、会員に紐づくものを入れる",
+                      steps=users.build() + user_related.build() + org.assignments(),
                       checks=(postcheck.no_platform_admin, postcheck.email_unique)),
-                Phase(5, "会員に紐づくもの",
-                      "住所・プロフィール値・公開制限・割当・通知設定・LINE 紐付けを移す",
-                      steps=user_related.build() + org.assignments()),
             ],
         ),
-        # --- 以降は突き合わせに `修正方法` の列が無く、移行仕様が未作成 ---
-        Section("ondemand", 2, "オンデマンド", "docs/db/02-ondemand/review.md", pending=True),
-        Section("operations", 2, "運営", "docs/db/06-operations/review.md", pending=True),
-        Section("live", 3, "ライブ", "docs/db/03-live/review.md", pending=True),
-        Section("enrollment", 3, "受講", "docs/db/04-enrollment/review.md", pending=True),
-        Section("billing", 3, "課金", "docs/db/05-billing/review.md", pending=True),
-        Section("career", 4, "就職支援", "docs/db/07-career/review.md", pending=True),
+        # --- 2 コンテンツ ---------------------------------------------------
+        Section(
+            key="content",
+            order=2,
+            title="コンテンツ",
+            doc="docs/db/02-content/migration-spec.md",
+            phases=[
+                Phase(1, "オンデマンド講座", "講座・ユニット・動画・受講制御を移す",
+                      steps=(ct_masters.build() + ct_instructors.build() + ct_courses.build()
+                             + ct_lessons.build())),
+                Phase(2, "テスト定義・課題定義", "問題バンク・テスト・出題条件・課題を移す",
+                      steps=ct_quizzes.build() + ct_assignments.build()),
+                Phase(3, "アンケート定義", "アンケートの設問と選択肢を移す",
+                      steps=ct_surveys.build()),
+                # ライブは講座に属さないので、受け皿の講座をここで作る
+                Phase(4, "ライブ講座", "受け皿講座・ライブ・開催回・分類を移す",
+                      steps=(ct_live_courses.host_course() + ct_live_lessons.build()
+                             + ct_live_definitions.build())),
+            ],
+        ),
+        # --- 3 受講 ---------------------------------------------------------
+        Section(
+            key="enrollment",
+            order=3,
+            title="受講",
+            doc="docs/db/03-enrollment/migration-spec.md",
+            phases=[
+                Phase(1, "受講権限", "受け皿講座への受講登録（J01 の本体は未実装）",
+                      steps=ct_live_courses.enrollments()),
+                Phase(2, "学習履歴", "ユニット進捗（未実装）", steps=[]),
+                Phase(3, "テスト結果", "受験・設問別回答・選んだ選択肢を移す",
+                      steps=en_results.quizzes()),
+                Phase(4, "課題提出", "提出・提出ファイル・添削を移す",
+                      steps=en_results.submissions()),
+                Phase(5, "アンケート回答", "回答の見出しと設問別回答を移す",
+                      steps=en_results.surveys()),
+                # 予約はチケット定義（billing.1）のあと。台帳が予約を参照する
+                Phase(6, "ライブ予約", "予約とライブレビューを移す",
+                      steps=bl_tickets.reservations_steps() + bl_extras.reviews()),
+                Phase(7, "修了証・バッジ", "修了証の設定と発行済みの証書を移す",
+                      steps=en_certificates.build()),
+            ],
+        ),
+        # --- 4 課金 ---------------------------------------------------------
+        Section(
+            key="billing",
+            order=4,
+            title="課金",
+            doc="docs/db/04-billing/migration-spec.md",
+            phases=[
+                Phase(1, "チケット", "種別・必要枚数・付与・消費の台帳・月次配布を移す",
+                      steps=(bl_tickets.definitions() + bl_tickets.grants()
+                             + bl_extras.allowances())),
+                Phase(2, "決済", "決済・継続課金・分割払い（未実装）", steps=[]),
+                Phase(3, "帳票", "領収書・消費税・規約（未実装）", steps=[]),
+            ],
+        ),
+        # --- 5 サポート機能 -------------------------------------------------
+        Section(
+            key="support",
+            order=5,
+            title="サポート機能",
+            doc="docs/db/05-support/migration-spec.md",
+            phases=[
+                Phase(1, "LINE 友だち紐付け", "LINE の紐付け（会員の投入後）",
+                      steps=user_related.line_links()),
+                Phase(2, "クーポン", "クーポンと対象者割当（未実装）", steps=[]),
+                Phase(3, "お知らせ", "お知らせ・配信設定（未実装）", steps=[]),
+                Phase(4, "問い合わせ", "問い合わせと個別メッセージ（未実装）", steps=[]),
+                Phase(5, "ファイル", "教材・ライブラリを移す", steps=sp_library.build()),
+                Phase(6, "就業支援", "求人・面談・スキルチェック（未実装）", steps=[]),
+                Phase(7, "コミュニティ", "掲示板・SNS 共有・足あと（未実装）", steps=[]),
+            ],
+        ),
     ]
 
 

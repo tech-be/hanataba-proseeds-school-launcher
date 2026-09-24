@@ -312,17 +312,6 @@ VISIBILITY_SOURCES = (
 )
 VISIBILITY_COLUMNS = ("user_id",) + tuple(c for c, _ in VISIBILITY_SOURCES)
 
-#: ログイン有効期間の変更履歴。**名前が `_log` だが純ログではない**ので移行する
-LOGIN_PERIOD_COLUMNS = (
-    "user_id",
-    "login_chk",
-    "entry_date",
-    "limit_date",
-    "valid_chk",
-    "effective_date",
-    "batch_date",
-)
-
 
 class UserFieldVisibilityStep(Step):
     """会員ごとの公開制限を移す。**旧の列名をそのまま `field_code` にする。**"""
@@ -366,58 +355,20 @@ class UserFieldVisibilityStep(Step):
         return records
 
 
-class UserLoginPeriodsStep(Step):
-    """ログイン有効期間の変更履歴を移す（`user_login_chk_log`）。
-
-    **名前が `_log` だがログではない。** バッチが `batch_date` 単位で作る履歴なので移行する。
-    現在値は `users.login_start_date` / `login_end_date`（A20）が持つ。
-    """
-
-    name = "user_login_periods"
-    description = "ログイン有効期間の変更履歴を移す"
-    source_table = "user_login_chk_log"
-    target_table = "user_login_periods"
-    depends_on = ("users",)
-
-    def extract(self, ctx: RunContext) -> list[dict]:
-        return ctx.require_source().fetch_joined(
-            "user_login_chk_log",
-            LOGIN_PERIOD_COLUMNS,
-            parent="user",
-            on="c.user_id = p.user_id",
-        )
-
-    def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
-        tenant_id = ctx.tenant_id.value
-        return [
-            Record(
-                table="user_login_periods",
-                values={
-                    "id": ctx.ulid.for_row(
-                        "user_login_chk_log", f"{row['user_id']}:{row.get('batch_date')}"
-                    ),
-                    "tenant_id": tenant_id,
-                    "user_id": ctx.ulid.for_row("user", row["user_id"]),
-                    "login_allowed": bool(int(row.get("login_chk") or 0)),
-                    "start_date": row.get("entry_date"),
-                    "end_date": row.get("limit_date"),
-                    "is_valid": bool(int(row.get("valid_chk") or 1)),
-                    "effective_date": row.get("effective_date"),
-                    "batch_date": row.get("batch_date"),
-                },
-                natural_key=("user_id", "batch_date"),
-                source_key=int(row["user_id"]),
-            )
-            for row in rows
-        ]
-
-
 def build() -> list[Step]:
+    """1-2 ユーザ。**LINE は含めない** — 区分はサポート機能（5-1）。"""
     return [
         UserAddressesStep(),
         UserProfileValuesStep(),
         UserFieldVisibilityStep(),
-        UserLoginPeriodsStep(),
         NotificationOptoutsStep(),
-        LineLinksStep(),
     ]
+
+
+def line_links() -> list[Step]:
+    """5-1 LINE 友だち紐付け。
+
+    **書き込み先は会員に紐づく表だが、区分はサポート機能。** 移行計画の分類に合わせる。
+    会員（1-2）が入っていることが前提。
+    """
+    return [LineLinksStep()]

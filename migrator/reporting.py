@@ -35,7 +35,7 @@ def plan(sections) -> str:
     for section in sorted(sections, key=lambda s: (s.order, s.key)):
         head = f"[{section.order}] {section.key:<12} {section.title}"
         if section.pending:
-            lines.append(f"{head}  — 移行仕様が未作成（{section.doc}）")
+            lines.append(f"{head}  — {section.pending_reason}（{section.doc}）")
             continue
         lines.append(head)
         for phase in sorted(section.phases, key=lambda p: p.number):

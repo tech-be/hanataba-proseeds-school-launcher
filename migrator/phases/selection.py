@@ -84,6 +84,6 @@ def _unqualified(sections: list[Section], numbers: list[int]) -> list[str]:
 def _reject_pending(section: Section) -> None:
     if section.pending:
         raise MigrationError(
-            f"{section.key}（{section.title}）の移行仕様はまだ無い。"
-            f"突き合わせに `修正方法` の列を足し、追加一覧を作るところから（{section.doc}）"
+            f"{section.key}（{section.title}）はまだ流せない: {section.pending_reason}。"
+            f"{section.pending_next}（{section.doc}）"
         )

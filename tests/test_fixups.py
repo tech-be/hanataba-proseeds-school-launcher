@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 
 from fixups.exclusions import Exclusion
-from fixups.plan import NONE, OVERRIDE, SQL, classify
+from fixups.plan import NONE, OVERRIDE, REVIEW, SQL, classify
 
 
 def exclusion(step, reason, key, table="t", detail=""):
@@ -50,6 +50,27 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(tasks[0].kind, "orphan-row")
         self.assertEqual(tasks[0].how, SQL)
         self.assertEqual(tasks[0].keys, ["user_attribute_values:13"])
+
+    def test_non_user_foreign_key_is_not_called_a_cascade(self):
+        """**数値の旧 ID でも会員とは限らない。**
+
+        `ondemand.quizzes` の `lesson_id` は見出しユニットを指す。これを「巻き添え」に
+        分類すると、**運営に「対応不要」と伝えてしまう**（実際は親をどうするか決めが要る）。
+        """
+        items = [exclusion("content.quizzes", "外部キー `lesson_id`", "2014")]
+        tasks = classify(items, live_users={"2014"})
+        self.assertEqual(tasks[0].kind, "fk-other")
+        self.assertEqual(tasks[0].how, REVIEW)
+
+    def test_other_reasons_are_not_merged_into_one_bucket(self):
+        """**理由ごとに分ける。** 1つの束にすると見出しが最初の1件の理由だけになる。"""
+        items = [
+            exclusion("content.video_lessons", "NOT NULL `video_url`", "5"),
+            exclusion("enrollment.submissions", "NOT NULL `submitted_at`", "9"),
+        ]
+        tasks = classify(items, live_users=set())
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual({len(t.keys) for t in tasks}, {1})
 
     def test_sql_comes_first(self):
         """**機械的に直せるものから出す。** 運営に投げる前に減らせる分は減らす。"""

@@ -63,8 +63,12 @@ class Section:
     title: str
     doc: str
     phases: list[Phase] = field(default_factory=list)
-    #: まだ移行仕様が無い区分。`plan` には出すが、流そうとすると止める
+    #: まだ流せない区分。`plan` には出すが、流そうとすると止める
     pending: bool = False
+    #: なぜ流せないか。`plan` と選択時のエラーにそのまま出す
+    pending_reason: str = "移行仕様が未作成"
+    #: 何から着手すればよいか。選択時のエラーにだけ出す
+    pending_next: str = "突き合わせに `修正方法` の列を足し、追加一覧を作るところから"
 
     def __post_init__(self) -> None:
         for phase in self.phases:

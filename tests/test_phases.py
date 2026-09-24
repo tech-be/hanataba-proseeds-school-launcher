@@ -27,7 +27,13 @@ TENANT_ROW = {
 CONFIG = Config(
     tenant=TenantConfig(legacy_id=12, slug="recademy", name="ReCADemy"),
     ulid_namespace="lw2-test",
-    mappings={"role": {"values": {7: "learner"}}, "prefecture": {"values": {}}},
+    mappings={
+        "role": {"values": {7: "learner"}},
+        "prefecture": {"values": {}},
+        # 会員のフェーズ（foundation.2）を流すので、パスワード移行の設定が要る
+        "password": {"bcrypt_cost": 4},
+    },
+    legacy_crypt_key="test-key",
 )
 
 
@@ -47,38 +53,49 @@ class PhaseSpecTest(unittest.TestCase):
         self.sections = build_sections()
 
     def test_qualified(self) -> None:
-        self.assertEqual([p.key for p in resolve(self.sections, ["foundation.4"], [])], ["foundation.4"])
+        self.assertEqual([p.key for p in resolve(self.sections, ["content.4"], [])], ["content.4"])
 
     def test_range_within_section(self) -> None:
         self.assertEqual(
-            [p.key for p in resolve(self.sections, ["foundation.1-3"], [])],
-            ["foundation.1", "foundation.2", "foundation.3"],
+            [p.key for p in resolve(self.sections, ["content.1-3"], [])],
+            ["content.1", "content.2", "content.3"],
         )
 
     def test_section_whole(self) -> None:
         self.assertEqual(
             [p.key for p in resolve(self.sections, [], ["foundation"])],
-            [f"foundation.{n}" for n in range(1, 6)],
+            ["foundation.1", "foundation.2"],
         )
 
     def test_unqualified_allowed_while_unambiguous(self) -> None:
-        """区分が1つに決まるうちは `--phase 4` も通る（後方互換）。"""
-        self.assertEqual([p.key for p in resolve(self.sections, ["4"], [])], ["foundation.4"])
+        """その番号を持つ区分が1つに決まるうちは、区分を省いても通る（後方互換）。
+
+        **5区分になって、番号だけで決まるのは `0`（共通）だけになった。**
+        1〜7 はどれも複数の区分が持つ。実質この後方互換は使えない。
+        """
+        self.assertEqual([p.key for p in resolve(self.sections, ["0"], [])], ["common.0"])
 
     def test_unqualified_becomes_ambiguous(self) -> None:
-        """同じ番号を持つ区分が増えたら、区分を書かせる。"""
-        from migrator.phases.base import Phase, Section
+        """同じ番号を複数の区分が持つなら、区分を書かせる。
 
-        sections = self.sections + [
-            Section("ondemand2", 2, "オンデマンド", "doc", phases=[Phase(4, "講座", "")])
-        ]
+        **4 は content / enrollment / support が持つ**ので、番号だけでは決まらない。
+        """
         with self.assertRaises(MigrationError) as caught:
-            resolve(sections, ["4"], [])
+            resolve(self.sections, ["4"], [])
         self.assertIn("区分.番号", str(caught.exception))
 
     def test_pending_section_is_rejected(self) -> None:
+        """**まだ流せない区分は指定できない。**
+
+        いまは5区分とも流せるので、合成した区分で挙動だけを固定する。
+        """
+        from migrator.phases.base import Phase, Section
+
+        sections = self.sections + [
+            Section("later", 9, "あとで", "doc", phases=[Phase(1, "x", "")], pending=True)
+        ]
         with self.assertRaises(MigrationError):
-            resolve(self.sections, ["ondemand.1"], [])
+            resolve(sections, ["later.1"], [])
 
     def test_default_is_everything_in_order(self) -> None:
         self.assertEqual(
@@ -89,16 +106,16 @@ class PhaseSpecTest(unittest.TestCase):
 
 class BootstrapTest(unittest.TestCase):
     def test_mid_phase_run_without_bootstrap_fails(self) -> None:
-        """用意をせずに foundation.3 だけ流すと、依存で止まる（止まるのが正しい）。"""
+        """用意をせずに foundation.2 だけ流すと、依存で止まる（止まるのが正しい）。"""
         ctx = make_ctx()
         with self.assertRaises(DependencyError):
-            resolve(build_sections(), ["foundation.3"], [])[0].run(ctx)
+            resolve(build_sections(), ["foundation.2"], [])[0].run(ctx)
 
     def test_bootstrap_enables_mid_phase_dry_run(self) -> None:
-        """フェーズ3だけの dry-run が通る。tenant_id は旧行から組み立てる。"""
-        ctx = make_ctx({"tenant": [TENANT_ROW], "tenant_limit_value": []})
+        """ユーザだけの dry-run が通る。tenant_id は旧行から組み立てる。"""
+        ctx = make_ctx({"tenant": [TENANT_ROW], "user": []})
         sections = build_sections()
-        selected = resolve(sections, ["foundation.3"], [])
+        selected = resolve(sections, ["foundation.2"], [])
         bootstrap(ctx, sections, selected)
         self.assertTrue(ctx.tenant_id.resolved)
         self.assertIn("tenant", ctx.completed)
@@ -114,14 +131,14 @@ class BootstrapTest(unittest.TestCase):
 
         later_ctx = make_ctx()
         sections = build_sections()
-        bootstrap(later_ctx, sections, resolve(sections, ["foundation.5"], []))
+        bootstrap(later_ctx, sections, resolve(sections, ["foundation.2"], []))
         self.assertEqual(later_ctx.tenant_id.value, expected)
 
     def test_bootstrap_is_noop_from_the_first_phase(self) -> None:
         ctx = make_ctx()
         sections = build_sections()
         bootstrap(ctx, sections, resolve(sections, ["common.0", "foundation.1"], []))
-        self.assertFalse(ctx.tenant_id.resolved)  # foundation.2 が採番する
+        self.assertFalse(ctx.tenant_id.resolved)  # foundation.1 が採番する
 
     def test_masters_only_does_not_need_tenant_id(self) -> None:
         """マスタは tenant_id を使わないので、引き当てずに流せる。"""
@@ -135,7 +152,7 @@ class BootstrapTest(unittest.TestCase):
         """テナントのフェーズを含むなら、そこで採番するので引き当てない。"""
         ctx = make_ctx()
         sections = build_sections()
-        bootstrap(ctx, sections, resolve(sections, ["foundation.2-3"], []))
+        bootstrap(ctx, sections, resolve(sections, ["foundation.1-2"], []))
         self.assertFalse(ctx.tenant_id.resolved)
 
 

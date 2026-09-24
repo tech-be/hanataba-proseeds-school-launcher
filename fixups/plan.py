@@ -2,6 +2,10 @@
 
 **大半は巻き添え。** 会員が1人移らないと、その会員の住所・通知設定・所属も移らない。
 直す必要があるのは**大本だけ**で、そこを直せば巻き添えは消える。ここではそれを分けて出す。
+
+**「巻き添え」と呼べるのは、参照先が会員のときだけ。** 外部キー違反の旧 ID が数値でも
+会員とは限らない（`ondemand.quizzes` の `lesson_id` は見出しユニットを指す）。
+**理由に載っている列名で判定する。**
 """
 
 from __future__ import annotations
@@ -88,6 +92,16 @@ def classify(exclusions: list[Exclusion], live_users: set[str]) -> list[Task]:
                 item.key,
                 column="line_id",
             )
+        elif item.kind == "外部キー" and item.column != "user_id":
+            # **会員以外の参照先。** 旧 ID が数値でも会員とは限らない
+            # （`ondemand.quizzes` の `lesson_id` は見出しユニットを指す、など）
+            add(
+                "fk-other",
+                "参照先が無い行（会員以外）",
+                REVIEW,
+                "親を先に移すか、対象外にするかを決める",
+                f"{item.step}:{item.key}",
+            )
         elif item.kind == "外部キー":
             if item.key.isdigit() and item.key not in live_users:
                 add(
@@ -114,7 +128,15 @@ def classify(exclusions: list[Exclusion], live_users: set[str]) -> list[Task]:
                     f"{item.step}:{item.key}",
                 )
         else:
-            add("other", f"その他（{item.step} / {item.reason}）", REVIEW, "内容を見て決める", item.key)
+            # **理由ごとに分ける。** 1つの束にすると、見出しに出る理由が最初の1件だけになり
+            # 「video_url が NOT NULL」の束に未提出の課題が紛れ込む
+            add(
+                f"other:{item.step}:{item.reason}",
+                f"その他（{item.step} / {item.reason}）",
+                REVIEW,
+                "内容を見て決める",
+                item.key,
+            )
 
     order = {SQL: 0, OVERRIDE: 1, REVIEW: 2, NONE: 3}
     return sorted(buckets.values(), key=lambda t: (order[t.how], -len(t.keys)))
