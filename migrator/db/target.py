@@ -65,8 +65,10 @@ class TargetDatabase:
         rows = self.query(f"SELECT 1 FROM `{table}` WHERE {where} LIMIT 1", tuple(key.values()))
         return bool(rows)
 
-    #: 外部キーの参照先になりうる列。ここに挙げた列だけ、投入済みとして覚えておく
-    REFERENCED_COLUMNS = ("id", "code")
+    #: 外部キーの参照先になりうる列。**dry-run でも「この実行で入れた行」として覚える**ので、
+    #: ここに無い列を参照先にすると、まだ DB に無い親を「存在しない」と判定してしまう。
+    #: `lesson_id` は `survey_lessons` / `live_lessons` の**主キー**（`id` ではない）
+    REFERENCED_COLUMNS = ("id", "code", "lesson_id")
 
     def known_ids(self, table: str, column: str, wanted: set) -> set:
         """`wanted` のうち、**移行先にすでにある / この実行で入れた**ものを返す。"""

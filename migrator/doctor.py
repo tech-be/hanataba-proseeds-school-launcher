@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from .config import Config
 from .db import connect as connect_module
 from .errors import MigrationError
-from .steps.schema import PLANNED_SCHEMA, REQUIRED_SCHEMA
+from .steps.schema import PLANNED_SCHEMA, REQUIRED_SCHEMA, SCHEMA_BY_SECTION
 
 
 @dataclass
@@ -103,7 +103,7 @@ def _target(config: Config) -> list[Finding]:
         mine = list(cur.fetchall())
         if not mine:
             out.append(
-                Finding(f"移行先の {config.tenant.slug}", True, "まだ無い（foundation.2 で作る）")
+                Finding(f"移行先の {config.tenant.slug}", True, "まだ無い（foundation.1 で作る）")
             )
         elif len(mine) == 1:
             out.append(Finding(f"移行先の {config.tenant.slug}", True, f"1 件（id={mine[0]['id']}）"))
@@ -148,6 +148,28 @@ def _target(config: Config) -> list[Finding]:
                 + (" ほか" if len(lacking) > 6 else ""),
             )
         )
+        # **区分ごとに回す。** 個別の定数を import していた頃はライブぶんが抜けていた
+        # （区分が増えるたびに import を足す作りだったため）
+        for section, entries in SCHEMA_BY_SECTION.items():
+            if section == "foundation" or not entries:
+                continue  # 基盤は上で見た。空の区分は出さない
+            missing = _missing_schema(cur, entries)
+            out.append(
+                Finding(
+                    f"追加スキーマ（{section} {len(entries)} 件）",
+                    # **NG ではなく TODO。** その区分を流すときに効く話で、
+                    # 他の区分の移行は止まらない（`_missing_schema` は別々に見る）。
+                    # ok=False にすると総括が「NG があるので移行を始める前に解消する」
+                    # になり、**基盤とコンテンツだけ流す運用ができなくなる**
+                    True,
+                    "すべて入っている"
+                    if not missing
+                    else f"{len(missing)} 件未適用。**school-launcher 側で migration を当てる**"
+                    "。この区分を流すときだけ効く（他区分の移行には影響しない）",
+                    todo=bool(missing),
+                )
+            )
+
         planned = _missing_schema(cur, PLANNED_SCHEMA)
         if planned:
             out.append(
