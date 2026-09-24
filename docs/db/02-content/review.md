@@ -306,7 +306,7 @@
 | `selection1..20` (text×20) | `quiz_options`（縦持ち） | 性質 | 中 | 横持ち → 縦持ち | 有効数は `selection_num` を見て展開する |
 | `selection1..20` text | `quiz_options.body` varchar(1000) | 型 | 中 | **text → varchar(1000) で切り捨ての恐れ** | 抽出時に1000文字超を検査し、**超過があれば列を広げる** |
 | `answer` varchar(1000) | `quiz_options.is_correct` | 性質 | 中 | 正解文字列 → 選択肢ごとのフラグへ分解する規則が要る | `answer` の格納形式を実装で確認し、選択肢番号と突き合わせて `is_correct` を立てる |
-| `question_type_id` | `quiz_questions.type` | 性質 | 中 | `quiz_question_types` は `single_choice` / `multiple_choice` の**2値のみ**。自由記述（O11）の受け皿が無い | `quiz_question_types` に `text_free` を追加して移す（→ A7） |
+| `question_type_id` | `quiz_questions.type` | 性質 | 中 | `quiz_question_types` は `single_choice` / `multiple_choice` の**2値のみ**。自由記述（O11）の受け皿が無い | `quiz_question_types` に `free_text` を追加して移す（→ A7） |
 | `question_cate_id` / `question_level_id` | — | カラム | 中 | **問題カテゴリ・レベルを入れる列が無い。** これは `test_sub` の出題条件が参照しているので、落とすと条件も再現できない | A6 の `quiz_question_banks.category_id` / `level` に移す |
 | `question_name` / `hint` / `require_chk` | — | カラム | 中 | 問題名・ヒント・必須フラグを入れる列が無い | A7 で `quiz_questions.name` / `hint` / `required` を追加して移す |
 
@@ -328,7 +328,9 @@
 
 `quiz_question_types` (マスタ)
 
-**旧に対応テーブルなし。** `quiz_questions.type` の値で `single_choice`/`multiple_choice` の2値。**自由記述の受け皿が無い**ため A7 で `text_free` を追加する。
+**旧に対応テーブルなし。** `quiz_questions.type` の値で `single_choice`/`multiple_choice` の2値。**自由記述の受け皿が無い**ため A7 で `free_text` を追加する。
+
+> **記述式も採点される。** 正解候補は `question.answer` にパイプ区切りで入っており、`quiz_options` に `is_correct = TRUE` の行として展開する。**選択式と違い、候補に「番号」ではなく「文字列そのもの」が入る**点に注意する。
 
 ---
 
@@ -607,7 +609,7 @@
 | # | 追加するもの | 旧環境の対応 | 変更が必要な機能 |
 |---|---|---|---|
 | **A6** | `quiz_question_categories` / `quiz_question_banks` | `question_cate` / `question`（3,880行） | ・**問題バンクの管理画面**（テストに属さない問題の一覧・編集）<br>・出題条件から問題を引く出題ロジック |
-| **A7** | `quiz_questions.bank_id`（＋FK）/ `image_url` / `name` / `hint` / `required`、`quiz_options.image_url`、`quizzes.max_attempts` / `suspend_enabled` / `display_settings` ／ `quiz_question_types` に `text_free` | `question_name` / `hint` / 画像ファイル名 / `test.exam_max_number` / `suspended_chk` / 表示設定6列 | ・受験回数の上限チェック<br>・中断・再開（`suspend_enabled`）<br>・正解 / 解説 / 点数を見せるかの出し分け<br>・**`text_free` は自動採点できない**ので、採点待ちの扱いを決める |
+| **A7** | `quiz_questions.bank_id`（＋FK）/ `image_url` / `name` / `hint` / `required`、`quiz_options.image_url`、`quizzes.max_attempts` / `suspend_enabled` / `display_settings` ／ `quiz_question_types` に `free_text` | `question_name` / `hint` / 画像ファイル名 / `test.exam_max_number` / `suspended_chk` / 表示設定6列 | ・受験回数の上限チェック<br>・中断・再開（`suspend_enabled`）<br>・正解 / 解説 / 点数を見せるかの出し分け<br>・**`free_text` は候補との完全一致で自動採点する。** lw2 の `UserLearningLessonModel::_markAnswers` が `question_type_id == 3` のとき `explode('|', answer)` した候補に `in_array` で判定しており、移行先も同じ形。**正解候補は `quiz_options` に `is_correct = TRUE` の行として展開する**（候補はすべて正解。記述式に不正解の選択肢は無い） |
 | **A8** | `quiz_question_rules`（カテゴリ・難易度・出題数） | `test_sub`（285行） | ・**ランダム出題。** 「このカテゴリ・この難易度から N 問」を解釈する出題ロジック<br>・**これが無いと固定リストのテストにしかならない** |
 
 ### C6 課題定義

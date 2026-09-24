@@ -109,6 +109,45 @@ class QuizConversionTest(unittest.TestCase):
                  "question_id": 1, "sort_no": 1}]
         self.assertEqual(od_quizzes.QuizOptionsStep().transform(ctx, rows), [])
 
+    def _free_text(self, answer, selection_num=0):
+        ctx = make_ctx()
+        question = {"question_id": 1, "question_type_id": 3,
+                    "selection_num": selection_num, "answer": answer}
+        rows = [{"_sub": {"test_sub_id": 10, "test_id": 1}, "_question": question,
+                 "question_id": 1, "sort_no": 1}]
+        return od_quizzes.QuizOptionsStep().transform(ctx, rows)
+
+    def test_free_text_answer_becomes_a_correct_option(self) -> None:
+        """**記述式の正解候補を落とさない。**
+
+        lw2 は記述式を自動採点している（`_markAnswers` が `question_type_id == 3`
+        のとき `explode('|', answer)` の候補に `in_array` で完全一致を見る）。
+        移行先も `is_correct = TRUE` の行で候補を持つ作りなので、展開しないと
+        **正解候補がどこにも運ばれず、記述式が採点できなくなる。**
+        """
+        records = self._free_text("/etc/passwd")
+        self.assertEqual([r.values["body"] for r in records], ["/etc/passwd"])
+        self.assertEqual([r.values["is_correct"] for r in records], [True])
+
+    def test_free_text_splits_on_pipe(self) -> None:
+        """**候補はパイプ区切り。** すべて正解として入れる。"""
+        records = self._free_text("はい|Yes|yes")
+        self.assertEqual([r.values["body"] for r in records], ["はい", "Yes", "yes"])
+        self.assertTrue(all(r.values["is_correct"] for r in records))
+        self.assertEqual([r.values["sort_order"] for r in records], [1, 2, 3])
+
+    def test_free_text_ignores_selection_num(self) -> None:
+        """**`selection_num = 0` でも作る。** 記述式は選択肢を持たないので常に 0。"""
+        self.assertEqual(len(self._free_text("答え", selection_num=0)), 1)
+
+    def test_free_text_drops_empty_and_duplicate_candidates(self) -> None:
+        """空と重複は入れない。**中の空白は答えの一部なので触らない。**"""
+        records = self._free_text(" a b | a b ||")
+        self.assertEqual([r.values["body"] for r in records], ["a b"])
+
+    def test_free_text_without_answer_makes_nothing(self) -> None:
+        self.assertEqual(self._free_text(None), [])
+
     def test_rules_keep_category_only_for_ranged_questions(self) -> None:
         """**条件で引くのは `test_sub_type_id = 2` だけ。**
 
