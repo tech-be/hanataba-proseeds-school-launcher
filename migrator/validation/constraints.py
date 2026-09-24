@@ -1,4 +1,4 @@
-"""投入前の制約チェック（NOT NULL / UNIQUE / 外部キー）。
+"""投入前の制約チェック（NOT NULL / CHECK / UNIQUE / 外部キー）。
 
 **dry-run では INSERT が実行されないため、制約違反は本番で初めて現れる。**
 それでは遅いので、変換した `Record` を移行先のスキーマと突き合わせて、
@@ -8,9 +8,11 @@
 値を作り替えて通すことはしない（合成した値で通すと、**何が本物か分からなくなる**）。
 直すのは移行の外での暫定対応で、そのあと再実行すれば入る。
 
-ここで見るのは3つ。
+ここで見るのは4つ。
 
-- **NOT NULL** — 既定値の無い NOT NULL 列に、値が無い（列自体を書いていない場合も含む）
+- **NOT NULL** — NOT NULL 列に値が無い。**既定値のある列も、Step が書くなら見る**
+  （既定値は「列を書かないとき」にしか効かず、NULL を渡すと違反になる）
+- **CHECK** — 数値の下限（`quantity >= 1` など）。**式が読める形のときだけ**見る
 - **UNIQUE** — 同じ UNIQUE キーの行が**同じバッチの中に**ある。
   `insert_many` は移行先の既存行としか突き合わせないので、バッチ内の重複は素通りする
 - **外部キー** — 参照先の行が、移行先にも**この実行の中にも**無い
@@ -19,6 +21,8 @@
 """
 
 from __future__ import annotations
+
+import re
 
 from dataclasses import dataclass, field
 
@@ -37,6 +41,26 @@ class ColumnSpec:
     def must_be_written(self) -> bool:
         """値を必ず渡さなければならない列か。"""
         return not self.nullable and not self.has_default and not self.auto
+
+
+@dataclass(frozen=True)
+class CheckConstraint:
+    """`CHECK (...)` のうち、**単純な数値の下限**だけを解釈したもの。
+
+    MySQL の `check_clause` は式そのものなので、一般には評価できない。
+    移行先で実際に使われているのは次の形だけなので、**この形に限って**見る。
+
+        (`cost` >= 1)
+        ((`capacity` is null) or (`capacity` >= 1))
+
+    解釈できない式（列どうしの比較など）は**無視する**。見落とすほうが、
+    誤って行を落とすより害が小さい（落ちれば実 INSERT で止まって気づける）。
+    """
+
+    name: str
+    column: str
+    minimum: int
+    nullable: bool
 
 
 @dataclass(frozen=True)
@@ -60,6 +84,7 @@ class TableSchema:
     columns: dict[str, ColumnSpec] = field(default_factory=dict)
     uniques: tuple[UniqueKey, ...] = ()
     foreign_keys: tuple[ForeignKey, ...] = ()
+    checks: tuple[CheckConstraint, ...] = ()
 
 
 class SchemaReader:
@@ -93,6 +118,20 @@ class SchemaReader:
                 auto="auto_increment" in extra or "default_generated" in extra,
             )
 
+        checks: list[CheckConstraint] = []
+        for row in self._target.query(
+            "SELECT cc.constraint_name AS name, cc.check_clause AS clause "
+            "FROM information_schema.check_constraints cc "
+            "JOIN information_schema.table_constraints tc "
+            "  ON tc.constraint_name = cc.constraint_name "
+            " AND tc.constraint_schema = cc.constraint_schema "
+            "WHERE cc.constraint_schema = DATABASE() AND tc.table_name = %s",
+            (table,),
+        ):
+            parsed = _parse_check(str(row["name"]), str(row["clause"]))
+            if parsed is not None:
+                checks.append(parsed)
+
         by_index: dict[str, list[tuple[int, str]]] = {}
         for row in self._target.query(
             "SELECT index_name AS name, seq_in_index AS seq, column_name AS col "
@@ -120,7 +159,25 @@ class SchemaReader:
                 (table,),
             )
         )
-        return TableSchema(table, columns, uniques, foreign_keys)
+        return TableSchema(table, columns, uniques, foreign_keys, tuple(checks))
+
+
+_CHECK_MIN = re.compile(r"^\(?`(?P<col>\w+)` >= (?P<min>-?\d+)\)?$")
+_CHECK_NULL_OR_MIN = re.compile(
+    r"^\(\(`(?P<col>\w+)` is null\) or \(`(?P=col)` >= (?P<min>-?\d+)\)\)$"
+)
+
+
+def _parse_check(name: str, clause: str) -> "CheckConstraint | None":
+    """`check_clause` から**数値の下限**だけを取り出す。読めなければ `None`。"""
+    text = clause.strip()
+    m = _CHECK_NULL_OR_MIN.match(text)
+    if m:
+        return CheckConstraint(name, m.group("col"), int(m.group("min")), nullable=True)
+    m = _CHECK_MIN.match(text)
+    if m:
+        return CheckConstraint(name, m.group("col"), int(m.group("min")), nullable=False)
+    return None
 
 
 @dataclass(frozen=True)
@@ -156,6 +213,7 @@ def filter_valid(
         return records, []
     violations: dict[int, Violation] = {}
     _not_null(records, schema, violations)
+    _checks(records, schema, violations)
     _unique(records, schema, target, violations)
     _foreign_keys(records, schema, target, violations)
     valid = [r for i, r in enumerate(records) if i not in violations]
@@ -163,8 +221,21 @@ def filter_valid(
 
 
 def _not_null(records: list[Record], schema: TableSchema, out: dict[int, Violation]) -> None:
-    for column in [c for c in schema.columns.values() if c.must_be_written]:
-        written = column.name in records[0].values
+    """NOT NULL に当たる行を拾う。
+
+    **既定値のある列も、Step が書くなら見る。** `created_at TIMESTAMP NOT NULL
+    DEFAULT CURRENT_TIMESTAMP` のような列は、書かなければ DB が埋めてくれるが、
+    **INSERT の列に入れて NULL を渡すと既定値は効かず、そのまま NOT NULL 違反になる**。
+    `must_be_written` だけを見ていると dry-run を素通りし、**実 INSERT で初めて落ちる**
+    （オンデマンドの予行で2 Step がこれで停止した）。
+    """
+    written_columns = set(records[0].values)
+    for column in schema.columns.values():
+        if column.nullable:
+            continue
+        written = column.name in written_columns
+        if not column.must_be_written and not written:
+            continue  # 書かない列。DB の既定値に任せる
         for index, record in enumerate(records):
             if record.values.get(column.name) is not None:
                 continue
@@ -172,6 +243,37 @@ def _not_null(records: list[Record], schema: TableSchema, out: dict[int, Violati
             out.setdefault(
                 index, Violation(schema.table, f"NOT NULL `{column.name}`", detail, _key_of(record))
             )
+
+
+def _checks(records: list[Record], schema: TableSchema, out: dict[int, Violation]) -> None:
+    """`CHECK` の下限に当たる行を拾う。
+
+    **UNIQUE / FK より先に見る。** 当たった行は誰とも衝突しないので、
+    後続の判定から外れるほうが一覧が読みやすい。
+    """
+    for check in schema.checks:
+        if check.column not in records[0].values:
+            continue  # この Step が書かない列
+        for index, record in enumerate(records):
+            value = record.values.get(check.column)
+            if value is None:
+                if check.nullable:
+                    continue
+                continue  # NULL は NOT NULL 側で見る
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                continue  # 数値でない値は解釈しない
+            if number < check.minimum:
+                out.setdefault(
+                    index,
+                    Violation(
+                        schema.table,
+                        f"CHECK `{check.name}`",
+                        f"{check.column} = {number}（{check.minimum} 以上である必要がある）",
+                        _key_of(record),
+                    ),
+                )
 
 
 def _unique(
@@ -219,6 +321,12 @@ def _unique(
             wanted = {v[0] for v in singles}
             existing = target.known_ids(schema.table, column, wanted)
             for values, index in singles.items():
+                if values[0] in existing and _already_migrated(records[index], target):
+                    # **同じ行の再実行。** 自然キーで引くと移行先に居る＝前回入れた行なので、
+                    # 「別の行と衝突した」ではない。`insert_many` が自然キーで飛ばす。
+                    # ここで違反にすると、再実行のたびに一覧が汚れ、Step によっては
+                    # 行が1件も残らず落ちる（`legacy_id` の UNIQUE を足したときに起きた）
+                    continue
                 if values[0] in existing:
                     out.setdefault(
                         index,
@@ -229,6 +337,16 @@ def _unique(
                             _key_of(records[index]),
                         ),
                     )
+
+
+def _already_migrated(record: Record, target) -> bool:
+    """この行が**前回の実行で入れた同じ行**か。自然キーが無ければ判定できない。"""
+    if not record.natural_key:
+        return False
+    try:
+        return target.exists(record.table, record.key_values())
+    except KeyError:
+        return False
 
 
 def _foreign_keys(
