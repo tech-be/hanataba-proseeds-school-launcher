@@ -60,12 +60,25 @@ class EnrollmentRightsStep(Step):
     depends_on = ("users", "content.courses")
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        # **`tenant_id` を持たない。** 商品（`payment_item`）と join して絞る
-        return ctx.require_source().fetch_joined(
-            "payment_item_lesson_authority",
-            AUTHORITY_COLUMNS,
-            parent="payment_item",
-            on="c.item_id = p.item_id",
+        # **権限行だけでは受講可否が決まらない。** lw2 は商品のモード
+        # （`payment_item.is_auto_extension`）と申込の解約状態
+        # （`payment_application.is_cancel`）を見て分岐する（`PaymentModel:381-383`）。
+        # 一緒に読まないと、自動継続の権限を期限切れとして移してしまう。
+        #
+        # **`tenant_id` を持たない。** 商品と join して絞る。
+        cols = ", ".join(f"c.`{name}`" for name in AUTHORITY_COLUMNS)
+        sql = (
+            f"SELECT {cols}, "
+            "p.`is_auto_extension` AS _auto_extension, "
+            "pa.`is_cancel` AS _is_cancel, "
+            "pa.`cancel_date_time` AS _cancel_date_time "
+            "FROM `payment_item_lesson_authority` AS c "
+            "INNER JOIN `payment_item` AS p ON c.item_id = p.item_id "
+            "LEFT JOIN `payment_application` AS pa ON pa.application_id = c.application_id "
+            "WHERE p.tenant_id = %s"
+        )
+        return ctx.require_source().fetch(
+            "payment_item_lesson_authority", sql, (ctx.config.tenant.legacy_id,)
         )
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
@@ -90,12 +103,20 @@ class EnrollmentRightsStep(Step):
         alive = [r for r in members if int(r.get("del_chk") or 0) == 0]
         effective = alive or members
 
+        # **自動継続は期限を見ない。** lw2 の判定は `PA.is_cancel IS NULL` だけで
+        # （`PaymentModel:383`）、`authority_end_date` が過去でも受講できる。
+        # 期限をそのまま写すと、**いま受講できている人が失効扱いになる**。
+        subscribed = [r for r in alive if _is_live_subscription(r)]
+
         # **無期限が1つでもあれば無期限。** lw2 は MAX() を取るので、
         # NULL 可の列に NULL を入れる形で「上限なし」を表す
         unlimited = any(int(r.get("no_limit_chk") or 0) == 1 for r in effective)
         expires_at = None
         beyond_range = None
-        if not unlimited:
+        if subscribed:
+            # 継続中の購読。解約されるまで有効なので期限を付けない
+            unlimited = True
+        elif not unlimited:
             # **終了日は 23:59:59 で補う。** 00:00 にすると期限日当日が切れる
             ends = [
                 convert_date(r.get("authority_end_date"), ColumnKind.TIMESTAMP, DateBoundary.END)
@@ -122,6 +143,12 @@ class EnrollmentRightsStep(Step):
         # `canceled` という値は無い（`revoked` を A8 の migration で足してある）
         if not alive:
             status = "revoked"
+        elif subscribed:
+            # 購読が続いている。期限切れの判定に落とさない
+            status = "active"
+        elif _all_subscriptions_canceled(alive):
+            # 自動継続の商品なのに全部解約済み。期限ではなく解約で終わっている
+            status = "revoked"
         elif expires_at is not None and expires_at < _now():
             # 期限切れ。実測で 1,874組中 1,603組（86%）が該当する
             status = "expired"
@@ -146,11 +173,32 @@ class EnrollmentRightsStep(Step):
                 # 決済は課金（4）が未移行
                 "provider_payment_id": None,
                 "subscription_id": None,
-                "settings": _settings(members, unlimited, beyond_range),
+                "settings": _settings(members, unlimited, beyond_range, bool(subscribed)),
             },
             natural_key=("tenant_id", "user_id", "course_id"),
             source_key=f"{user_id}:{lesson_id}",
         )
+
+
+def _is_live_subscription(row: dict) -> bool:
+    """自動継続の商品で、まだ解約されていないか。
+
+    **lw2 の受講可否はこれだけで決まる**（`PaymentModel:383` の
+    `PI.is_auto_extension = 1 AND PA.is_cancel IS NULL`）。`authority_end_date` は見ない。
+    """
+    if int(row.get("_auto_extension") or 0) != 1:
+        return False
+    cancel = row.get("_is_cancel")
+    return cancel is None or int(cancel) == 0
+
+
+def _all_subscriptions_canceled(rows: list[dict]) -> bool:
+    """生きている行がすべて「自動継続だが解約済み」か。
+
+    期限ではなく**解約で終わっている**ので、`expired` ではなく `revoked` にする。
+    """
+    subs = [r for r in rows if int(r.get("_auto_extension") or 0) == 1]
+    return bool(subs) and len(subs) == len(rows) and not any(_is_live_subscription(r) for r in rows)
 
 
 def _now() -> datetime:
@@ -160,7 +208,9 @@ def _now() -> datetime:
     return datetime.utcnow()
 
 
-def _settings(members: list[dict], unlimited: bool, beyond_range: str | None) -> str:
+def _settings(
+    members: list[dict], unlimited: bool, beyond_range: str | None, subscribed: bool
+) -> str:
     """新環境に列が無いものを残す。
 
     **畳んで捨てない。** どの商品で買ったか・無期限だったか・リモート PC を
@@ -169,6 +219,9 @@ def _settings(members: list[dict], unlimited: bool, beyond_range: str | None) ->
     """
     payload = {
             "unlimited": unlimited,
+            # **購読由来かどうかを残す。** `source` は `purchase` のままで、
+            # `subscription_id` は課金（4-2）の移行後でないと埋められない
+            "subscription": subscribed,
             "remote_pc": any(int(r.get("remote_chk") or 0) == 1 for r in members),
             # **旧 ID のまま残す。** 商品は課金（4）で移すので、そのとき紐付け直す
             "legacy_item_ids": sorted({int(r["item_id"]) for r in members}),
@@ -182,6 +235,11 @@ def _settings(members: list[dict], unlimited: bool, beyond_range: str | None) ->
             "legacy_cancel_chk": sorted({int(r.get("cancel_chk") or 0) for r in members}),
             "legacy_rows": len(members),
     }
+    if subscribed:
+        # 自動継続の権限は期限を写していない。元の値を残す
+        payload["legacy_authority_end_dates"] = sorted(
+            {str(r["authority_end_date"]) for r in members if r.get("authority_end_date")}
+        )
     if beyond_range:
         # 元の日付を残す。**`TIMESTAMP` の上限を超えたので NULL に寄せた**印
         payload["legacy_expires_at_beyond_timestamp"] = beyond_range

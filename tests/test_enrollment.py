@@ -40,6 +40,7 @@ def authority(**over):
         "payment_authority_end_date": date(2021, 1, 1),
         "cancel_chk": 1, "no_limit_chk": 0, "payment_no_limit_chk": 0,
         "remote_chk": 0, "del_chk": 0,
+        "_auto_extension": 0, "_is_cancel": None, "_cancel_date_time": None,
     }
     row.update(over)
     return row
@@ -147,6 +148,72 @@ class RightsTest(unittest.TestCase):
             authority(authority_id=2, item_id=9),
         ])
         self.assertEqual(json.loads(rec.values["settings"])["legacy_item_ids"], [5, 9])
+
+
+class SubscriptionRightsTest(unittest.TestCase):
+    """**自動継続は期限で切らない。** lw2 の判定は `is_cancel IS NULL` だけ。"""
+
+    def _records(self, rows):
+        ctx = make_ctx()
+        return en_rights.EnrollmentRightsStep().transform(ctx, rows)
+
+    def test_live_subscription_ignores_past_expiry(self) -> None:
+        """**ここが本丸。** 期限が過去でも未解約なら受講できる。
+
+        期限をそのまま写すと、**いま受講できている人が失効扱いになる**
+        （ステージング実測で 249 組が該当した）。
+        """
+        [rec] = self._records([authority(
+            authority_end_date=date(2021, 1, 1), _auto_extension=1, _is_cancel=None)])
+        self.assertEqual(rec.values["status"], "active")
+        self.assertIsNone(rec.values["expires_at"])
+
+    def test_canceled_subscription_is_revoked_not_expired(self) -> None:
+        """解約済みは `revoked`。**期限切れ（`expired`）ではない。**"""
+        [rec] = self._records([authority(
+            authority_end_date=date(2021, 1, 1), _auto_extension=1, _is_cancel=1)])
+        self.assertEqual(rec.values["status"], "revoked")
+
+    def test_one_live_subscription_wins_over_expired_rows(self) -> None:
+        """**lw2 の判定は OR。** 1つでも生きていれば受講できる。"""
+        [rec] = self._records([
+            authority(authority_id=1, authority_end_date=date(2021, 1, 1), _auto_extension=0),
+            authority(authority_id=2, authority_end_date=date(2021, 1, 1),
+                      _auto_extension=1, _is_cancel=None),
+        ])
+        self.assertEqual(rec.values["status"], "active")
+        self.assertIsNone(rec.values["expires_at"])
+
+    def test_original_expiry_is_kept_in_settings(self) -> None:
+        """期限を写さない代わりに、元の値を残す。"""
+        [rec] = self._records([authority(
+            authority_end_date=date(2021, 1, 1), _auto_extension=1)])
+        settings = json.loads(rec.values["settings"])
+        self.assertTrue(settings["subscription"])
+        self.assertIn("2021-01-01", settings["legacy_authority_end_dates"])
+
+    def test_non_subscription_still_expires(self) -> None:
+        """買い切りは従来どおり期限で切れる。"""
+        [rec] = self._records([authority(
+            authority_end_date=date(2021, 1, 1), _auto_extension=0)])
+        self.assertEqual(rec.values["status"], "expired")
+
+
+class AccessDaysTest(unittest.TestCase):
+    def test_zero_becomes_null(self) -> None:
+        """**旧 `open_period = 0` は「指定なし」。** 0 のまま入れると
+        API のバリデーション（`min=1`）に引っかかり、管理画面から編集できなくなる。
+        """
+        from migrator.steps.content.courses import _access_days
+        self.assertIsNone(_access_days(0))
+        self.assertIsNone(_access_days(None))
+        self.assertEqual(_access_days(7), 210)   # 7ヶ月 = 210日
+
+    def test_months_are_converted_to_days(self) -> None:
+        """**単位が違う。** 旧は月、新は日。換算しないと受講期間が 1/30 になる。"""
+        from migrator.steps.content.courses import _access_days
+        self.assertEqual(_access_days(1), 30)
+        self.assertEqual(_access_days(12), 360)
 
 
 def unit_row(**over):

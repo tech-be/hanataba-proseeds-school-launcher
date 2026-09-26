@@ -191,7 +191,7 @@ class CoursesStep(Step):
                         "currency": "JPY",
                         "status": _status_of(row),
                         "difficulty": None,
-                        "access_days": row.get("open_period"),
+                        "access_days": _access_days(row.get("open_period")),
                         "thumbnail_url": None,  # 画像は L9 で移送
                         "is_sample": False,
                         "remote_pc_enabled": False,
@@ -206,6 +206,29 @@ class CoursesStep(Step):
                 )
             )
         return records
+
+
+#: `lesson.open_period` の単位は**月**。新環境の `access_days` は**日**。
+#: lw2 は `strtotime(開始日 . ' +' . open_period . ' month')` で期限を出しており
+#: （`UserController:3700`）、管理画面のラベルも「ヶ月間」。
+#: **換算しないと受講期間が 1/30 になる。**
+DAYS_PER_MONTH = 30
+
+
+def _access_days(value: object) -> int | None:
+    """旧 `lesson.open_period`（月）を `courses.access_days`（日）に写す。
+
+    **単位が違う。** そのまま入れると `7ヶ月` が `7日` になる。
+    30日/月で換算する（lw2 は暦月で計算するが、新環境は日数しか持てない）。
+
+    **`0` は「指定なし」なので NULL に倒す。** 新環境も `0` を無期限として扱うので
+    挙動は同じだが、**API のバリデーションが `min=1` で `0` を受け付けない**
+    （`AccessDays *int validate:"omitempty,min=1,max=3650"`）。0 のまま入れると
+    **管理画面から編集できない値**になる。新環境自身も `> 0` のときだけ書くので、
+    `0` は移行ツールだけが作る値だった。
+    """
+    months = int(value or 0)
+    return months * DAYS_PER_MONTH if months > 0 else None
 
 
 def _status_of(row: dict) -> str:
