@@ -77,6 +77,8 @@ A/B/C の判定そのものは棚卸し作成者の見解で機械的な基準�
 ## 区分ごとのセット
 
 > **運営に確認したいことは [open-questions.md](open-questions.md) に1枚でまとめてある。** 各区分の `migration-spec.md` の 1-1 から、**回答が要るものだけ**を抜き出したもの（QA表への転記用）。
+>
+> **制約に当たって移らなかった行は [constraint-violations.md](constraint-violations.md)。** NOT NULL / UNIQUE / CHECK ごとに、何が当たっているかを `out/not-migrated.csv` から集計したもの（移行担当用）。
 
 | 区分 | 内訳 | 突き合わせ | 移行仕様 | 項目 |
 |---|---|---|---|---|

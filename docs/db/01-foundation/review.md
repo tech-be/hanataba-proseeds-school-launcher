@@ -258,7 +258,7 @@
 
 > **recademy は Facebook と Twitter の consumer key が設定済み**（instagram は空。ステージング実測）。
 > 使っているのは `LoginController` の SNS ログインと `RegistrationController` の SNS 登録で、
-> **cutover 後は止まる**。継続するかは [移行仕様 1-1 #5](migration-spec.md#1-1-決定が要るもの) の判断。
+> **cutover 後は止まる**。継続するかは [移行仕様 1-1 #5](../open-questions.md) の判断。
 >
 > **会員側には SNS の ID を保存していない。** `SocialOauth::twitterOauthCallback()` の戻り値の
 > `email` で会員を引く実装なので、**突き合わせはメールアドレス頼み**。今回の移行で合成アドレスに

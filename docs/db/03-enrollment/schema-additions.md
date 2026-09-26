@@ -258,7 +258,7 @@ ALTER TABLE digital_badges
 
 > **`product_id` に FK は張らない。** 課金（K01 商品、`payment_item` 301行）が未移行のため。移行後に埋める。
 
-> **`digital_badges` 本体を移す Step がまだ無い。** 旧 `badge_item` は 61行あり、
+> **`reference_badge_id` を足しても入れる行が無い。** 旧 `badge_item` は 61行あり、
 > **移行の原則では移す対象**。`reference_badge_id` だけ足しても入れる行が無いので、
 > **Step と合わせて作る**（→ [残作業](migration-spec.md)）。
 
