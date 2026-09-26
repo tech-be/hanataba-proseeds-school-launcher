@@ -120,7 +120,7 @@
 |---|---|---|:--:|---|---|
 | `unit_type_id` tinyint(4) 0〜6 | `type` varchar(32) + FK → `lesson_types(code)` | 性質 | 中 | `lesson_types` は `video`/`live`/`text` の**3値しかない**。テスト(2)・レポート(4)・講座資料(6) がすべて `text` に畳まれ、**移行後に種別で区別できなくなる** | **`lesson_types` に `quiz` / `assignment` / `document` / `discussion` / `skill_check` を追加する**（→ A20）。畳まない。**見出し(0) だけは `lessons` に入れない**（ETL設計 §5-0）。**7（ディスカッション）・8（スキル診断）は `UnitConstants.php` に定数が無い**が、`ShareController::UNIT_TYPE_DISCUSSION` / `UNIT_TYPE_SKILL` にあり、`DiscussionModel` も `unit_type_id = 7` で引いている正規の種別 |
 | `sort_no` | `sort_order` | 性質 | 中 | 見出し(type=0) を落とす分、番号が飛ぶ | ETL で講座ごとに採番し直す。**元の並び順は保つ** |
-| `detail` text **NOT NULL** | `description` text NULL可 | 性質 | 低 | 新環境は本文 HTML を信用しない方針。**旧に HTML が入っていれば、表示が崩れるか XSS になる** | **変換せずそのまま移す。** 同梱ダンプの `unit` 2,533行を調べたところ **HTML は1件も無く、`\r\n` 区切りの平文だった**。改行をそのまま保持し、**表示時にサニタイズする**（元を壊さない）。**本番ダンプで同じ棚卸しをやり直す**（[1-3](migration-spec.md#1-3-本番ダンプ受領後に確認すること)） |
+| `detail` text **NOT NULL** | `description` text NULL可 | 性質 | 低 | 新環境は本文 HTML を信用しない方針。**旧に HTML が入っていれば、表示が崩れるか XSS になる** | **変換せずそのまま移す。** 同梱ダンプの `unit` 2,533行を調べたところ **HTML は1件も無く、`\r\n` 区切りの平文だった**。改行をそのまま保持し、**表示時にサニタイズする**（元を壊さない）。**本番ダンプで同じ棚卸しをやり直す**（[1-3](migration-spec.md#1-4-本番ダンプ受領後に確認すること)） |
 | `open_datetime` / `close_datetime` | — | **カラム** | **高** | **絶対日時での公開開始・終了を入れる列が無い。** 新は `drip_delay_days`（申込日からの相対日数）しか持たず、「この日から公開」を再現できない | `lessons.open_at` / `close_at` を追加して移す（→ A4）。相対日数（`drip_delay_days`）と併存させ、**両方を見て判定する**ようアプリ側を直す |
 | `close_day_from_lesson_start_date` | — | カラム | 中 | 受講開始日からの終了日数を入れる列が無い | A4 の `lessons.close_after_days` を追加して移す |
 | `open_day` / `payment_open_day` | `drip_delay_days` | 性質 | 中 | **2列を1列に畳むと、どちらの起点だったかが消える** | A4 に `drip_delay_basis`（`enrollment` / `payment`）を追加し、**2列とも保持する** |
@@ -439,7 +439,7 @@
 | `lesson_instructor_id` | `courses.instructor_id` | 性質 | 中 | ライブの講師。**新は course 単位でしか講師を持てない**ので、ライブごとの講師が畳まれる | 受け皿 course の `instructor_id` に使う。**案B（course 1本）だと18人分が1人に畳まれる**ので、A22 の `live_lessons.settings` に元の講師 ID も残す。ステージング実測では全18件に講師が設定され、孤児は0件 |
 | `item_ticket_price` | `live_lesson_ticket_requirements.cost` | 性質 | 中 | 1予約あたりの消費枚数。**`cost` には `CHECK (cost >= 1)` がある**ので、`0`（= チケット不要）を入れられない | **`0` の行は `live_lesson_ticket_requirements` に行を作らない**（行が無い = チケット不要）。ステージング実測は 18件中 15件が `0` |
 | `img_file_name` | — | カラム | 低 | ライブの画像が落ちる | L9 でファイルを移送し、A22 の `live_lessons.settings` に URL を入れる。ステージング実測2件 |
-| `facility_id` | — | 性質 | 中 | **教室レッスンの開催場所。** `facility` は集合研修（X01、対象外）のテーブル。ステージング実測は3件とも `facility_id = 1`（施設名「ご自身のパソコン」、住所・TEL・URL すべて空） | **施設名と説明を A22 の `live_lessons.settings` に文字列で残す**（`facility` テーブルごとは移さない）。**本番に住所や地図が要る施設があれば別表の追加が要る**（[migration-spec 1-3](migration-spec.md#1-3-本番ダンプ受領後に確認すること)） |
+| `facility_id` | — | 性質 | 中 | **教室レッスンの開催場所。** `facility` は集合研修（X01、対象外）のテーブル。ステージング実測は3件とも `facility_id = 1`（施設名「ご自身のパソコン」、住所・TEL・URL すべて空） | **施設名と説明を A22 の `live_lessons.settings` に文字列で残す**（`facility` テーブルごとは移さない）。**本番に住所や地図が要る施設があれば別表の追加が要る**（[migration-spec 1-3](migration-spec.md#1-4-本番ダンプ受領後に確認すること)） |
 | `save_file_name1..3` / `disp_file_name1..3` | — | カラム | 低 | 添付資料3組が落ちる | **ステージング実測0件**。本番で件数を確認し、あれば L9 で移送する |
 | `public_chk` / `valid_chk` / `send_pc_chk` / `send_mobile_chk` / `sort_no` | `lessons.status` / `sort_order` ほか | カラム | 低 | 外部公開・有効フラグ・メール送信設定が落ちる。`valid_chk` は `lessons.status` に写せるが、**残り4列は受け皿が無い** | `valid_chk` → `status`（有効→`published` / 無効→`draft`）、`sort_no` → `lessons.sort_order`。残りは A22 の `live_lessons.settings` に移す |
 | `del_chk` | `lessons.status = 'deleted'` | 性質 | 中 | 削除済みのライブ（ステージング実測3件）を表す先 | `content_statuses.deleted`（オンデマンドで追加済み）を使う。**`valid_chk` より `del_chk` を優先**する |
@@ -495,7 +495,7 @@
 | 旧カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|:--:|---|---|
 | `(live_lesson_id, item_id)` | **テーブル** | **高** | **新環境の同じ仕組みは「講座の受講」**（`ReservationService.verifyEnrolled` → `enrollments`）。粒度が商品から講座に変わる | **受け皿を作らず、ライブをその商品が売っている講座の配下に置く。** `payment_item_lesson_authority` は受講（04）で `enrollments` になるため、**アクセス制御がそのまま写る**。**受け皿の追加は不要**（ライブ専用のアクセス制御表は作らない） |
-| （制限が無いライブ） | **性質** | **高** | **lw2 は制限を付けなければ全員に予約できたが、新環境に「講座に属さないレッスン」は無い。** どこに置いても受講が要る。ステージング実測で**13ライブ / 開催回536件 / 予約12件** | 未決: **①全会員をその講座に受講登録する ②ライブも受講必須に運用を変える**（[migration-spec 1-1](migration-spec.md#1-1-決定が要るもの) の #1）。**移行の工夫では埋まらない** |
+| （制限が無いライブ） | **性質** | **高** | **lw2 は制限を付けなければ全員に予約できたが、新環境に「講座に属さないレッスン」は無い。** どこに置いても受講が要る。ステージング実測で**13ライブ / 開催回536件 / 予約12件** | 未決: **①全会員をその講座に受講登録する ②ライブも受講必須に運用を変える**（[migration-spec 1-1](../open-questions.md) の #1）。**移行の工夫では埋まらない** |
 | `del_chk` | カラム | 低 | 削除フラグ。**50件中45件が削除済み** | 削除済みの行は移さない（行の不在で「制限なし」を表せる） |
 
 **まとめ**: 受け皿が無い列 — / **高 2 件**
@@ -524,7 +524,7 @@
 |---|---|---|:--:|---|---|
 | `del_chk` | `canceled_at` datetime(3) | **性質** | **高** | **意味が違う。** `del_chk` は「運営が削除した開催回」、`canceled_at` は「開催を中止した回」。削除を中止として移すと、**受講者の履歴に「中止された」と見える**。ステージング実測で **817件（29%）**が削除済み | **`live_lesson_occurrences.deleted_at` を追加する**（→ A25）。`canceled_at` は `live_lesson_reserve.stop_chk` から作る（下の [`live_lesson_reserve`](../03-enrollment/review.md#live_lesson_reserve--live_reservations) 参照）。**削除済みの開催回も移す**（[移行の原則](../00-template/review.md#移行の原則)の1） |
 | 日時型すべて | `starts_at` / `ends_at` ほか **datetime(3)** | 型 | 中 | **この表は `timestamp` ではなく `datetime(3)`。** セッション TZ の自動変換が効かない（`live_lessons.scheduled_at` は `timestamp` なので**挙動が逆**） | **UTC に直した値を明示的に書く**（[共通仕様](../../migration-spec.md)）。同じ区分の中で2つの流儀が混ざるので、**テーブルごとに変換の有無を固定する** |
-| `capacity` int NULL可 | `capacity` int + **CHECK `chk_llo_capacity (capacity IS NULL OR capacity >= 1)`** | 型 | 中 | **`capacity = 0` の行があると CHECK 違反で投入できない。** `0` は「定員なし」の意図の可能性がある | ステージング実測は **0件**（NULL が 926件）。本番で出たら **NULL に変換する**か移さないかを決める（→ [migration-spec 1-1](migration-spec.md#1-1-決定が要るもの)） |
+| `capacity` int NULL可 | `capacity` int + **CHECK `chk_llo_capacity (capacity IS NULL OR capacity >= 1)`** | 型 | 中 | **`capacity = 0` の行があると CHECK 違反で投入できない。** `0` は「定員なし」の意図の可能性がある | ステージング実測は **0件**（NULL が 926件）。本番で出たら **NULL に変換する**か移さないかを決める（→ [migration-spec 1-1](../open-questions.md)） |
 | `live_lesson_date_from` / `_to` | **CHECK `chk_llo_period (ends_at > starts_at)`** | 型 | 中 | **終了 ≦ 開始の行があると投入できない。** 旧に制約が無い | ステージング実測は **0件**。本番で出たら移さない（値を作らない） |
 | `reserve_start_day` **date** | `reserve_opens_at` datetime(3) | 型 | 中 | **date → datetime で時刻が 00:00:00 になる。** JST の 00:00 を UTC に直すと**前日 15:00** になり、予約開始が実質1日早まる | **JST の 00:00:00 として UTC に変換する**（[共通仕様](../../migration-spec.md) の date → 日時型の規則）。ステージング実測では NULL 0件 |
 | `reserve_end_day` datetime | `reserve_closes_at` datetime(3) | 型 | 低 | 開催回ごとに絶対時刻で入っている | JST naive → UTC。ステージング実測では NULL 0件 |

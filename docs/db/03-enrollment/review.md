@@ -24,6 +24,7 @@
 |---|---|---|:--:|---|---|
 | `(user_id, item_id, lesson_id)` | `(user_id, course_id)` | **性質** | **高** | **粒度が違う。** 旧は商品×講座で、同じ商品が複数講座を売り、同じ講座が複数商品から売られる。実測 3,684 行が 2,246 組に重なる | **lw2 自身の解決規則に従う。** `LessonModel::1804` の受講可否判定が `GROUP BY user_id, lesson_id` で畳み、期限は `MAX()` を取っている。**同じ規則で寄せる**（独自に決めない） |
 | `cancel_chk` tinyint | — | **性質** | **高** | **名前に反してキャンセルフラグではない。** 全 INSERT 箇所（`PaymentAuthorityModel` の5か所）で**作成時に定数を書き込んでおり、UPDATE する箇所が存在しない**。実測 1=3,064 / 0=620 は「どの購入経路で作られたか」を表す | **`status = 'canceled'` に写さない。** 受講可否は `del_chk = 0` と期間で決まる。元の値は A8 の `settings` に残す |
+| `payment_item.is_auto_extension` ＋ `payment_application.is_cancel` | `status` / `expires_at` | **性質** | **高** | **自動継続の権限は期限を見ない。** lw2 の判定は `PA.is_cancel IS NULL` だけで（`PaymentModel:383`）、`authority_end_date` が過去でも受講できる。**権限行だけを読むと、いま受講できている人を失効扱いにする**（実測 249組） | **商品のモードと申込の解約状態を一緒に読む。** 未解約の自動継続は `status = 'active'` / `expires_at = NULL`、全部解約済みなら `revoked`（`expired` ではない）。元の期限は A8 の `settings` に残す |
 | `del_chk` | `status` | 性質 | 中 | **これが実質の取り消し。** 実測 828件（畳んで 273組） | `del_chk = 1` → `status = 'revoked'`。**`canceled` という値は無い**（`enrollment_statuses` は `active` / `expired` / `refunded` の3値だったので、A10 で `revoked` を足した） |
 | `authority_start_date` | `enrolled_at` | 型 | 低 | 開始日。実測 NULL 0件 | そのまま移す |
 | `authority_end_date` / `payment_authority_end_date` | `expires_at` **1列** | 性質 | 中 | **2つの期限が1列に畳まれる。** 実測はどちらも NULL 0件 | 受講期限は `authority_end_date`、決済側の期限は A8 の `settings` に残す。**畳んで捨てない** |
@@ -36,7 +37,7 @@
 | — | `source` **NOT NULL** + FK | 性質 | 中 | 旧に対応する列が無い | **`purchase` を入れる**（商品の購入で得た権限のため）。`manual` という値は存在しない（`purchase`/`subscription`/`free`/`admin`/`marketplace`） |
 | — | `subscription_id` / `provider_payment_id` | カラム | 低 | 決済との紐付け | **課金（4）が未移行なので NULL**。移行後に埋める |
 
-**まとめ**: 受け皿が無い列 8 / 変換規則が要る列 5 / **高 4 件**
+**まとめ**: 受け皿が無い列 8 / 変換規則が要る列 6 / **高 5 件**
 
 > **他テナントの講座を指す権限がある。** 参照先 190講座のうち **55講座（807行）が別テナント**のもので、
 > `payment_item.tenant_id` で絞っても残る。**移してはいけないデータ**なので外部キー検査で落ちる
@@ -212,7 +213,7 @@
 |---|---|---|:--:|---|---|
 | `entity_type_id` 1/2/3 | — | **性質** | **高** | **2（ユニット）だけが移行でき、1（お知らせ 545件）と 3（レポート 611件）に受け皿が無い。** 2,464件中 1,156件（47%）が落ちる | `survey_responses.entity_type` / `entity_id` を追加し、**3種類とも移す**（→ A4）。お知らせ添付（O16）は[サポート機能](../05-support/review.md)、レポート添付（O17）は D5 と紐付ける |
 | `answer` text (**JSON**) | `numeric_value` / `text_value` + 選択肢の中間表 | 性質 | 中 | JSON を展開する規則が要る（キーは `answer_<enquete_question_id>`） | ETL設計 §5-5 の規則で展開し、設問タイプごとに入れる列を変える |
-| `enquete_reply_time` NULL可 | `survey_responses.submitted_at` **NOT NULL** | 型 | 中 | NULL 行を入れられない | **移らない**（[共通仕様 3.5.1](../../migration-spec.md#351-not-null--unique--外部キーに当たる行)）。代替値を入れるか許容するかは [移行仕様 1-1 #3](migration-spec.md#1-1-決定が要るもの) |
+| `enquete_reply_time` NULL可 | `survey_responses.submitted_at` **NOT NULL** | 型 | 中 | NULL 行を入れられない | **移らない**（[共通仕様 3.5.1](../../migration-spec.md#351-not-null--unique--外部キーに当たる行)）。代替値を入れるか許容するかは [移行仕様 1-1 #3](../open-questions.md) |
 | `tenant_id` が無い | `survey_responses.tenant_id` NOT NULL | 性質 | 中 | **`enquete` と join しないとテナントが決まらない。** join を落とすと全73テナントが混ざる（棚卸しの 64,883件はこの誤り） | `enquete` と join して `tenant_id = 12` で絞る（区分共通の規則） |
 | `suspended_chk` | — | カラム | 低 | 中断フラグを入れる列が無い | A4 の `survey_responses.suspended` を追加して移す |
 | — | `anonymous_allowed` / `open_at` / `close_at` / `max_length` / `description` | カラム | 低 | 旧に対応なし | 既定値に任せる。対応不要 |
@@ -243,7 +244,7 @@
 | `verification_key` varchar(200) | — | カラム | 中 | **出席認証キーが落ちる**（QR・コード入力での出席確認）。ステージング実測は全件が32文字で埋まっている | A5 の `live_reservations.verification_key` を追加して移す。**認証コードの平文ではなく照合用のランダム値**なので、[抽出の禁止列](../../migration-spec.md)には当たらない |
 | `recent_access_date` | — | カラム | 低 | 最終アクセス日時が落ちる | A5 の `settings` に移す |
 | `change_reserve_id` / `base_reserve_id` | — | カラム | 低 | **振替予約の前後関係**が落ちる | **ステージング実測0件**。本番ダンプで件数を確認し、あれば A5 に列を足して移す |
-| `reserve_date` datetime **NULL可** | `reserved_at` datetime(3) **NOT NULL** DEFAULT CURRENT_TIMESTAMP(3) | 型 | 中 | **NULL の行は既定値に落ちて「移行実行日時」が予約日時になる。** 黙って入ってしまうので検出しづらい | **NULL を明示的に検出して止める。** ステージング実測は0件。本番で出たら `regist_date` で代替するかを決める（→ [migration-spec 1-1](migration-spec.md#1-1-決定が要るもの)） |
+| `reserve_date` datetime **NULL可** | `reserved_at` datetime(3) **NOT NULL** DEFAULT CURRENT_TIMESTAMP(3) | 型 | 中 | **NULL の行は既定値に落ちて「移行実行日時」が予約日時になる。** 黙って入ってしまうので検出しづらい | **NULL を明示的に検出して止める。** ステージング実測は0件。本番で出たら `regist_date` で代替するかを決める（→ [migration-spec 1-1](../open-questions.md)） |
 | `attendance_date` | `attended_at` datetime(3) | — | — | 対応あり | JST naive → UTC |
 | `live_lesson_date_id` | `occurrence_id` char(26) + FK | 性質 | 中 | 親の引き当て | [`live_lesson_date`](../02-content/../02-content/review.md#live_lesson_date--live_lesson_occurrences) で採番した ULID に読み替える。**削除済みの開催回にぶら下がる予約が3件**ある |
 | — | `reminded_at` datetime(3) | **性質** | **高** | **旧に対応列が無く、NULL のまま移すと「未送信」になる。** ステージング実測では**予約のある開催回32件がすべて過去**なので、**cutover 直後に過去分のリマインドが再送される恐れがある** | 未決: **過去の開催回の予約は `reminded_at` を埋める**（cutover 日時か開催日時）。運営に「再送されないこと」を確認してもらう。詳細は [L04 リマインド](#l04-リマインド) |
@@ -326,7 +327,7 @@
 
 `badge_item` (8列) ／ ローカルデータ数 91 / C
 
-**該当テーブルなし（定義側は `digital_badges` に入る）。**
+**該当テーブルなし。** `digital_badges` は**付与された1枚**を表す表で、定義は入らない（下記）。
 
 > **バッジの付与実績は lw2 の DB ではなく、外部のバッジシステムにある。**
 > lw2 は `library/BadgeApi.class.php` で API を叩いており（接続先は `application.ini` の
@@ -337,11 +338,11 @@
 
 | 旧カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|:--:|---|---|
-| **付与記録が lw2 の DB に無い** | **テーブル** | **高** | **付与実績は外部のバッジシステムにあり、lw2 の DB には存在しない。** `badge_item` は `(tenant_id, entity_id, item_type)` で**「この講座はバッジ対象か」を引くだけの定義**で（`ApiLessonModel::chkBadge`）、`user_id` を持つ表も付与行を書く処理も lw2 側には無い。**新環境の `digital_badges.user_id` NOT NULL に入れる値が、ダンプの中には無い** | **定義は移す**（`badge_item` → `digital_badges` の対象指定）。**付与実績は、バッジシステムからデータを受け取れるかを先に確認する**（[移行仕様 1-1](migration-spec.md#1-1-決定が要るもの)）。受け取れない場合にはじめて、修了実績からの再発行を検討する |
-| `item_type` / `entity_id` | 性質 | 中 | **ポリモーフィック参照。** `item_type` が講座以外（商品など）を指す行は `digital_badges.course_id`（NOT NULL）に入れられない | 講座以外を指す行の件数を検査する。**`course_id` は NULL 可にしない**（緩めない方針）。**講座以外を指す行は移らない**ので、件数を数えて規模を記録する |
+| **付与記録が lw2 の DB に無い** | **テーブル** | **高** | **付与実績は外部のバッジシステムにあり、lw2 の DB には存在しない。** `badge_item` は `(tenant_id, entity_id, item_type)` で**「この講座はバッジ対象か」を引くだけの定義**で（`ApiLessonModel::chkBadge`）、`user_id` を持つ表も付与行を書く処理も lw2 側には無い。**新環境の `digital_badges.user_id` NOT NULL に入れる値が、ダンプの中には無い** | **定義は移す**（`badge_item` → `digital_badges` の対象指定）。**付与実績は、バッジシステムからデータを受け取れるかを先に確認する**（[移行仕様 1-1](../open-questions.md)）。受け取れない場合にはじめて、修了実績からの再発行を検討する |
+| `item_type` / `entity_id` | **性質** | **高** | **定義を入れる受け皿が無い。** 旧は「どの講座/ユニットにバッジを出すか」の**定義**（実測 `lesson` 49 / `unit` 12）。新 `digital_badges` は `user_id` / `course_id` / `issued_at` がいずれも **NOT NULL** で、**付与された1枚**を表す。定義は1行も入らない | **受け皿の設計が要る。** バッジの定義を持つ表（例: `course_badge_policies`）を足すか、外部システムに任せて移さないかを決める。**Step を書けば済む話ではない** |
 | `reference_item_id` | カラム | 低 | バッジ同士の参照関係を入れる列が無い | A6 の `digital_badges.reference_badge_id` を追加して移す |
 
-**まとめ**: 受け皿が無い列 — / **高 1 件**
+**まとめ**: 受け皿が無い列 2 / **高 2 件**
 
 ### なし → `course_certificate_policies` / マスタ4件
 
