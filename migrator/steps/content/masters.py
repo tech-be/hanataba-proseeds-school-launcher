@@ -39,7 +39,7 @@ def lesson_types() -> LookupValueStep:
             for code, label, order in (
                 ("quiz", "テスト", 50),
                 ("assignment", "課題", 60),
-                ("document", "資料", 70),
+                ("document", "講座資料", 70),
                 ("discussion", "ディスカッション", 80),
                 ("skill_check", "スキル診断", 90),
             )
