@@ -34,6 +34,9 @@ USER_CERTIFICATE_COLUMNS = (
 #: **商品単位の修了証は移らない**（`certificates.course_id` が NOT NULL。2026-09-23 決定）
 CERTIFICATE_TYPE_COURSE = 1
 
+#: テナントの連番カウンタ。**次に払い出す番号**を1行だけ持つ
+CERTIFICATE_NO_COLUMNS = ("tenant_id", "certificate_no", "regist_date")
+
 
 class CertificateSettingsStep(Step):
     """`config_certificate` を `certificate_settings` に移す。
@@ -49,15 +52,26 @@ class CertificateSettingsStep(Step):
     depends_on = ("content.lessons",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        return ctx.require_source().fetch_for_tenant(
-            "config_certificate", CONFIG_CERTIFICATE_COLUMNS
-        )
+        source = ctx.require_source()
+        rows = source.fetch_for_tenant("config_certificate", CONFIG_CERTIFICATE_COLUMNS)
+        # **採番カウンタは別テーブル。** `config_certificate` が空でも
+        # `certificate_no` だけあることがある（実測: 文面の設定は無く、採番は 7 まで進行）
+        serial = source.fetch_for_tenant("certificate_no", CERTIFICATE_NO_COLUMNS)
+        counter = int(serial[0]["certificate_no"]) if serial else None
+        if not rows and counter is None:
+            return []
+        row = dict(rows[0]) if rows else {"tenant_id": ctx.config.tenant.legacy_id}
+        row["_serial_next"] = counter
+        # `created_at` は NOT NULL。設定が無い場合は採番カウンタの作成日で代替する
+        if not row.get("regist_date") and serial:
+            row["regist_date"] = serial[0].get("regist_date")
+        return [row]
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         tenant_id = ctx.tenant_id.value
         if not rows:
             ctx.logger.info(
-                "config_certificate に行が無い。**設定は作らない**"
+                "config_certificate も certificate_no も無い。**設定は作らない**"
                 "（発行済み修了証の発行者名はテナント名で埋める）"
             )
         return [
@@ -68,6 +82,10 @@ class CertificateSettingsStep(Step):
                     "message": row.get("message"),
                     # **設定側は NULL 可。** NULL なら新環境が `tenants.name` を使う
                     "issuer_name": row.get("issuer_name"),
+                    # **引き継がないと cutover 後の採番が既存の証書と衝突する。**
+                    # 旧 `certificate_no` は「次に払い出す番号」そのもの
+                    # （`ConfigCertificateModel::updateCertificateNo` が採番後に +1 して書く）
+                    **({"serial_next": row["_serial_next"]} if row.get("_serial_next") else {}),
                     "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
                 },
                 natural_key=("tenant_id",),
@@ -101,11 +119,30 @@ class CertificatesStep(Step):
         settings = source.fetch_for_tenant("config_certificate", CONFIG_CERTIFICATE_COLUMNS)
         issuer = (settings[0].get("issuer_name") if settings else None) or ctx.config.tenant.name
         message = settings[0].get("message") if settings else None
+        # **`entity_id` は受講の ID であって講座の ID ではない**（下の注記）。
+        # 講座を引くための対応表をここで作る
+        courses = {
+            int(r["user_learning_lesson_id"]): int(r["lesson_id"])
+            for r in source.fetch_joined(
+                "user_learning_lesson",
+                ("user_learning_lesson_id", "lesson_id"),
+                parent="user",
+                on="c.user_id = p.user_id",
+            )
+        }
         rows: list[dict] = []
         for row in _issued(ctx):
             if int(row.get("certificate_type") or 0) != CERTIFICATE_TYPE_COURSE:
                 continue  # 商品単位。`course_id` が決まらないので移さない
-            rows.append({**row, "_issuer": issuer, "_message": message})
+            lesson_id = courses.get(int(row["entity_id"]))
+            if lesson_id is None:
+                # 孤児。受講の行が物理削除されていて講座をたどれない
+                ctx.logger.warning(
+                    "user_certificate: user_learning_lesson_id=%s が引けない。移さない",
+                    row["entity_id"],
+                )
+                continue
+            rows.append({**row, "_lesson_id": lesson_id, "_issuer": issuer, "_message": message})
         return rows
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
@@ -117,8 +154,10 @@ class CertificatesStep(Step):
                     "id": _certificate_ulid(ctx, row),
                     "tenant_id": tenant_id,
                     "user_id": ctx.ulid.for_row("user", row["user_id"]),
-                    # `certificate_type = 1` のとき `entity_id` は旧 `lesson_id`（講座）
-                    "course_id": ctx.ulid.for_row("lesson", row["entity_id"]),
+                    # **`certificate_type = 1` のとき `entity_id` は `user_learning_lesson_id`**
+                    # （`LessonController:3668` の `$entityId = $userLearningLessonId`）。
+                    # 講座 ID と取り違えると、参照先の無い `course_id` になって全件落ちる
+                    "course_id": ctx.ulid.for_row("lesson", row["_lesson_id"]),
                     "serial_no": int(row.get("certificate_no") or 0),
                     # **NOT NULL。** 旧は整数なので文字列にして入れる（書式は後から適用）
                     "serial_text": str(row.get("certificate_no") or ""),

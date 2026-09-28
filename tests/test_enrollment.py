@@ -14,6 +14,7 @@ from datetime import date, datetime
 from migrator.config import Config, TenantConfig
 from migrator.context import build_context
 from migrator.db.target import TargetDatabase
+from migrator.steps.enrollment import certificates as en_certificates
 from migrator.steps.enrollment import progress as en_progress
 from migrator.steps.enrollment import rights as en_rights
 from tests.fakes import FakeSource
@@ -306,3 +307,69 @@ class ProgressTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CertificateSettingsTest(unittest.TestCase):
+    """修了証のテナント設定。**採番カウンタは別テーブルにある。**"""
+
+    def _extract(self, config_rows, serial_rows):
+        ctx = make_ctx({"config_certificate": config_rows, "certificate_no": serial_rows})
+        step = en_certificates.CertificateSettingsStep()
+        return ctx, step.transform(ctx, step.extract(ctx))
+
+    def test_serial_next_is_carried_over(self) -> None:
+        """**旧の次番号を引き継がないと、cutover 後の採番が既存の証書と衝突する。**
+
+        新環境の既定は 1。旧が 7 まで進んでいれば No.4〜6 と重複する。
+        """
+        _, [rec] = self._extract(
+            [{"tenant_id": 10, "message": "m", "issuer_name": None,
+              "regist_date": datetime(2024, 5, 24)}],
+            [{"tenant_id": 10, "certificate_no": 7, "regist_date": datetime(2024, 5, 24)}],
+        )
+        self.assertEqual(rec.values["serial_next"], 7)
+
+    def test_row_is_created_for_the_counter_alone(self) -> None:
+        """**`config_certificate` が空でも、採番カウンタだけで行を作る。**
+
+        実測の ReCADemy がこれ（文面の設定は 0 行、カウンタだけ 1 行）。
+        設定行が無いからと作らないと採番が 1 に戻る。
+        """
+        _, recs = self._extract(
+            [], [{"tenant_id": 10, "certificate_no": 7, "regist_date": datetime(2024, 5, 24)}]
+        )
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0].values["serial_next"], 7)
+        # `created_at` は NOT NULL。カウンタの登録日で埋まっていること
+        self.assertIsNotNone(recs[0].values["created_at"])
+
+    def test_nothing_is_created_without_either(self) -> None:
+        """**どちらも無ければ作らない。** 既定値だけの行は「運営の設定」と区別できない。"""
+        _, recs = self._extract([], [])
+        self.assertEqual(recs, [])
+
+
+class CertificatesTest(unittest.TestCase):
+    """発行済みの修了証。**`entity_id` の読み違いで全件落ちていた。**"""
+
+    def test_entity_id_is_the_learning_row_not_the_course(self) -> None:
+        """**`certificate_type = 1` の `entity_id` は `user_learning_lesson_id`。**
+
+        `LessonController:3668` の `$entityId = $userLearningLessonId`。講座 ID と
+        取り違えると `certificates.course_id` が参照先なしになり、**3件とも落ちる**。
+        """
+        ctx = make_ctx({
+            "config_certificate": [],
+            "user_certificate": [{
+                "user_id": 3076, "certificate_id": 1, "certificate_type": 1,
+                "entity_id": 35480, "certificate_no": 6,
+                "regist_date": datetime(2025, 11, 10), "update_date": datetime(2025, 11, 10),
+            }],
+            "user_learning_lesson": [
+                {"user_learning_lesson_id": 35480, "lesson_id": 2100040382},
+            ],
+        })
+        step = en_certificates.CertificatesStep()
+        [rec] = step.transform(ctx, step.extract(ctx))
+        self.assertEqual(rec.values["course_id"], ctx.ulid.for_row("lesson", 2100040382))
+        self.assertNotEqual(rec.values["course_id"], ctx.ulid.for_row("lesson", 35480))
