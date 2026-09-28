@@ -3,8 +3,12 @@
 `payment_item_lesson_authority` → `enrollments`。
 
 **粒度が違う。** 旧は商品×講座で、同じ商品が複数講座を売り、同じ講座が複数商品から
-売られる。実測 3,684 行が 2,246 組に重なる。**lw2 自身が `GROUP BY user_id, lesson_id`
+売られる。実測 6,966 行が 4,289 組に重なる。**lw2 自身が `GROUP BY user_id, lesson_id`
 で畳み、期限に `MAX()` を取っている**（`LessonModel::1804`）ので、同じ規則で寄せる。
+
+**商品に紐づかない権限がある。** 実測 3,282行（2,306組）が `item_id` / `application_id`
+ともに NULL で、`authority_key` も空。購入を経ずに直接入った付与で、
+**商品で絞ると丸ごと落ちる**。`source` を `admin` にして移す。
 
 **`cancel_chk` は使わない。** 名前に反してキャンセルフラグではなく、
 `PaymentAuthorityModel` の INSERT 5か所すべてが**作成時に定数を書き込むだけで、
@@ -65,7 +69,11 @@ class EnrollmentRightsStep(Step):
         # （`payment_application.is_cancel`）を見て分岐する（`PaymentModel:381-383`）。
         # 一緒に読まないと、自動継続の権限を期限切れとして移してしまう。
         #
-        # **`tenant_id` を持たない。** 商品と join して絞る。
+        # **`tenant_id` を持たない。絞るのは会員側。** 商品で絞ると
+        # **`item_id` が NULL の権限（実測 3,282行 / 2,306組）が丸ごと落ちる**。
+        # 購入を経ずに直接入った付与で、`authority_key` も `application_id` も空だが、
+        # 開始日・終了日は入っていて lw2 の受講可否判定は他と同じに扱う
+        # （`LessonModel::1804` は `item_id` を見ない）。商品は LEFT JOIN で添える。
         cols = ", ".join(f"c.`{name}`" for name in AUTHORITY_COLUMNS)
         sql = (
             f"SELECT {cols}, "
@@ -73,9 +81,10 @@ class EnrollmentRightsStep(Step):
             "pa.`is_cancel` AS _is_cancel, "
             "pa.`cancel_date_time` AS _cancel_date_time "
             "FROM `payment_item_lesson_authority` AS c "
-            "INNER JOIN `payment_item` AS p ON c.item_id = p.item_id "
+            "INNER JOIN `user` AS u ON u.user_id = c.user_id "
+            "LEFT JOIN `payment_item` AS p ON c.item_id = p.item_id "
             "LEFT JOIN `payment_application` AS pa ON pa.application_id = c.application_id "
-            "WHERE p.tenant_id = %s"
+            "WHERE u.tenant_id = %s"
         )
         return ctx.require_source().fetch(
             "payment_item_lesson_authority", sql, (ctx.config.tenant.legacy_id,)
@@ -162,8 +171,10 @@ class EnrollmentRightsStep(Step):
                 "tenant_id": tenant_id,
                 "user_id": ctx.ulid.for_row("user", user_id),
                 "course_id": ctx.ulid.for_row("lesson", lesson_id),
-                # 商品の購入で得た権限。`manual` という値は存在しない
-                "source": "purchase",
+                # **商品を経ていない権限は `admin`。** `enrollment_sources` の
+                # `admin`（管理者付与、`is_paid = FALSE`）が対応する。購入由来と
+                # 混ぜると売上集計に乗ってしまう
+                "source": "purchase" if _has_item(members) else "admin",
                 "status": status,
                 # **畳んだので最も早い開始日を採る。** 権限が続いていた期間の起点
                 "enrolled_at": min(starts) if starts else None,
@@ -178,6 +189,11 @@ class EnrollmentRightsStep(Step):
             natural_key=("tenant_id", "user_id", "course_id"),
             source_key=f"{user_id}:{lesson_id}",
         )
+
+
+def _has_item(rows: list[dict]) -> bool:
+    """1行でも商品に紐づいていれば購入由来とみなす。"""
+    return any(r.get("item_id") is not None for r in rows)
 
 
 def _is_live_subscription(row: dict) -> bool:
@@ -223,8 +239,11 @@ def _settings(
             # `subscription_id` は課金（4-2）の移行後でないと埋められない
             "subscription": subscribed,
             "remote_pc": any(int(r.get("remote_chk") or 0) == 1 for r in members),
-            # **旧 ID のまま残す。** 商品は課金（4）で移すので、そのとき紐付け直す
-            "legacy_item_ids": sorted({int(r["item_id"]) for r in members}),
+            # **旧 ID のまま残す。** 商品は課金（4）で移すので、そのとき紐付け直す。
+            # **`item_id` は NULL 可**（購入を経ていない付与）
+            "legacy_item_ids": sorted(
+                {int(r["item_id"]) for r in members if r.get("item_id") is not None}
+            ),
             "legacy_application_ids": sorted(
                 {int(r["application_id"]) for r in members if r.get("application_id") is not None}
             ),

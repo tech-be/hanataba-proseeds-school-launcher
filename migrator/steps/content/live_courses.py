@@ -14,7 +14,7 @@
 
 **受講登録はライブ区分で作る。** 書き込み先は受講区分（04）の `enrollments` だが、
 **lw2 に元データが無く、ライブの決定から生まれる行**なので、ここで作る。
-04 が `payment_item_lesson_authority` から作る行とは `source` で区別できる。
+04 が `payment_item_lesson_authority` から作る行とは**受け皿講座（`course_id`）で区別する**。
 """
 
 from __future__ import annotations
@@ -162,8 +162,11 @@ class HostCourseEnrollmentsStep(Step):
 
     `source = 'admin'`（管理者付与）で入れる。`enrollment_sources` の5値
     （`purchase` / `subscription` / `free` / `admin` / `marketplace`）のうち、
-    **運営が配った行**を表すのがこれ。受講（04）が
-    `payment_item_lesson_authority` から作る行と区別できるようにするため。
+    **運営が配った行**を表すのがこれ。
+
+    **`source` だけでは受講（3-1）の行と区別できない。** 旧 `payment_item_lesson_authority`
+    にも商品を経ていない付与（`item_id IS NULL`）があり、そちらも `admin` になる。
+    ここで作る行は**受け皿講座1本にしか付かない**ので、`course_id` で切り分ける。
     """
 
     name = "enrollment.live_host_enrollments"
