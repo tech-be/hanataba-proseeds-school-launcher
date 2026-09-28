@@ -21,6 +21,7 @@ from migrator.context import build_context
 from migrator.db.target import TargetDatabase
 from migrator.errors import MappingError
 from migrator.steps.content import assignments as od_assignments
+from migrator.steps.content import courses as od_courses
 from migrator.steps.content import quizzes as od_quizzes
 from migrator.steps.enrollment import results as od_results
 from migrator.steps.content import surveys as od_surveys
@@ -307,3 +308,36 @@ class ResultsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CourseCategoryTest(unittest.TestCase):
+    """講座の分類。**参照先の無い分類で講座ごと落とさない。**"""
+
+    def _lesson(self, **over):
+        row = {
+            "lesson_id": 8578, "lesson_cate_id": 1057, "name": "CSS編",
+            "description": None, "allowed_ip_address": None, "sales_status": 1,
+            "open_period": 0, "del_chk": 0, "regist_date": datetime(2020, 1, 1),
+        }
+        row.update(over)
+        return row
+
+    def _extract(self, lessons, categories):
+        ctx = make_ctx({"lesson": lessons, "lesson_cate": categories})
+        return ctx, od_courses.CoursesStep().extract(ctx)
+
+    def test_dangling_category_is_dropped_not_the_course(self) -> None:
+        """**`courses.category` は NULL 可。** 分類が引けないだけで講座を落とすと、
+        ユニット329・学習履歴161行まで連鎖する（実測 9講座）。
+        """
+        _, rows = self._extract([self._lesson()], [])
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0]["lesson_cate_id"])
+
+    def test_known_category_is_kept(self) -> None:
+        _, rows = self._extract(
+            [self._lesson()],
+            [{"lesson_cate_id": 1057, "lesson_cate_name": "Web", "del_chk": 0,
+              "sort_no": 1, "regist_date": datetime(2020, 1, 1)}],
+        )
+        self.assertEqual(rows[0]["lesson_cate_id"], 1057)
