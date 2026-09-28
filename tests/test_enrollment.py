@@ -69,6 +69,28 @@ class RightsTest(unittest.TestCase):
         [rec] = self._records([authority(cancel_chk=0, del_chk=1)])
         self.assertEqual(rec.values["status"], "revoked")
 
+    def test_source_is_purchase_when_an_item_is_linked(self) -> None:
+        """商品に紐づく権限は `purchase`。"""
+        [rec] = self._records([authority(item_id=5)])
+        self.assertEqual(rec.values["source"], "purchase")
+
+    def test_source_is_admin_without_an_item(self) -> None:
+        """**商品を経ていない付与は `admin`。**
+
+        実測 3,282行（2,306組）が `item_id` / `application_id` ともに NULL。
+        `purchase` にすると `enrollment_sources.is_paid` が立ち、売上集計に乗る。
+        """
+        [rec] = self._records([authority(item_id=None, application_id=None, authority_key="")])
+        self.assertEqual(rec.values["source"], "admin")
+
+    def test_settings_survive_a_null_item_id(self) -> None:
+        """**`legacy_item_ids` が `item_id` の NULL で落ちない。**"""
+        [rec] = self._records([
+            authority(authority_id=1, item_id=None),
+            authority(authority_id=2, item_id=5),
+        ])
+        self.assertEqual(json.loads(rec.values["settings"])["legacy_item_ids"], [5])
+
     def test_rows_are_folded_by_user_and_course(self) -> None:
         """**lw2 と同じ粒度に畳む**（`LessonModel::1804` の `GROUP BY`）。"""
         recs = self._records([
