@@ -115,7 +115,8 @@ CONTENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
     # A15 受講制御（免除は受け皿の形が違うので作っていない）
     ("lesson_preconditions", None),
     # A6 / A7 / A8 テスト定義（共有問題バンクと出題条件）
-    ("quiz_question_categories", None),
+    # 分類は quiz_question_labels に統合した（school-launcher 20260928082433）
+    ("quiz_question_labels", "legacy_id"),
     ("quiz_question_banks", None),
     ("quiz_question_rules", None),
     ("quiz_questions", "bank_id"),
