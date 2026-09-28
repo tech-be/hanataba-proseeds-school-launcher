@@ -10,9 +10,14 @@ lw2 は `question`（テナント直下の**共有問題バンク**）から、`
 展開すると「受験者ごとに違う問題が出ていた」という事実が再現できなくなる。代わりに
 
 - `question`      → `quiz_question_banks`（問題の本体）
-- `question_cate` → `quiz_question_categories`
+- `question_cate` → `quiz_question_labels`（管理者が作るラベルと同じ表。`legacy_id` 付き）
 - `test_sub`      → `quiz_question_rules`（出題条件をそのまま）
 - `test_sub_question` → `quiz_questions`（**固定出題ぶんだけ**。バンクへの参照）
+
+**アプリはまだ問題バンクと出題条件を読まない**（2026-09-28 時点。ランダム出題は
+**スキーマだけ先に置いてある**）。type 2 だけのテストは設問0問、type 1 は全問が
+順番どおりに出る。どうするかは cutover 前に決める（school-launcher の
+`docs/scrun-etl-design.md` 11-21）。
 
 **`test_sub_type_id` で意味が変わる**（`UserLearningLessonModel::208-275`）。
 
@@ -36,6 +41,7 @@ from ..base import Step
 
 QUESTION_CATE_COLUMNS = (
     "question_cate_id",
+    "tenant_id",
     "question_cate_name",
     "sort_no",
     "del_chk",
@@ -120,12 +126,22 @@ _VIA_UNIT = [("unit", "u", "c.unit_id = u.unit_id")]
 
 
 class QuizQuestionCategoriesStep(Step):
-    """問題カテゴリを移す。**出題条件（`quiz_question_rules`）の参照先**なので先に入れる。"""
+    """問題カテゴリを `quiz_question_labels` に移す。**出題条件と問題バンクの参照先**なので先に入れる。
+
+    管理者が画面から作るラベルと同じ表に入れる（2026-09-28 決定。school-launcher の
+    `20260928082433` で `quiz_question_categories` から統合した）。旧の ID は `legacy_id`。
+
+    **labels は `(tenant_id, name)` が一意。** 新環境の同じテナントに、自テナントの分類と
+    共有（旧 `tenant_id = 0`）の分類が一緒に入るので、同じ名前が重なる（ステージングで
+    28 組、共有内でも `ITパスポート` が 8 件）。**そのまま入れると重なった分と、それを
+    参照する問題バンク・設問が連鎖して移らない**ので、名前に区別を付ける（→ `_distinct_names`）。
+    値を作り替えない方針の例外なので、付けた件数をログに出す。
+    """
 
     name = "content.quiz_question_categories"
-    description = "問題カテゴリを移す（出題条件の参照先）"
+    description = "問題カテゴリを quiz_question_labels に移す（出題条件と問題バンクの参照先）"
     source_table = "question_cate"
-    target_table = "quiz_question_categories"
+    target_table = "quiz_question_labels"
     depends_on = ("content.lessons",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
@@ -133,14 +149,22 @@ class QuizQuestionCategoriesStep(Step):
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         tenant_id = ctx.tenant_id.value
+        names = _distinct_names(rows, ctx.config.tenant.legacy_id)
+        renamed = sum(1 for r in rows if names[int(r["question_cate_id"])] != (r.get("question_cate_name") or ""))
+        if renamed:
+            ctx.logger.warning(
+                "問題カテゴリの名前が %d 件重なるので区別を付けて移す（「（共有）」「（2）」など）。"
+                "旧の ID は legacy_id に残る",
+                renamed,
+            )
         return [
             Record(
-                table="quiz_question_categories",
+                table="quiz_question_labels",
                 values={
                     "id": ctx.ulid.for_row("question_cate", row["question_cate_id"]),
                     "tenant_id": tenant_id,
                     "legacy_id": int(row["question_cate_id"]),
-                    "name": row.get("question_cate_name"),
+                    "name": names[int(row["question_cate_id"])],
                     "sort_order": int(row.get("sort_no") or 0),
                     "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
                 },
@@ -149,6 +173,61 @@ class QuizQuestionCategoriesStep(Step):
             )
             for row in rows
         ]
+
+
+def _name_key(name: str) -> str:
+    """**MySQL の照合順序（`utf8mb4_unicode_ci`）に寄せた比較キー。**
+
+    大文字小文字・全角半角・末尾の空白を区別しないので、Python の `==` で比べると
+    重なりを見落とす。完全には一致しないが、取りこぼしは投入前の制約確認で拾える。
+    """
+    import unicodedata
+
+    return unicodedata.normalize("NFKC", name).rstrip().casefold()
+
+
+def _distinct_names(rows: list[dict], own_tenant: int) -> dict[int, str]:
+    """旧 ID → 移行後の名前。**重なった名前にだけ区別を付ける。**
+
+    - 自テナントの分: 旧 ID の小さい順に、1件目はそのまま、2件目以降は「（2）」「（3）」
+    - 共有（旧 `tenant_id = 0`）の分: 重なるときは「（共有）」。共有内でも重なるなら
+      「（共有1）」「（共有2）」…（旧 ID の小さい順）
+    - それでも別の名前とぶつかるなら「（旧ID n）」で逃がす
+    """
+    groups: dict[str, list[dict]] = {}
+    for row in rows:
+        groups.setdefault(_name_key(row.get("question_cate_name") or ""), []).append(row)
+
+    out: dict[int, str] = {}
+    for members in groups.values():
+        if len(members) == 1:
+            row = members[0]
+            out[int(row["question_cate_id"])] = row.get("question_cate_name") or ""
+            continue
+        own = sorted((r for r in members if int(r.get("tenant_id") or 0) == own_tenant),
+                     key=lambda r: int(r["question_cate_id"]))
+        shared = sorted((r for r in members if int(r.get("tenant_id") or 0) != own_tenant),
+                        key=lambda r: int(r["question_cate_id"]))
+        for i, row in enumerate(own):
+            base = row.get("question_cate_name") or ""
+            out[int(row["question_cate_id"])] = base if i == 0 else f"{base}（{i + 1}）"
+        for j, row in enumerate(shared):
+            base = row.get("question_cate_name") or ""
+            out[int(row["question_cate_id"])] = (
+                f"{base}（共有）" if len(shared) == 1 else f"{base}（共有{j + 1}）"
+            )
+
+    # 付けた名前が、元からある別の名前とぶつからないか。**元の名前のままの行を先に
+    # 確定させる**（区別を付けた側だけを逃がす。元の名前を変えない）
+    original = {int(r["question_cate_id"]): r.get("question_cate_name") or "" for r in rows}
+    seen: dict[str, int] = {}
+    for legacy_id in sorted(out, key=lambda k: (out[k] != original[k], k)):
+        key = _name_key(out[legacy_id])
+        if key in seen:
+            out[legacy_id] = f"{out[legacy_id]}（旧ID {legacy_id}）"
+            key = _name_key(out[legacy_id])
+        seen[key] = legacy_id
+    return out
 
 
 class QuizQuestionBanksStep(Step):
@@ -374,6 +453,12 @@ class QuizQuestionsStep(Step):
             if int(sub.get("test_sub_type_id") or 0) not in FIXED_SUB_TYPES:
                 continue
             rows.append({**link, "_sub": sub, "_question": question})
+        # **移すカテゴリだけを設問に付ける。** 無い分類を指すと外部キーに当たり、
+        # 設問ごと移らなくなる（分類は任意なので、無ければ付けない）
+        self._categories = {
+            int(r["question_cate_id"])
+            for r in source.fetch_for_tenant("question_cate", ("question_cate_id",))
+        }
         return rows
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
@@ -391,6 +476,8 @@ class QuizQuestionsStep(Step):
                         "tenant_id": tenant_id,
                         "quiz_id": ctx.ulid.for_row("test", sub["test_id"]),
                         "bank_id": ctx.ulid.for_row("question", row["question_id"]),
+                        # 画面の「カテゴリ」（quiz_question_labels）。問題バンクと同じ分類
+                        "category_id": self._category_of(ctx, question.get("question_cate_id")),
                         "body": question.get("question_text") or "",
                         "type": QUESTION_TYPES[int(question["question_type_id"])],
                         "points": int(sub.get("score_per_question") or 0) or 1,
@@ -406,6 +493,13 @@ class QuizQuestionsStep(Step):
                 )
             )
         return records
+
+
+    def _category_of(self, ctx: RunContext, legacy_id: object) -> str | None:
+        categories = getattr(self, "_categories", None)
+        if legacy_id is None or (categories is not None and int(legacy_id) not in categories):
+            return None
+        return _category_id(ctx, legacy_id)
 
 
 class QuizOptionsStep(Step):

@@ -341,3 +341,74 @@ class CourseCategoryTest(unittest.TestCase):
               "sort_no": 1, "regist_date": datetime(2020, 1, 1)}],
         )
         self.assertEqual(rows[0]["lesson_cate_id"], 1057)
+
+
+class QuizQuestionLabelTest(unittest.TestCase):
+    """問題カテゴリは `quiz_question_labels` に入る（2026-09-28 決定）。
+
+    **labels は `(tenant_id, name)` が一意。** 自テナントと共有（旧 `tenant_id = 0`）の
+    分類が同じテナントに入るので名前が重なる。そのまま入れると重なった分と、それを
+    参照する問題バンク・設問が連鎖して移らない（ステージングで設問 407 問）。
+    """
+
+    OWN = CONFIG.tenant.legacy_id
+
+    def cate(self, legacy_id, name, tenant_id=None):
+        return {"question_cate_id": legacy_id, "tenant_id": self.OWN if tenant_id is None else tenant_id,
+                "question_cate_name": name, "sort_no": 1, "del_chk": 0,
+                "regist_date": datetime(2020, 1, 1)}
+
+    def names(self, rows):
+        records = od_quizzes.QuizQuestionCategoriesStep().transform(make_ctx(), rows)
+        return {r.values["legacy_id"]: r.values["name"] for r in records}, records
+
+    def test_goes_to_labels_with_legacy_id(self) -> None:
+        _, [rec] = self.names([self.cate(7, "HTML講座")])
+        self.assertEqual(rec.table, "quiz_question_labels")
+        self.assertEqual((rec.values["legacy_id"], rec.values["name"]), (7, "HTML講座"))
+        self.assertEqual(rec.natural_key, ("tenant_id", "legacy_id"))
+
+    def test_overlapping_names_are_distinguished(self) -> None:
+        names, _ = self.names([
+            self.cate(1, "ITパスポート"),
+            self.cate(5, "ITパスポート", tenant_id=0),
+            self.cate(3, "ITパスポート", tenant_id=0),
+            self.cate(2, "HTML講座"),
+            self.cate(9, "HTML講座"),
+            self.cate(4, "WordPress講座"),
+            self.cate(6, "WordPress講座", tenant_id=0),
+        ])
+        self.assertEqual(names, {
+            1: "ITパスポート",            # 自テナントの1件目はそのまま
+            3: "ITパスポート（共有1）",   # 共有内でも重なるので連番（旧 ID 順）
+            5: "ITパスポート（共有2）",
+            2: "HTML講座",
+            9: "HTML講座（2）",           # 自テナント内の2件目
+            4: "WordPress講座",
+            6: "WordPress講座（共有）",
+        })
+
+    def test_width_and_case_count_as_the_same_name(self) -> None:
+        """**MySQL の照合順序は全角半角・大文字小文字を区別しない。** Python の == で比べると見落とす。"""
+        names, _ = self.names([self.cate(1, "HTML講座"), self.cate(2, "ＨＴＭＬ講座")])
+        self.assertEqual(names[2], "ＨＴＭＬ講座（2）")
+
+    def test_original_name_is_never_the_one_renamed(self) -> None:
+        """区別を付けた名前が元からある名前とぶつかったら、**付けた側を逃がす。**"""
+        names, _ = self.names([
+            self.cate(1, "B（2）"),   # 元からこの名前
+            self.cate(2, "B"),
+            self.cate(3, "B"),        # 区別を付けると「B（2）」になってぶつかる
+        ])
+        self.assertEqual(names[1], "B（2）")
+        self.assertEqual(names[3], "B（2）（旧ID 3）")
+
+    def test_fixed_question_gets_category_only_when_migrated(self) -> None:
+        """**無い分類を指すと外部キーに当たって設問ごと移らない。** 付けないほうを選ぶ。"""
+        step = od_quizzes.QuizQuestionsStep()
+        step._categories = {10}
+        ctx = make_ctx()
+        self.assertEqual(step._category_of(ctx, 10), od_quizzes._category_id(ctx, 10))
+        self.assertIsNone(step._category_of(ctx, 99))
+        self.assertIsNone(step._category_of(ctx, 0))   # 0 は「未分類」
+        self.assertIsNone(step._category_of(ctx, None))
