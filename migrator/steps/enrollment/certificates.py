@@ -5,9 +5,8 @@
 - `certificate_settings.issuer_name` … テナントの設定。**NULL 可**（NULL なら `tenants.name`）
 - `certificates.issuer_name`         … 発行済みの証書。**NOT NULL**（発行時点の値を凍結する）
 
-**バッジの付与実績はここで移せない。** 旧 `badge_item` は「どの講座にどのバッジを出すか」の
-**定義**で、誰が取ったかは**外部のバッジシステム**が持っている（`library/BadgeApi.class.php`）。
-`digital_badges.user_id` は NOT NULL なので、外部からデータを受け取るまで1行も作れない。
+**バッジは移行対象外**（定義の `badge_item` も、外部のバッジシステムが持つ付与実績も移さない）。
+`db/guards.py` の `EXCLUDED_TABLES` に載せてあるので、読もうとすると止まる。
 
 **`cmd/import-certificates`（Go）とは役割分担しない。** 修了証は移行ツールで入れる。
 """
@@ -218,92 +217,5 @@ def _certificate_ulid(ctx: RunContext, row: dict) -> str:
     return ctx.ulid.for_row("user_certificate", f"{int(row['user_id'])}:{int(row['entity_id'])}")
 
 
-BADGE_COLUMNS = (
-    "item_id",
-    "item_type",
-    "entity_id",
-    "reference_item_id",
-    "update_date",
-    "del_chk",
-)
-
-
-class BadgeDefinitionsStep(Step):
-    """`badge_item` を `badge_definitions` に移す。
-
-    **バッジは定義と付与実績で置き場所が分かれる。**
-
-    - **定義**（どの講座/ユニットにバッジを出すか）… lw2 の `badge_item` にある。ここで移す
-    - **付与実績**（誰がいつ獲得したか）… **lw2 の DB に無い。** 外部のバッジシステムが持つ
-      （`BadgeApi` が `/tenant/{id}/user/{id}/badges` を叩く）。**移せない**
-
-    **`digital_badges` には入れない。** あれは `user_id` / `course_id` / `issued_at` が
-    いずれも NOT NULL の「付与された1枚」を表す表で、定義は1行も入らない。
-
-    **`item_type` で行き先が変わる。** lw2 の `lesson` は**講座**なので `courses`、
-    `unit` は**ユニット**なので `lessons`（新旧で名前が入れ替わっている）。
-    """
-
-    name = "enrollment.badge_definitions"
-    description = "バッジの定義を移す（付与実績は外部システム）"
-    source_table = "badge_item"
-    target_table = "badge_definitions"
-    depends_on = ("content.courses", "content.lessons")
-
-    def extract(self, ctx: RunContext) -> list[dict]:
-        return ctx.require_source().fetch_for_tenant("badge_item", BADGE_COLUMNS)
-
-    def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
-        tenant_id = ctx.tenant_id.value
-        records: list[Record] = []
-        for row in rows:
-            kind = str(row.get("item_type") or "")
-            entity = row.get("entity_id")
-            if entity is None:
-                continue
-            course_id = lesson_id = None
-            if kind == "lesson":
-                # **旧 `lesson` は講座。** 新環境の `lessons`（ユニット）ではない
-                course_id = ctx.ulid.for_row("lesson", entity)
-            elif kind == "unit":
-                lesson_id = ctx.ulid.for_row("unit", entity)
-            else:
-                ctx.logger.warning(
-                    "badge_item.item_type=%r は対応表に無い（item_id=%s）。移さない",
-                    kind,
-                    row["item_id"],
-                )
-                continue
-            reference = row.get("reference_item_id")
-            records.append(
-                Record(
-                    table="badge_definitions",
-                    values={
-                        "id": ctx.ulid.for_row("badge_item", row["item_id"]),
-                        "tenant_id": tenant_id,
-                        "legacy_id": int(row["item_id"]),
-                        "course_id": course_id,
-                        "lesson_id": lesson_id,
-                        # **外部のバッジシステムが払い出した ID。** 自己参照ではない
-                        # （`BadgeController:838` が `putBadge()` の戻り値 `$json['ID']`
-                        # を書いている）。旧の整数のまま残し、付与実績を受け取るときの
-                        # 突き合わせキーにする
-                        "external_badge_id": int(reference) if reference is not None else None,
-                        "deprecated_at": convert(row.get("update_date"), ColumnKind.TIMESTAMP)
-                        if int(row.get("del_chk") or 0) == 1
-                        else None,
-                    },
-                    natural_key=("tenant_id", "legacy_id"),
-                    source_key=int(row["item_id"]),
-                )
-            )
-        return records
-
-
 def build() -> list[Step]:
-    return [
-        CertificateSettingsStep(),
-        CertificatesStep(),
-        CertificateEventsStep(),
-        BadgeDefinitionsStep(),
-    ]
+    return [CertificateSettingsStep(), CertificatesStep(), CertificateEventsStep()]

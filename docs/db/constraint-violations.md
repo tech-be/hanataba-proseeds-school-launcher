@@ -134,7 +134,7 @@
 | 7 | ユニットの学習状況 | `user_learning_unit.unit_id` | `unit.unit_id` | 36件 | 同上。**投入時の `lesson_progress` → `lessons` 違反の主因** |
 | 8 | 課題の提出 | `user_learning_report.report_id` | `report.report_id` | 32件 | 同上。**投入時の `submissions` → `assignments` 違反の主因** |
 | 9 | 講座の分類 | `lesson.lesson_cate_id` | `lesson_cate.lesson_cate_id` | 9講座 / 分類3種 | **解決済み**（`courses.category` は NULL 可なので、分類だけ落として講座は移す） |
-| 10 | バッジの対象講座 | `badge_item.entity_id` | `lesson.lesson_id` | 1件 | 移行元から消すか、そのまま移さないか |
+| 10 | バッジの対象講座 | `badge_item.entity_id` | `lesson.lesson_id` | 1件 | **判断不要**（バッジは移行対象外。→ [対象外](06-out-of-scope/breakdown.md#決定で対象外にしたもの)） |
 
 > **#4〜#6 は親が消えているためテナントを判定できない**（`unit` / `lesson` を辿れない）。
 > 全テナントの合計値。対象テナントぶんがいくつかは、本番ダンプでも同じく切り分けられない。

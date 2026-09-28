@@ -84,7 +84,7 @@ A/B/C の判定そのものは棚卸し作成者の見解で機械的な基準�
 |---|---|---|---|---|
 | 01 基盤 | [breakdown](01-foundation/breakdown.md) | [review](01-foundation/review.md) | [spec](01-foundation/migration-spec.md) | マスター / ユーザ |
 | 02 コンテンツ | [breakdown](02-content/breakdown.md) | [review](02-content/review.md) | [spec](02-content/migration-spec.md) | オンデマンド講座 / テスト定義・課題定義 / アンケート定義 / ライブ講座 |
-| 03 受講 | [breakdown](03-enrollment/breakdown.md) | [review](03-enrollment/review.md) | [spec](03-enrollment/migration-spec.md) | 受講権限 / 学習履歴 / テスト結果 / 課題提出 / アンケート回答 / ライブ予約 / 修了証・バッジ |
+| 03 受講 | [breakdown](03-enrollment/breakdown.md) | [review](03-enrollment/review.md) | [spec](03-enrollment/migration-spec.md) | 受講権限 / 学習履歴 / テスト結果 / 課題提出 / アンケート回答 / ライブ予約 / 修了証 |
 | 04 課金 | [breakdown](04-billing/breakdown.md) | [review](04-billing/review.md) | [spec](04-billing/migration-spec.md) | チケット / 決済 / 帳票 |
 | 05 サポート機能 | [breakdown](05-support/breakdown.md) | [review](05-support/review.md) | [spec](05-support/migration-spec.md) | LINE / クーポン / お知らせ / 問い合わせ / ファイル / 就業支援 / コミュニティ |
 | 06 対象外 | [breakdown](06-out-of-scope/breakdown.md) | [review](06-out-of-scope/review.md) | **不要** | 移行しない |
@@ -200,7 +200,7 @@ A/B/C の判定そのものは棚卸し作成者の見解で機械的な基準�
 | 運営 | U08 問い合わせ | `inquiry_categories` は固定マスタ。lw2 カテゴリとの対応表 CSV が無いと FK 違反 |
 | 運営 | U07 メールテンプレート | `email_kinds` に無い種別のテンプレートは移行先が無い |
 | 基盤 | B03 メールログイン | `UNIQUE (tenant_id, email)` にメール欠損174名・重複23アドレス/56名が当たる |
-| オンデマンド | O27 バッジ | **付与行の移行元テーブルが lw2 の342テーブルに存在しない。** 移行元が特定できるまで着手できない |
+| オンデマンド | O27 バッジ | **移行対象外**（2026-09-28 決定。→ [対象外](06-out-of-scope/breakdown.md#決定で対象外にしたもの)）。付与実績は lw2 の DB に無く、外部のバッジシステムが持つ |
 
 ### B. 意味が変わって誤ったデータになるもの（変換規則の取り違えが致命傷）
 

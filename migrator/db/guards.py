@@ -29,6 +29,7 @@ EXCLUDED_TABLES: dict[str, str] = {
     "user_auth_token": "発行中の一時トークン。移した時点で無効",
     "password_reminder": "発行中の一時トークン。移した時点で無効",
     "edit_form_data": "UI の一時状態。画面を開き直せば作り直される",
+    "badge_item": "バッジは移行対象外（2026-09-28 決定）。付与実績も外部のバッジシステムにあり lw2 の DB に無い",
 }
 
 #: `tenant_id` を持たない共通マスタ。テナントで絞らず全行読む。

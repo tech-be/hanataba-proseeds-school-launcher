@@ -1,6 +1,6 @@
 # 受講 — 移行仕様
 
-区分 **3 受講**（受講権限 / 学習履歴 / テスト結果 / 課題提出 / アンケート回答 / ライブ予約 / 修了証・バッジ）を
+区分 **3 受講**（受講権限 / 学習履歴 / テスト結果 / 課題提出 / アンケート回答 / ライブ予約 / 修了証）を
 移行ツールでどう流すか。共通の方針は [migration-spec.md](../../migration-spec.md)、
 突き合わせは [review.md](review.md)、追加するスキーマは [schema-additions.md](schema-additions.md)。
 
@@ -31,7 +31,7 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | **`enrollments` の母集合は受講権限**（4,289組） | 学習実績（33,912組）は母集合にしない。差の大半は無料講座で、旧環境でも権限行を持たないのが正常。**最終的に全区分を移行すれば正しい状態になる** | 2026-09-24 |
 | チケットの消費履歴は移さない | キャンセルに要るのは「誰が予約したか」と「何枚使うか」だけ。**台帳の行は予約から組み立てて作る** | 2026-09-24 |
 | 欠席も消費済みとして数える | `occupies_seat = 1`。除くと台帳が0行になる | 2026-09-24 |
-| バッジは外部システムを使い続ける | 付与実績は lw2 の DB に無い（`BadgeApi` 経由）。**新環境が旧 ID を持っていれば参照を続けられる**（`users.legacy_id` / `tenants.legacy_id` を追加済み） | 2026-09-24 |
+| **バッジは移行対象外** | 定義（`badge_item`）も付与実績（外部のバッジシステム）も移さない。`badge_item` は `EXCLUDED_TABLES` に載せ、読もうとすると止まる（→ [対象外](../06-out-of-scope/breakdown.md#決定で対象外にしたもの)） | 2026-09-28 |
 
 ### 1-4. 本番ダンプ受領後に確認すること
 
@@ -56,7 +56,7 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | `config_certificate` | 0 | **0** | 設定は未登録 |
 | `certificate_no` | 1 | **1** | 次番号 7。**`serial_next` に引き継ぐ** |
 | `user_certificate` | 3 | **3** | `entity_id` は `user_learning_lesson_id` |
-| `badge_item` | 62 | **61** | |
+| `badge_item` | 62 | **61** | 移さない（対象外） |
 
 ---
 
@@ -82,7 +82,7 @@ enrollment.5 アンケート回答  enquete_answer                → survey_res
                                                            → survey_answer_selected_options
 enrollment.6 ライブ予約      live_lesson_reserve           → live_reservations
              live_lesson_review                            → live_lesson_reviews
-enrollment.7 修了証・バッジ  config_certificate            → certificate_settings
+enrollment.7 修了証          config_certificate            → certificate_settings
              user_certificate                              → certificates → certificate_events
 ```
 
@@ -184,6 +184,4 @@ cd -
 
 - **無料講座の受講登録**（→ [確認事項](../open-questions.md)）。**3-1 の Step は権限側だけで書ける**ので着手は止まらない
 - **講義の `progress_status` の意味**（定数ファイルに定義が無い）
-- **バッジの付与実績は移せない。** lw2 の DB に無く、外部のバッジシステムが持つ
-  （`BadgeApi`）。**定義（`badge_item`）は A11 の `badge_definitions` に移す**
 - `certificates.product_id` は課金（4）の移行後に埋める
