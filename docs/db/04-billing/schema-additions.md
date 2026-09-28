@@ -3,12 +3,11 @@
 [突き合わせ](review.md#新環境に追加するテーブルカラム) の追加一覧を、**school-launcher に当てる migration の単位**に落としたもの。
 
 - **当てる先**: `school-launcher/btoc-backend/db/migrations/`（goose 形式。雛形は `make migrate-create`）
-- **実物**: **まだ無い。** `20260924…_lw2_billing_additions.sql` として1本にまとめる
+- **実物**: `20260928132756_lw2_billing_additions.sql`（ブランチ `feat/lw2-billing-schema`）。A1〜A8 を1本にまとめた
 - **当てる時期**: **移行直前**（[migration-spec](migration-spec.md) のフェーズ0）
 - **確認**: `python -m migrator doctor` — この区分が未適用なら `[TODO]` で出る
 
-> **いまはチケット（4-1）ぶんだけ。** 決済（4-2）と帳票（4-3）は移行ツールが未実装なので、
-> 追加が必要かどうかも決まっていない。
+> **チケット（A1 / A2）・決済（A3〜A6）・帳票（A7 / A8）の3つ。** どれも移行ツールの Step が書き込む先なので**必須**。
 
 > **コンテンツ（2）が先。** `ticket_type_lessons` / `live_lesson_ticket_requirements` が
 > コンテンツで作るライブの `lessons` を参照する。
@@ -22,15 +21,20 @@
 
 **この区分に「計画」はない。**
 
-ツール側の定義は `migrator/steps/schema.py` の `BILLING_SCHEMA`（4件）。**この表とコードは一致させること。**
+ツール側の定義は `migrator/steps/schema.py` の `BILLING_SCHEMA`（10件）。**この表とコードは一致させること。**
+lookup への値の追加（A5 / A6）は列ではないので一覧に無い。無いと投入時の外部キー確認で止まる。
 
 ---
 
 ## 適用順
 
 ```
-1  ticket_types / ticket_grants への列追加
-2  月次チケット配布                        ← users を参照
+1  ticket_types / ticket_grants への列追加           (A1)
+2  月次チケット配布                                  (A2) ← users を参照
+3  tenant_plans / payments への列追加                (A3 / A4)
+4  payment_providers / payment_types への値の追加     (A5 / A6)
+5  receipts への列追加                              (A7)
+6  規約の本文                                        (A8)
 ```
 
 ---
@@ -102,7 +106,71 @@ CREATE TABLE monthly_ticket_allowances (
 > **`target_month` は書式を変えずに移す。** `'YYYYMM'` の文字列で、DATE に直すと
 > 旧の書式ゆれ（実測を確認していない）を握りつぶす。
 
-> **`tenants` を RESTRICT で参照する。** `cmd/seed` の `cleanupDemoData` に列挙が要る。
+> **`tenants` を RESTRICT で参照する。** `cmd/seed` の `cleanupDemoData` に列挙が要る
+> （`make check-seed-cleanup` が要求する）。
+
+---
+
+## 3. 決済（A3〜A6）
+
+**必須。** 旧 `payment_item`（商品）と `payment_application`（申込）。暫定の規則は [migration-spec 1-3](migration-spec.md) の P1〜P10。
+
+```sql
+ALTER TABLE tenant_plans
+    ADD COLUMN legacy_id INT  NULL,   -- 旧 payment_item.item_id
+    ADD COLUMN settings  JSON NULL,   -- 試用・受講期間・自動解約・支払日など、新の列に無い設定
+    ADD UNIQUE KEY uk_tenant_plans_legacy (tenant_id, legacy_id);
+
+ALTER TABLE payments
+    ADD COLUMN legacy_id INT  NULL,   -- 旧 payment_application.application_id
+    ADD COLUMN settings  JSON NULL,   -- J-Payment の ID、解約、分割回数、クーポン、税の情報
+    ADD UNIQUE KEY uk_payments_legacy (tenant_id, legacy_id);
+
+INSERT INTO payment_providers (code, name_ja, supports_marketplace, supports_subscription, sort_order, is_system)
+    VALUES ('legacy_jpayment', 'J-Payment (lw2 から移行)', FALSE, FALSE, 90, TRUE);
+
+INSERT INTO payment_types (code, name_ja, requires_course, is_revenue, sort_order, is_system)
+    VALUES ('lw2_purchase', '購入 (lw2 から移行)', FALSE, TRUE, 90, TRUE);
+```
+
+> **`legacy_jpayment` は過去の記録を表すだけ。** 新の決済処理はこの値を扱わない。
+> **`lw2_purchase` は講座が1つに決まらない購入**（講座2つ以上の商品・講座なし・チケット商品）。
+> `course_purchase` は講座1つが必須（`course_purchase_payments.course_id` NOT NULL）で、入れると講座を選ぶことになる。
+> 売上には数える（`is_revenue = TRUE`）。
+
+> **継続課金（`learner_subscriptions`）と分割（`installment_plans`）には受け皿を足さない。** lw2 に毎月の課金の行が無く、
+> 新の必須 ID（Stripe）も無い。初回の申込だけを `payments` ＋ `subscription_payments`（`subscription_id` NULL）にする。
+
+## 4. 帳票（A7 / A8）
+
+**必須。**
+
+```sql
+ALTER TABLE receipts
+    ADD COLUMN legacy_id INT NULL,   -- 旧 receipt_log.receipt_log_id（旧で印字していた領収書番号）
+    ADD UNIQUE KEY uk_receipts_legacy (tenant_id, legacy_id);
+
+CREATE TABLE tenant_legal_documents (
+    id            CHAR(26)     NOT NULL PRIMARY KEY,
+    tenant_id     CHAR(26)     NOT NULL,
+    kind          VARCHAR(32)  NOT NULL,   -- terms / cancel_policy / privacy_policy / commercial_disclosure
+    language_code VARCHAR(5)   NOT NULL,
+    title         VARCHAR(200) NULL,
+    body          MEDIUMTEXT   NULL,
+    external_url  VARCHAR(512) NULL,       -- 本文の代わりに外部ページを出す場合
+    created_at / updated_at DATETIME(3),
+    UNIQUE KEY uk_tld (tenant_id, kind, language_code),
+    CONSTRAINT fk_tld_tenant FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE RESTRICT
+);
+```
+
+> **新の `issue_no` は決済ごとの連番**で、旧の番号（`receipt_log_id`）とは別物。旧はダウンロードのたびに1行作り、
+> 印字する番号は `receipt_log_id` だったので `legacy_id` に残す。
+
+> **規約の本文はアプリがまだ読まない。** 新は文面を画面に固定で持っており、テナントごとの本文を置く場所が無かった。
+> 本文を失わないために受ける。どう見せるかは確認事項 D6。
+
+> **`tenants` を RESTRICT で参照する。** `cleanupDemoData` に `monthly_ticket_allowances` と一緒に列挙してある。
 
 ---
 
@@ -114,6 +182,5 @@ CREATE TABLE monthly_ticket_allowances (
 
 ## まだ決まっていないもの
 
-**決済（4-2）と帳票（4-3）は移行ツールが未実装。** 追加が必要かどうかもこれから。
-受け皿の候補として名前が挙がっているのは `receipt_settings`（消費税）と `user_consents`（特商法・規約）で、
-どちらも**既存の表**。列が足りるかは Step を書くときに確かめる。
+**なし**（スキーマとしては）。決済・帳票の移し方は暫定の規則で、運営の回答で変わりうる（[migration-spec 1-3](migration-spec.md)）。
+規則が変わっても、多くは `settings` の中身か Step の振り分けで吸収でき、スキーマの追加は要らない見込み。

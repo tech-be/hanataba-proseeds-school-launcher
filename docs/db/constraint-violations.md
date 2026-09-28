@@ -101,8 +101,10 @@
 | 14 | 種別が無いチケット残高 | `user_ticket.ticket_id`（NULL 可） | `ticket_grants.ticket_type_id` | **NOT NULL** | 3件 | ① 既定の種別を1つ作って寄せる<br>② 移さない |
 | 15 | 使い切ったチケット残高 | `user_ticket.ticket_num = 0` | `ticket_grants.quantity` | **CHECK** `chk_tg_qty (quantity >= 1)` | 2件 | ① 制約を `>= 0` に緩めて移す<br>② 移さない（**その残高で予約したライブをキャンセルしてもチケットが戻らない**） |
 | 16 | クーポンの決済代行 ID | 旧に**対応する値が無い** | `coupons.provider_coupon_id` | **NOT NULL** | 未実施 | ① 移行用の合成値を入れる<br>② 制約を NULL 可にする |
+| 17 | チケットが要るのに種別を引けないライブ | `live_lesson.item_ticket_price > 0` で `ticket_limit_lesson` に行が無い | `live_lesson_ticket_requirements.ticket_type_id` | **NOT NULL** | 1件 | ① 種別を指定してもらって移す<br>② **チケット不要のライブとして移す**（いまの動き。予約にチケットが要らなくなる） |
 
-> **課金は移行ツールが未実装。** #14・#15 は dry-run で当たっているもの、#16 はスキーマの突き合わせ。
+> **課金は3フェーズとも実装済み**（決済・帳票は暫定の規則）。#14・#15・#17 はチケットの変換で当たっているもの、#16 はスキーマの突き合わせ（クーポンはサポート機能で移す）。
+> **移さない残高で予約したライブは、消費を台帳に書けない。** キャンセルしてもチケットが戻らない（ステージングで9件。すべて #14 の種別が無い残高）。
 
 ### 移行ツール側で解決したもの
 
@@ -135,6 +137,7 @@
 | 8 | 課題の提出 | `user_learning_report.report_id` | `report.report_id` | 32件 | 同上。**投入時の `submissions` → `assignments` 違反の主因** |
 | 9 | 講座の分類 | `lesson.lesson_cate_id` | `lesson_cate.lesson_cate_id` | 9講座 / 分類3種 | **解決済み**（`courses.category` は NULL 可なので、分類だけ落として講座は移す） |
 | 10 | バッジの対象講座 | `badge_item.entity_id` | `lesson.lesson_id` | 1件 | **判断不要**（バッジは移行対象外。→ [対象外](06-out-of-scope/breakdown.md#決定で対象外にしたもの)） |
+| 11 | 決済（申込） | `payment_application.user_id` | `user.user_id` | 11件 | 同上。**会員の行が物理削除されている**（2017〜2019年。1件は `user_id = 0`）。うち支払い済み6件。明細（`subscription_payments`）10件も連鎖して移らない |
 
 > **#4〜#6 は親が消えているためテナントを判定できない**（`unit` / `lesson` を辿れない）。
 > 全テナントの合計値。対象テナントぶんがいくつかは、本番ダンプでも同じく切り分けられない。
