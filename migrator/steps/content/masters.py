@@ -75,10 +75,10 @@ def quiz_question_types() -> LookupValueStep:
     return LookupValueStep(
         name="master.quiz_question_types",
         table="quiz_question_types",
-        description="quiz_question_types に text_free を追加する",
+        description="quiz_question_types に free_text を追加する",
         values=[
             {
-                "code": "text_free",
+                "code": "free_text",
                 "name_ja": "記述式",
                 # 選択肢を持たないので「複数正解」という概念が無い
                 "allows_multiple_correct": False,
