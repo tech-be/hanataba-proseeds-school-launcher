@@ -49,7 +49,8 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 |---|---|
 | ユニットの種別 | **畳まない。** `lesson_types` に `quiz` / `assignment` / `document` / **`discussion`** / **`skill_check`** を追加する（A20）。7・8 は `UnitConstants.php` に無く、**`ShareController` / `UnitController` に定数がある**（`UNIT_TYPE_DISCUSSION` / `UNIT_TYPE_SKILL`）。正規の種別で、`LessonController` も進捗の更新対象にしている |
 | ディスカッション・スキル診断の中身 | **ユニットは移すが、中身はこの区分の範囲外。** 投稿（`discussion` / `discussion_board` / `discussion_board_comment`）は[逆引き表](../legacy-table-coverage.md)で**区分が未分類**、診断結果（`public_learning_skill_unit*`）は**就職支援（07）**。**その区分を移すまで中身は空のまま**（ステージング実測でユニット22件） |
-| 出題条件（`test_sub`） | **固定リストに展開しない。** `quiz_question_rules` と問題バンクを追加して条件のまま移す（A6） |
+| 出題条件（`test_sub`） | **固定リストに展開しない。** `quiz_question_rules` と問題バンクを追加して条件のまま移す（A6）。**アプリの出題ロジックは未実装で、スキーマだけ置いてある**（2026-09-28 決定。→ [確認事項 C6](../open-questions.md)） |
+| 問題カテゴリ（`question_cate`） | **`quiz_question_labels` に移す**（管理者が作るラベルと同じ表。2026-09-28 決定）。名前が重なる分は「（共有）」「（2）」などを付けて区別する |
 | 合否・正誤 | **当時の結果をそのまま移す**（`quiz_attempts.passed` / `quiz_answers.is_correct`）。都度計算に任せない（A9 / A10） |
 | ユニット本文の HTML | **変換せずそのまま移す。** 同梱ダンプでは `unit` 2,533行に HTML が1件も無く、`\r\n` 区切りの平文だった。表示時にサニタイズする |
 | 点数の3列 | **`sum_score` → `score`、`total_score` → `max_score`。** `test_score` は百分率の派生値なので移行しない（採点処理で確定） |
@@ -344,7 +345,7 @@ ondemand.2  代理講師 → course_categories → courses
 ondemand.3  lessons（見出しブロックを除く）→ video_lessons
               ↓
 ondemand.4  テスト定義
-              quiz_question_categories → quiz_question_banks → quizzes
+              quiz_question_labels → quiz_question_banks → quizzes
                 → quiz_question_rules → quiz_questions → quiz_options
               ↓
 ondemand.5  アンケート・課題定義
