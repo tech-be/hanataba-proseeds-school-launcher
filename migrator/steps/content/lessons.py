@@ -90,6 +90,7 @@ class LessonsStep(Step):
     depends_on = ("content.courses",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
+        # 共有講座（tenant_id=0）のユニットも入る（`SourceDatabase.shared_lessons`）
         return ctx.require_source().fetch_joined(
             "unit", UNIT_COLUMNS, parent="lesson", on="c.lesson_id = p.lesson_id"
         )

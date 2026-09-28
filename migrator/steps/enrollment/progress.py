@@ -69,12 +69,14 @@ class LessonProgressStep(Step):
     depends_on = ("users", "content.lessons")
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        # **`tenant_id` を持たない。** `user_learning_lesson` → `lesson` と2段たどる
+        # **会員側で絞る。** `lesson` 側で絞ると、共有講座（tenant_id=0）を通じて
+        # **他テナントの会員の学習履歴まで拾う**（実測 45名・5,987件）。
+        # 学習履歴は「誰の記録か」が決め手なので、`user.tenant_id` を正にする
         rows = ctx.require_source().fetch_joined(
             "user_learning_unit",
             UNIT_PROGRESS_COLUMNS,
-            parent="lesson",
-            on="ul.lesson_id = p.lesson_id",
+            parent="user",
+            on="ul.user_id = p.user_id",
             via=[("user_learning_lesson", "ul", "c.user_learning_lesson_id = ul.user_learning_lesson_id")],
         )
         # 会員とユニット種別は親から引く（`user_learning_unit` は持たない）
@@ -86,8 +88,8 @@ class LessonProgressStep(Step):
         rows = ctx.require_source().fetch_joined(
             "user_learning_lesson",
             ("user_learning_lesson_id", "user_id"),
-            parent="lesson",
-            on="c.lesson_id = p.lesson_id",
+            parent="user",
+            on="c.user_id = p.user_id",
         )
         return {int(r["user_learning_lesson_id"]): int(r["user_id"]) for r in rows}
 
