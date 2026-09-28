@@ -77,6 +77,32 @@ def category_code(ctx: RunContext, legacy_id: object, legacy_tenant: object = No
     return f"lw2-{ctx.config.tenant.legacy_id}-{int(legacy_id)}"
 
 
+def _categories(ctx: RunContext, log: bool = False) -> list[dict]:
+    """`course_categories` に移すカテゴリ。**講座側の参照チェックにも使う。**"""
+    source = ctx.require_source()
+    rows = source.fetch_for_tenant("lesson_cate", CATEGORY_COLUMNS)
+    known = {int(r["lesson_cate_id"]) for r in rows}
+    # 共有カテゴリ（tenant_id=0）のうち、**このテナントの講座が参照しているもの**だけ
+    shared = source.fetch_joined(
+        "lesson_cate",
+        CATEGORY_COLUMNS,
+        parent="lesson",
+        on="c.lesson_cate_id = p.lesson_cate_id",
+        where="c.tenant_id = 0",
+    )
+    for row in shared:
+        if int(row["lesson_cate_id"]) not in known:
+            known.add(int(row["lesson_cate_id"]))
+            rows.append(row)
+            if log:
+                ctx.logger.info(
+                    "共有カテゴリ（tenant_id=0）を移す: %s %s",
+                    row["lesson_cate_id"],
+                    row.get("lesson_cate_name"),
+                )
+    return rows
+
+
 class CourseCategoriesStep(Step):
     """講座カテゴリを `course_categories` に移す。
 
@@ -96,27 +122,7 @@ class CourseCategoriesStep(Step):
     depends_on = ("tenant",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        source = ctx.require_source()
-        rows = source.fetch_for_tenant("lesson_cate", CATEGORY_COLUMNS)
-        known = {int(r["lesson_cate_id"]) for r in rows}
-        # 共有カテゴリ（tenant_id=0）のうち、**このテナントの講座が参照しているもの**だけ
-        shared = source.fetch_joined(
-            "lesson_cate",
-            CATEGORY_COLUMNS,
-            parent="lesson",
-            on="c.lesson_cate_id = p.lesson_cate_id",
-            where="c.tenant_id = 0",
-        )
-        for row in shared:
-            if int(row["lesson_cate_id"]) not in known:
-                known.add(int(row["lesson_cate_id"]))
-                rows.append(row)
-                ctx.logger.info(
-                    "共有カテゴリ（tenant_id=0）を移す: %s %s",
-                    row["lesson_cate_id"],
-                    row.get("lesson_cate_name"),
-                )
-        return rows
+        return _categories(ctx, log=True)
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         records: list[Record] = []
@@ -164,7 +170,23 @@ class CoursesStep(Step):
     depends_on = ("tenant", "content.course_categories", "content.proxy_instructor")
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        return ctx.require_source().fetch_for_tenant("lesson", LESSON_COLUMNS)
+        source = ctx.require_source()
+        # 共有講座（tenant_id=0）も入る（`SourceDatabase.shared_lessons`）
+        rows = source.fetch_for_tenant("lesson", LESSON_COLUMNS)
+        # **参照先の無い `lesson_cate_id` を持つ講座がある**（実測9件。1055 / 1057 / 5120 は
+        # `lesson_cate` に行が無い旧データの不整合）。`courses.category` は NULL 可なので、
+        # **分類だけ落として講座は移す**。落とすと 329 ユニット・161 学習履歴まで連鎖する
+        known = {int(r["lesson_cate_id"]) for r in _categories(ctx)}
+        for row in rows:
+            cate = row.get("lesson_cate_id")
+            if cate and int(cate) not in known:
+                ctx.logger.warning(
+                    "lesson_id=%s: lesson_cate_id=%s が lesson_cate に無い。分類なしで移す",
+                    row["lesson_id"],
+                    cate,
+                )
+                row["lesson_cate_id"] = None
+        return rows
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         tenant_id = ctx.tenant_id.value
