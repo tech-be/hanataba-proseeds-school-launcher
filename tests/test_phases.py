@@ -250,3 +250,50 @@ class PreflightRoleMapTest(unittest.TestCase):
         result = _role_map(ctx)
         self.assertTrue(result.ok)
         self.assertIn("移行しない", result.detail)
+
+
+class _SchemalessTarget(TargetDatabase):
+    """接続はあるが、追加スキーマが1つも当たっていない移行先。"""
+
+    def __init__(self) -> None:
+        super().__init__(None, dry_run=True)
+
+    @property
+    def connectionless(self) -> bool:
+        return False
+
+    def query(self, sql: str, params: tuple = ()) -> list[dict]:
+        return []
+
+
+class SchemaCheckTest(unittest.TestCase):
+    """**途中の区分から流しても、スキーマ確認は飛ばさない。**
+
+    `bootstrap` が `common.0` を完了扱いにするので、以前は migration が当たって
+    いない区分（課金など）を `--section` で流すと、確認で止まらずに Step の SQL が
+    `Unknown column` で落ちていた。
+    """
+
+    def _ctx(self, selected):
+        from migrator.phases.registry import check_schema
+
+        ctx = build_context(CONFIG, FakeSource({}), _SchemalessTarget(), logging.getLogger("test"))
+        ctx.selected = {p.key for p in selected}
+        return ctx, check_schema
+
+    def test_mid_section_run_checks_schema(self) -> None:
+        from migrator.errors import PreflightError
+
+        selected = resolve(build_sections(), [], ["billing"])
+        ctx, check_schema = self._ctx(selected)
+        with self.assertRaises(PreflightError) as caught:
+            check_schema(ctx, selected)
+        # 見るのは選んだ区分の分だけ
+        self.assertIn("ticket_types.legacy_id", str(caught.exception))
+        self.assertNotIn("enrollments", str(caught.exception))
+
+    def test_not_repeated_when_common_is_selected(self) -> None:
+        selected = resolve(build_sections(), ["common.0", "foundation.1"], [])
+        ctx, check_schema = self._ctx(selected)
+        check_schema(ctx, selected)  # common.0 が流すので、ここでは何もしない
+        self.assertEqual(ctx.results, [])

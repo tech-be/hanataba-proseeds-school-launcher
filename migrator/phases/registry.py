@@ -212,6 +212,22 @@ def bootstrap(ctx, sections: list[Section], selected: list[Phase]) -> None:
         ctx.logger.info("tenant_id = %s", ctx.tenant_id.value)
 
 
+def check_schema(ctx, selected: list[Phase]) -> None:
+    """**途中のフェーズから流すときも、追加スキーマは必ず確かめる。**
+
+    `bootstrap` は選んだフェーズより前を「完了済み」として扱うので、先頭の
+    スキーマ確認（`common.0`）も飛ばされる。そのままだと、migration が当たって
+    いない区分を流したときに**スキーマ確認で止まらず、Step の SQL が
+    `Unknown column` で落ちる**。ここで確認だけを先に通す。
+
+    確かめるのは `ctx.selected` の区分の分だけ（`SchemaCheckStep` の仕様）。
+    `common.0` を選んでいれば、フェーズとして流れるので何もしない。
+    """
+    if any(step.name == SchemaCheckStep.name for phase in selected for step in phase.steps):
+        return
+    SchemaCheckStep().run(ctx)
+
+
 def _needs_tenant_id(order: list[Phase], selected: list[Phase]) -> bool:
     """選んだフェーズが `tenant_id` を要るか。
 
