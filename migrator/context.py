@@ -31,6 +31,8 @@ class RunContext:
     completed: set[str] = field(default_factory=set)
     #: この実行で流すフェーズの識別子。**事前検査が「初回か続きか」を見分けるのに使う**
     selected: set[str] = field(default_factory=set)
+    #: 照合（`verify`）として流しているか。**書き込まず、移行先と突き合わせる**
+    verifying: bool = False
     #: `pref_master` の読み込み結果（1回だけ引く）
     _prefectures: dict[int, str] | None = None
     _countries: dict[str, str] | None = None
@@ -103,7 +105,9 @@ class RunContext:
         from .core.passwords import DEFAULT_COST, LegacyPasswordCipher, PasswordMigration
 
         cost = int((self.config.mappings.get("password") or {}).get("bcrypt_cost", DEFAULT_COST))
-        return PasswordMigration(LegacyPasswordCipher(self.config.legacy_crypt_key), cost=cost)
+        return PasswordMigration(
+            LegacyPasswordCipher(self.config.legacy_crypt_key), cost=cost, verifying=self.verifying
+        )
 
     def absent_source_tables(self) -> frozenset[str]:
         """移行元に無いと**設定で宣言された**テーブル。宣言が無ければ空。"""

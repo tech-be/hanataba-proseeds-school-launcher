@@ -155,6 +155,8 @@ class LiveLessonDetailsStep(Step):
     source_table = "live_lesson"
     target_table = "live_lessons"
     depends_on = ("content.live_lessons",)
+    # 代表日時は「実行した時点で直近の回」。開催日を過ぎるたびに変わる
+    volatile_columns = ("scheduled_at",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
         return LiveLessonsStep().extract(ctx)

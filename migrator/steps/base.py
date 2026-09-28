@@ -30,6 +30,8 @@ class Step(ABC):
     depends_on: tuple[str, ...] = ()
     #: 何をする Step かの1行説明（`plan` コマンドに出る）
     description: str = ""
+    #: **実行した時刻で値が決まる列。** 照合（`verify`）では値ではなく有無だけを見る
+    volatile_columns: tuple[str, ...] = ()
 
     def __init__(self) -> None:
         if not self.name:

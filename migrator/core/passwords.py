@@ -16,6 +16,8 @@ base64( 3DES-CBC( 平文 ) )      鍵 = substr(md5(秘密鍵), 0, 24)
 - 秘密鍵は**環境変数から**受け取る（設定ファイルに書かない）
 - 平文は**ログにも例外にも出さない。** 件数と会員 ID だけを扱う
 - 復号できなかったものは**空のまま入れない。** 件数を出して判断に上げる
+- 照合（`verify`）では再ハッシュせず、**移行先のハッシュが平文と合うか**を確かめる。
+  bcrypt はソルトが毎回変わるので、作り直した値どうしは比べられない
 """
 
 from __future__ import annotations
@@ -88,6 +90,41 @@ def rehash(plaintext: str, cost: int = DEFAULT_COST) -> str:
     return bcrypt.hashpw(plaintext.encode("utf-8"), bcrypt.gensalt(cost, prefix=b"2a")).decode()
 
 
+def matches(plaintext: str, hashed: object) -> bool:
+    """移行先のハッシュが平文と合うか。**ハッシュでない値は合わないとみなす。**"""
+    import bcrypt
+
+    if isinstance(hashed, (bytes, bytearray)):
+        hashed = hashed.decode("ascii", "ignore")
+    if not isinstance(hashed, str) or not hashed.startswith("$2"):
+        return False
+    try:
+        return bcrypt.checkpw(plaintext.encode("utf-8"), hashed.encode("ascii"))
+    except ValueError:
+        return False
+
+
+class PasswordToVerify(str):
+    """照合用の `password_hash`。**投入には使わない。**
+
+    値は目印の文字列で、平文は属性に持つ。`repr` にも `str` にも平文は出ないので、
+    差の一覧やログに紛れ込まない。
+    """
+
+    MARK = "$verify$"
+
+    def __new__(cls, plaintext: str) -> "PasswordToVerify":
+        obj = super().__new__(cls, cls.MARK)
+        obj._plaintext = plaintext
+        return obj
+
+    def __repr__(self) -> str:
+        return "PasswordToVerify(***)"
+
+    def matches(self, hashed: object) -> bool:
+        return matches(self._plaintext, hashed)
+
+
 #: bcrypt が黙って切り捨てる長さ（`libs/auth/password.go` の `PasswordMaxBytes`）
 MAX_BYTES = 72
 
@@ -98,6 +135,8 @@ class PasswordMigration:
 
     cipher: LegacyPasswordCipher
     cost: int = DEFAULT_COST
+    #: 照合（`verify`）のとき。**再ハッシュせず** `PasswordToVerify` を返す
+    verifying: bool = False
     migrated: int = 0
     #: 復号できなかった会員の旧 ID（鍵違い・壊れた値）
     undecryptable: list[int] = field(default_factory=list)
@@ -119,6 +158,8 @@ class PasswordMigration:
             self.too_long.append(user_id)
             return None
         self.migrated += 1
+        if self.verifying:
+            return PasswordToVerify(plaintext)
         return rehash(plaintext, self.cost)
 
     def summary(self) -> str:

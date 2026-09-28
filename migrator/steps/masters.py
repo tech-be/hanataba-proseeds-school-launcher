@@ -34,6 +34,8 @@ class UserRolesStep(Step):
     description = "user_roles に不足するロールを追加する（表示名と並び順も移す）"
     source_table = "role_master"
     target_table = "user_roles"
+    # 削除日は旧に無く、移行した時刻を入れている
+    volatile_columns = ("deprecated_at",)
     # tenant_id を使わない（user_roles は tenant_id を持たないグローバルマスタ）ので
     # テナントに依存しない。FK の参照先として、テナントより先に入れる
 
