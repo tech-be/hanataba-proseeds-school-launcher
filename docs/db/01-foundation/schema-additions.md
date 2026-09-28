@@ -40,6 +40,7 @@ M6  既存テーブルの変更          20260922070751_add_channel_to_notificat
 M7  グループ・属性              20260922070752_create_tenant_groups_and_attributes.sql
 M8  会員に紐づく残り            20260922070753_create_user_visibility_and_assignments.sql
 M9  認証まわり                  20260922070754_create_sso_login_windows_and_two_factor.sql
+M12 ロールを旧システムに揃える  20260928072918_align_lw2_roles_and_lesson_types.sql
 ```
 
 当て方（btoc-backend を起動していなくても当てられる）:
@@ -84,13 +85,11 @@ FK 先なので、これらを使う行より先に入れる。
 INSERT IGNORE INTO tenant_statuses (code, name_ja, is_operational, is_trial, sort_order, is_system) VALUES
     ('deleted', '削除済み', FALSE, FALSE, 40, TRUE);
 
-INSERT IGNORE INTO user_roles
-    (code, name_ja, is_admin, is_instructor, sort_order, is_system, active, deprecated_at) VALUES
-    ('system_admin',     'システム管理者', TRUE,  FALSE, 1, TRUE, TRUE,  NULL),
-    ('facility_manager', '運営管理者',     FALSE, FALSE, 3, TRUE, FALSE, CURRENT_TIMESTAMP(3)),
-    ('group_manager',    'グループ管理者', FALSE, FALSE, 4, TRUE, TRUE,  NULL),
-    ('supporter',        'サポーター',     FALSE, FALSE, 4, TRUE, FALSE, CURRENT_TIMESTAMP(3)),
-    ('company_manager',  '求人企業',       FALSE, FALSE, 6, TRUE, TRUE,  NULL);
+INSERT IGNORE INTO user_roles (code, name_ja, is_admin, is_instructor, sort_order, is_system) VALUES
+    ('system_admin',    'システム管理者', TRUE,  TRUE,  5,  TRUE),
+    ('group_manager',   'グループ管理者', FALSE, FALSE, 50, TRUE),
+    ('company_manager', '求人企業',       FALSE, FALSE, 60, TRUE),
+    ('supporter',       'サポーター',     FALSE, FALSE, 70, TRUE);
 
 INSERT IGNORE INTO auth_methods (code, name_ja, is_external, requires_password, sort_order, is_system) VALUES
     ('saml',      'SAML SSO',          TRUE,  FALSE, 60,  TRUE),
@@ -113,15 +112,8 @@ INSERT IGNORE INTO tenant_secret_kinds (code, name_ja, is_sensitive, sort_order,
 -- ただし tenant_statuses の 'deleted' だけは必ず消す（下記）。
 ```
 
-> **ロールの値は旧システムに揃える**（2026-09-28 決定）。表示名は `translate_master`
-> （`master_type='role'`, `language_code='ja'`）、並び順は `role_master.role_index` をそのまま使う。
-> **移行ツールは既にある行を上書きしない**ので、この migration の値が移行後の値になる。
-> 移行ツールの `UserRolesStep` も旧データから同じ値を作っており、`verify` で一致を確かめる。
->
-> - `system_admin` は `is_instructor = FALSE`（旧に揃える）
-> - 旧で削除済み（`del_chk = 1`）の `facility_manager`（role_id 3）と `supporter`（role_id 8）は、
->   **移行するが削除済み**（`active = FALSE`）で入れる
-> - 並び順 1〜6 は seed のロール（10〜90）より前に並ぶ。seed のロールは全テナント共通なので変えない
+> **ロールの値はこのあと M12 で旧システムに揃える。** ここで入れる並び順・`is_instructor` は
+> 当初の値で、M2 は既にマージ・適用済みのため書き換えずに残してある（→ [M12](#m12-ロールを旧システムに揃える)）。
 
 **ロールバックの注意.** `172_tenant_lesson_quiz_lookup.sql` の Down は `tenants.status` を
 `ENUM('active','suspended','trial')` に戻すため、**`deleted` の行や `deleted` のテナントが
@@ -697,3 +689,26 @@ python -m migrator run --phase common.0   # 必須が1件でも欠けていれ�
 
 今回の M3 / M5 / M7 / M8 / M9 で足した 17 表もすべて登録済み。`tenant_groups` だけは自己参照 FK が
 あるため `ORDER BY depth DESC` で消している。
+
+---
+
+## M12. ロールを旧システムに揃える
+
+**必須。** `20260928072918_align_lw2_roles_and_lesson_types.sql`（2026-09-28 決定）。
+M2 は既にマージ・適用済みで、goose は適用済みのバージョンを再実行しないため、**M2 を書き換えずに
+UPDATE で直す**。同じ migration で `lesson_types` の `discussion` / `skill_check` も足す（→ [コンテンツの追加](../02-content/schema-additions.md)）。
+
+| ロール | 表示名 | `is_instructor` | 並び順 | 状態 |
+|---|---|:--:|---:|---|
+| `system_admin` | システム管理者 | FALSE | 1 | 有効 |
+| `facility_manager` | 運営管理者 | FALSE | 3 | **削除済み**（新規に足す） |
+| `group_manager` | グループ管理者 | FALSE | 4 | 有効 |
+| `supporter` | サポーター | FALSE | 4 | **削除済み** |
+| `company_manager` | 求人企業 | FALSE | 6 | 有効 |
+
+- 表示名は旧 `translate_master`（`master_type='role'`, `language_code='ja'`）、並び順は旧 `role_master.role_index` をそのまま使う
+- **移行ツールは既にある行を上書きしない**ので、この migration の値が移行後の値になる。
+  移行ツールの `UserRolesStep` も旧データから同じ値を作っており、`verify` で一致を確かめる
+- 旧で削除済み（`del_chk = 1`）の `facility_manager`（role_id 3）と `supporter`（role_id 8）は、**移行するが削除済み**（`active = FALSE`）で入れる
+- 並び順 1〜6 は seed のロール（10〜90）より前に並ぶ。seed のロールは全テナント共通なので変えない
+- Down は M2 の値に戻し、`facility_manager` は参照が無いときだけ消す
