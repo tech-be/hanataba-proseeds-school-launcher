@@ -69,10 +69,15 @@
 | # | 対象データ | 旧 テーブル.カラム | 新 テーブル.カラム | かかる制約 | 実測 | 決めること |
 |---:|---|---|---|---|---:|---|
 | 7 | 動画の配信先 | `lecture.pmovie_token` ＋ `lecture_path.pc_path`（**どちらも空**） | `video_lessons.video_url` | **NOT NULL** | 140件 | ① 配信基盤へ投入してから移行<br>② そのまま移し後から設定（制約を外す）<br>③ 移さない |
-| 8 | 課題の登録日時 | `report.regist_date`（NULL 可） | `assignments.created_at` | **NOT NULL** | 1件 | 移さないで差し支えないか |
+| 8 | 課題の登録日時 | `report.regist_date` ＋ `update_date`（**どちらもゼロ日付**） | `assignments.created_at` | **NOT NULL** | 17件 | ① 移さない<br>② ユニットの登録日時で代替して移す（**課題17件と提出69件が戻る**） |
 | 9 | 1ユニットに複数のテスト | `test`（ユニットに複数ぶら下がれる） | `quizzes` | `UNIQUE (tenant_id, lesson_id)` | 未計測 | 2件目以降の**どれを残すか** |
 
 > **#7 は検証データでは大半が検証用の講座だった。** 本番では違う可能性がある。
+>
+> **#8 は課題だけの話で終わらない。** 課題が移らないと、その課題への提出が
+> `submissions` → `assignments` の外部キーに当たって落ちる。**検証データでは課題17件に対して
+> 提出69件・添削35件・提出ファイル5件**が連鎖する。件数の比が大きいので、
+> ①②の判断は「課題17件」ではなく**「提出69件」を基準にする**。
 
 ### 受講
 
@@ -81,7 +86,7 @@
 | 10 | 未提出の課題 | `user_learning_report.submit_date`（NULL 可） | `submissions.submitted_at` | **NOT NULL** | 13件 | ① 移さない（未提出なので実害は小さい）<br>② 提出日を作って移す（**嘘の値になるので非推奨**） |
 | 11 | 同じ開催回への重複予約 | `live_lesson_reserve`（一意制約なし） | `live_reservations` | `UNIQUE (occurrence_id, user_id)` | 4組8行 | ① キャンセルされていない最新の1行を残す<br>② 最後の1行を残す<br>③ 個別に指定する |
 | 12 | 同じユニットの進捗が複数 | `user_learning_unit`（一意制約なし） | `lesson_progress` | `UNIQUE (tenant_id, user_id, lesson_id)` | 76件 | **解決済み**（`update_date` の新しい順で1件に絞る） |
-| 13 | アンケートの回答日時 | `enquete_answer.enquete_reply_time`（NULL 可） | `survey_responses.submitted_at` | **NOT NULL** | 未計測 | 移さないで差し支えないか |
+| 13 | アンケートの回答日時 | `enquete_answer.enquete_reply_time`（NULL 可） | `survey_responses.submitted_at` | **NOT NULL** | 0件 | 移さないで差し支えないか（**検証データでは全件埋まっている**） |
 
 > **#11 は検証データではいずれも片方がキャンセル済み**だった。「キャンセルされていない最新の1行を残す」
 > で機械的に決められる可能性が高いが、**本番で両方が有効な組が出ると決め直しになる**。
@@ -128,6 +133,8 @@
 | 6 | 動画 | `lecture.unit_id` | `unit.unit_id` | 3件 | 同上 |
 | 7 | ユニットの学習状況 | `user_learning_unit.unit_id` | `unit.unit_id` | 36件 | 同上。**投入時の `lesson_progress` → `lessons` 違反の主因** |
 | 8 | 課題の提出 | `user_learning_report.report_id` | `report.report_id` | 32件 | 同上。**投入時の `submissions` → `assignments` 違反の主因** |
+| 9 | 講座の分類 | `lesson.lesson_cate_id` | `lesson_cate.lesson_cate_id` | 9講座 / 分類3種 | **解決済み**（`courses.category` は NULL 可なので、分類だけ落として講座は移す） |
+| 10 | バッジの対象講座 | `badge_item.entity_id` | `lesson.lesson_id` | 1件 | 移行元から消すか、そのまま移さないか |
 
 > **#4〜#6 は親が消えているためテナントを判定できない**（`unit` / `lesson` を辿れない）。
 > 全テナントの合計値。対象テナントぶんがいくつかは、本番ダンプでも同じく切り分けられない。
@@ -139,9 +146,13 @@
 > `attribute_lesson` のいずれも、親が別テナントの行は無い）。抽出時の join による
 > テナント絞り込みが効いていることの裏付けでもある。
 
-> **例外が1つ。** 受講権限（`payment_item_lesson_authority`）は**他テナントの講座を指す行**があり、
-> 外部キー検査で落ちる（検証データで576行）。**移してはいけないデータ**なので、
-> 移行ツールの不具合ではない（→ [受講の突き合わせ](03-enrollment/review.md#e1-受講権限)）。
+> **#9 を「移さない」にすると被害が桁違いになる。** 分類が引けないのは講座9件だが、
+> 講座を落とすとユニット329・動画258・テスト25・設問91・選択肢301・課題35、さらに
+> 学習履歴161行・受講権限3組まで連鎖する。**NULL 可の列のために行ごと落とす理由は無い**
+> ので、ここは移行ツール側で解決した（[courses.py](../../migrator/steps/content/courses.py)）。
+>
+> **参照先の無い分類（1055 / 1057 / 5120）は共有講座（`tenant_id = 0`）のもの。**
+> 旧環境でも分類なしで表示されている。
 
 ---
 

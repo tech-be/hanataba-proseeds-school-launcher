@@ -24,7 +24,7 @@
 > **新環境の制約は緩めない**（2026-09-23 決定）。旧データが入らない箇所は、
 > **制約を外すのではなく、当たった行が移らないことを受け入れる**。
 
-ツール側の定義は `migrator/steps/schema.py` の `ENROLLMENT_SCHEMA`（20件）。**この表とコードは一致させること。**
+ツール側の定義は `migrator/steps/schema.py` の `ENROLLMENT_SCHEMA`（21件）。**この表とコードは一致させること。**
 
 ---
 
@@ -37,7 +37,8 @@
 3  アンケート回答への列追加    ← survey_responses
 4  ライブ予約への列追加        ← live_reservations
 5  ライブレビュー              ← lessons / users を参照
-6  修了証・バッジへの列追加
+6  バッジの定義
+7  修了証への列追加
 ```
 
 ---
@@ -164,7 +165,7 @@ ALTER TABLE submission_feedbacks
 
 ## 3. アンケート回答への列追加
 
-**必須。** **これが無いと回答の 47% が落ちる。**
+**必須。** 中断状態（`suspended`）を移すのに要る。
 
 ```sql
 ALTER TABLE survey_responses
@@ -173,8 +174,14 @@ ALTER TABLE survey_responses
     ADD COLUMN suspended   BOOLEAN  NOT NULL DEFAULT FALSE;
 ```
 
-旧 `enquete_answer.entity_type_id` は 1=お知らせ（545件）/ 2=ユニット / 3=レポート（611件）を指すが、
-**新環境はユニットに紐づく回答しか受けられない**。
+旧 `enquete_answer.entity_type_id` は 1=お知らせ / 2=ユニット / 3=レポート を指すが、
+**新環境はユニットに紐づく回答しか受けられない**（`survey_responses.lesson_id` が
+NOT NULL ＋ FK `survey_lessons`）。`entity_type` / `entity_id` を足しても**この列だけでは
+1 と 3 は入らない**ので、いまは `entity_type = 'lesson'` 固定で type 2 だけ移している。
+
+> **1 と 3 の行き先は受け皿の設計から決め直す。** とくに type 3 は
+> **アンケートではなく課題の設問への回答**（`enquete_type_id = 3`）で、
+> アンケート側に足しても筋が通らない（→ [受講の突き合わせ E7](review.md#e7-アンケート回答)）。
 
 > **設問・ページ側（`survey_pages` ほか）はコンテンツ（2）の担当。**
 
@@ -241,33 +248,70 @@ CREATE TABLE live_lesson_reviews (
 
 ---
 
-## 6. 修了証・バッジへの列追加
+## 6. バッジの定義（A11）
+
+**必須。** **新環境にバッジの「定義」を置く表が無い。**
+
+`digital_badges` / `digital_badge_events` / ルックアップ2件はいずれも**発行側**で、
+`digital_badges` は `user_id` / `course_id` / `issued_at` がすべて NOT NULL の
+「付与された1枚」を表す。**どの講座にバッジを出すかの定義は入らない。**
+
+旧 `badge_item` は `chkBadge(tenant_id, entity_id, item_type)` で「この講座/ユニットに
+バッジが設定されているか」を判定するのに使われている（`ApiLessonModel::chkBadge`）。
+**移さないと新環境からバッジの有無を引けない。**
+
+```sql
+CREATE TABLE badge_definitions (
+    id            CHAR(26) NOT NULL PRIMARY KEY,
+    tenant_id     CHAR(26) NOT NULL,
+    legacy_id     INT NOT NULL,              -- 旧 badge_item.item_id
+    course_id     CHAR(26) NULL,             -- 旧 item_type = 'lesson'（講座）
+    lesson_id     CHAR(26) NULL,             -- 旧 item_type = 'unit'（ユニット）
+    external_badge_id INT NULL,               -- 旧 reference_item_id（外部バッジシステムの ID）
+    deprecated_at DATETIME(3) NULL,          -- 旧 del_chk = 1
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_badge_definitions_legacy (tenant_id, legacy_id),
+    -- **どちらか一方だけを指す。** 両方 NULL / 両方セットは不正
+    CONSTRAINT chk_badge_definitions_target
+        CHECK ((course_id IS NULL) <> (lesson_id IS NULL)),
+    ...
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+```
+
+> **旧 `lesson` は講座、`unit` はユニット。** 新環境では `courses` と `lessons` に分かれる。
+> **新旧で名前が入れ替わっている**ので取り違えやすい。
+
+> **`reference_item_id` は外部のバッジシステムが払い出した ID。**
+> `BadgeController:838` が `$badgeApi->putBadge()` の戻り値 `$json['ID']` を書き、
+> `BadgeItemModel:143` が `AS badge_id` で読み出している。
+> **`badge_item` を指す自己参照ではない**（実測の 771〜774 は `badge_item` に無い）ので、
+> **FK は張らず旧の整数のまま持つ**。自己参照の FK にしていた頃は4件が落ちていた。
+>
+> 同じ値を `digital_badges.external_badge_id` にも足す。**付与実績を外部から
+> 受け取るときに、どの定義のバッジかを突き合わせるキーになる。**
+
+> **付与実績は移さない。** lw2 の DB に無く、外部のバッジシステムが持つ
+> （`BadgeApi` が `/tenant/{id}/user/{id}/badges` を叩く）。
+> **新環境が旧 ID を持っていれば参照を続けられる**ので、`users.legacy_id` /
+> `tenants.legacy_id` を基盤で追加済み。
+
+## 7. 修了証への列追加
 
 **必須。**
 
 ```sql
 -- **NOT NULL は外さない**（緩めない方針）。商品単位の修了証は移らない。
 ALTER TABLE certificates
-    ADD COLUMN product_id CHAR(26) NULL;            -- 旧 payment_item（課金 K01 の移行後に埋める）
-
--- **NOT NULL は外さない**（緩めない方針）。講座以外を指すバッジは移らない。
-ALTER TABLE digital_badges
-    ADD COLUMN reference_badge_id CHAR(26) NULL,    -- 旧 badge_item.reference_item_id
-    ADD CONSTRAINT fk_digital_badges_reference FOREIGN KEY (reference_badge_id) REFERENCES digital_badges(id);
+    ADD COLUMN product_id CHAR(26) NULL;    -- 旧 payment_item（課金 4-2 の移行後に埋める）
 ```
 
-> **`product_id` に FK は張らない。** 課金（K01 商品、`payment_item` 301行）が未移行のため。移行後に埋める。
-
-> **`reference_badge_id` を足しても入れる行が無い。** 旧 `badge_item` は 61行あり、
-> **移行の原則では移す対象**。`reference_badge_id` だけ足しても入れる行が無いので、
-> **Step と合わせて作る**（→ [残作業](migration-spec.md)）。
+> **`product_id` に FK は張らない。** 課金（4-2）が未移行のため。移行後に埋める。
 
 > **`certificates.issuer_name` は NOT NULL。** 発行時点の値を凍結する列なので、
 > **移行時に必ず値を決める**（設定が NULL なら `tenants.name` を入れる、など）。
 > テナント設定側の `certificate_settings.issuer_name` は NULL 可。
 > **同じ列名で NULL 可と NOT NULL が混在しているので取り違えないこと。**
-
----
 
 ## 計画（移行では使わない）
 

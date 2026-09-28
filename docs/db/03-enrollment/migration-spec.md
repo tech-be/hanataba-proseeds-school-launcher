@@ -28,7 +28,7 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 
 | 決めたこと | 内容 | 決めた日 |
 |---|---|---|
-| **`enrollments` の母集合は購入による受講権限**（2,246組） | 学習実績（23,956組）は母集合にしない。差の 93% は無料講座で、旧環境でも権限行を持たないのが正常。**最終的に全区分を移行すれば正しい状態になる** | 2026-09-24 |
+| **`enrollments` の母集合は受講権限**（4,289組） | 学習実績（33,912組）は母集合にしない。差の大半は無料講座で、旧環境でも権限行を持たないのが正常。**最終的に全区分を移行すれば正しい状態になる** | 2026-09-24 |
 | チケットの消費履歴は移さない | キャンセルに要るのは「誰が予約したか」と「何枚使うか」だけ。**台帳の行は予約から組み立てて作る** | 2026-09-24 |
 | 欠席も消費済みとして数える | `occupies_seat = 1`。除くと台帳が0行になる | 2026-09-24 |
 | バッジは外部システムを使い続ける | 付与実績は lw2 の DB に無い（`BadgeApi` 経由）。**新環境が旧 ID を持っていれば参照を続けられる**（`users.legacy_id` / `tenants.legacy_id` を追加済み） | 2026-09-24 |
@@ -36,24 +36,27 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 ### 1-4. 本番ダンプ受領後に確認すること
 
 - **振替予約**（`live_lesson_reserve.change_reserve_id` / `base_reserve_id`）。ステージング実測0件。**あれば `live_reservations` に列を足す**
-- **受講権限の重複の実態**。ステージングは 3,684行 → 2,246組（1,438行が重複）。本番で桁が変わるなら畳み方を再検討する
+- **受講権限の重複の実態**。ステージングは 6,966行 → 4,289組（2,677行が重複）。本番で桁が変わるなら畳み方を再検討する
 - **`user_learning_unit` の重複**（実測 76件）と `suspend_data` の形式（実測 3,147件）
 
 ### 1-5. ステージングダンプでの実測（2026-09-18 取得）
 
 | 旧テーブル | 全テナント | ReCADemy | 備考 |
 |---|---:|---:|---|
-| `payment_item_lesson_authority` | 7,462 | **3,684**（2,246組） | `payment_item` 経由で絞る |
+| `payment_item_lesson_authority` | 7,462 | **6,966**（4,289組） | **`user` 経由で絞る。** `payment_item` で絞ると `item_id` が NULL の 3,282行が落ちる |
 | `payment_item_lesson_authority_log` | 121,199 | — | 移さない |
-| `user_learning_lesson` | 35,532 | **24,484**（23,956組） | 修了済 180 / 削除 4,250 |
-| `user_learning_unit` | 19,009 | **7,209** | 修了 4,895 / 未修了 2,314 / 削除 147 |
+| `user_learning_lesson` | 35,532 | **34,510**（33,912組） | 修了済 258 / 削除 7,123 |
+| `user_learning_unit` | 19,009 | **13,008** | 削除 198 |
 | `user_learning_unit_log` | 33,998 | — | 移さない |
-| `user_learning_test` | 697,444 | **251** | |
-| `user_learning_test_sub` | 10,705,972 | **2,342** | |
-| `user_learning_report` | 40,098 | **766** | |
-| `enquete_answer` | 64,883 | **2,464** | `enquete` と join して絞る |
-| `live_lesson_reserve` | 18,041 | **32** | |
-| `user_certificate` | 912 | — | |
+| `user_learning_test` | 799 | **371** | |
+| `user_learning_test_sub` | 8,462 | **4,922** | |
+| `user_learning_report` | 303 | **228** | |
+| `enquete_answer` | 388 | **232** | `enquete` と join して絞る。ユニット 80 / レポート 149 / お知らせ 3 |
+| `live_lesson_reserve` | 32 | **32** | |
+| `config_certificate` | 0 | **0** | 設定は未登録 |
+| `certificate_no` | 1 | **1** | 次番号 7。**`serial_next` に引き継ぐ** |
+| `user_certificate` | 3 | **3** | `entity_id` は `user_learning_lesson_id` |
+| `badge_item` | 62 | **61** | |
 
 ---
 
@@ -180,8 +183,6 @@ cd -
 
 - **無料講座の受講登録**（→ [確認事項](../open-questions.md)）。**3-1 の Step は権限側だけで書ける**ので着手は止まらない
 - **講義の `progress_status` の意味**（定数ファイルに定義が無い）
-- **`badge_item`（バッジの定義、61件）を入れる受け皿が無い。** `digital_badges` は
-  **付与された1枚**を表す表で `user_id` / `course_id` / `issued_at` がいずれも NOT NULL。
-  **定義を入れる場所ではない。** Step を書けば済む話ではなく、受け皿の設計が要る
-  （`lesson_exemptions` と同じ型の問題）
+- **バッジの付与実績は移せない。** lw2 の DB に無く、外部のバッジシステムが持つ
+  （`BadgeApi`）。**定義（`badge_item`）は A11 の `badge_definitions` に移す**
 - `certificates.product_id` は課金（4）の移行後に埋める

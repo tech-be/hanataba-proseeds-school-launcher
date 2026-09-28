@@ -16,9 +16,10 @@
 
 ### `payment_item_lesson_authority` → `enrollments`
 
-`payment_item_lesson_authority` (18列) → `enrollments` (11列) ／ ローカルデータ数 7,462 / C ／ ステージング実測 3,684件（2,246組）
+`payment_item_lesson_authority` (18列) → `enrollments` (11列) ／ ローカルデータ数 7,462 / C ／ ステージング実測 6,966件（4,289組）
 
-商品の購入で得た講座の受講権限。**`payment_item` 経由でテナントを絞る**（自身は `tenant_id` を持たない）。
+講座の受講権限。**`user` 経由でテナントを絞る**（自身は `tenant_id` を持たない）。
+**商品（`payment_item`）で絞ってはいけない** — `item_id` が NULL の付与が半分近くを占める（下表）。
 
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
@@ -32,16 +33,18 @@
 | `no_limit_chk` / `payment_no_limit_chk` | — | カラム | 中 | **無期限フラグ。** 実測それぞれ 110件。`expires_at` に NULL を入れるだけでは「無期限」と「未設定」が区別できない | A8 の `settings` に残す。**`expires_at` は無期限なら NULL** |
 | `remote_chk` | — | カラム | 低 | リモート PC の利用可否（実測 39件）。リモート PC は [コンテンツ C4](../02-content/review.md#c4-リモート-pc) 側 | A8 の `settings` に残す |
 | `item_id` | — | **性質** | **高** | **どの商品で買ったかが落ちる。** 新環境に商品の概念があるのは課金（4）で、`enrollments.provider_payment_id` は決済 ID であって商品ではない | A8 の `settings` に旧 `item_id` を残し、**課金（4）の移行後に紐付け直す** |
+| `item_id` **NULL** | `source` | **性質** | **高** | **商品に紐づかない権限が 3,282行（2,306組、全体の47%）ある。** `authority_key` も `application_id` も空で、購入を経ずに直接入った付与。開始日・終了日は入っており、lw2 の受講可否判定（`LessonModel::1804`）は商品を見ないので**他と同じに扱われている** | **`payment_item` を INNER JOIN で絞ると丸ごと落ちる。** テナントの絞り込みは `user` 側で行い、商品は LEFT JOIN で添える。`source` は `admin`（管理者付与）にする |
 | `application_id` | — | カラム | 低 | 申込との紐付け。実測 NULL 3,510 / 3,684（95%） | 同じく A8 の `settings` に残す |
 | `authority_key` / `edit_date` / `edit_user` | — | カラム | 低 | 付与のキーと編集者 | A8 の `settings` に残す |
-| — | `source` **NOT NULL** + FK | 性質 | 中 | 旧に対応する列が無い | **`purchase` を入れる**（商品の購入で得た権限のため）。`manual` という値は存在しない（`purchase`/`subscription`/`free`/`admin`/`marketplace`） |
+| — | `source` **NOT NULL** + FK | 性質 | 中 | 旧に対応する列が無い | **商品に紐づく行は `purchase`、紐づかない行は `admin`。** `manual` という値は存在しない（`purchase`/`subscription`/`free`/`admin`/`marketplace`）。ライブの受け皿講座も `admin` を使うので、**区別は `course_id` で行う** |
 | — | `subscription_id` / `provider_payment_id` | カラム | 低 | 決済との紐付け | **課金（4）が未移行なので NULL**。移行後に埋める |
 
 **まとめ**: 受け皿が無い列 8 / 変換規則が要る列 6 / **高 5 件**
 
-> **他テナントの講座を指す権限がある。** 参照先 190講座のうち **55講座（807行）が別テナント**のもので、
-> `payment_item.tenant_id` で絞っても残る。**移してはいけないデータ**なので外部キー検査で落ちる
-> （投入時に 576行が除外された）。移行ツールのバグではない。
+> **「他テナントの講座を指す権限 807行」は誤りだったので取り下げる。** 参照先が `tenant_id = 0` の
+> 行を別テナントのものと読み違えていた。**共有講座**（lw2 は講座をテナント間で共有できる）であって、
+> このテナントが参照している以上、移すのが正しい。いまは
+> [`SourceDatabase.shared_lessons`](../../../migrator/db/source.py) が拾う。
 
 ### `user_learning_lesson` → `enrollments`（母集合の判断）
 
@@ -207,18 +210,33 @@
 
 ### `enquete_answer` → `survey_responses` / `survey_answers` / `survey_answer_selected_options`
 
-`enquete_answer` (10列) ／ ETL段 L4 ／ ローカルデータ数 64,883 / C（**recademy 単体では 2,464件**）
+`enquete_answer` (10列) ／ ETL段 L4 ／ ローカルデータ数 388 / C（**recademy 単体では 232件**）
 
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
-| `entity_type_id` 1/2/3 | — | **性質** | **高** | **2（ユニット）だけが移行でき、1（お知らせ 545件）と 3（レポート 611件）に受け皿が無い。** 2,464件中 1,156件（47%）が落ちる | `survey_responses.entity_type` / `entity_id` を追加し、**3種類とも移す**（→ A4）。お知らせ添付（O16）は[サポート機能](../05-support/review.md)、レポート添付（O17）は D5 と紐付ける |
+| `entity_type_id` 1/2/3 | — | **性質** | **高** | **2（ユニット）だけが移行でき、1（お知らせ 3件）と 3（レポート 149件）に受け皿が無い。** 232件中 152件（66%）が落ちる。**A4 の `entity_type` / `entity_id` を足しただけでは解決しない** — `survey_responses.lesson_id` が NOT NULL ＋ FK `survey_lessons` のままなので、ユニットに紐づかない回答は入る場所が無い | 下の「3種類は別物」を参照。**いまは type 2 だけ移している**（`entity_type = 'lesson'` 固定） |
+| `enquete_type_id` = 3 | — | **性質** | **高** | **type 3 の149件はアンケートではなく「課題（レポート）の設問への回答」。** lw2 は課題の設問を `enquete` テーブルに持っており、`EnqueteModel:49` がアンケート一覧から `enquete_type_id != 3` で除外している。新環境の `submissions` は自由記述1本（`body_text` / `object_key`）で、**設問形式の課題を受ける器が無い** | 未決。**アンケート側に寄せるのではなく、課題側の受け皿を決める**（→ [確認事項](../open-questions.md)） |
 | `answer` text (**JSON**) | `numeric_value` / `text_value` + 選択肢の中間表 | 性質 | 中 | JSON を展開する規則が要る（キーは `answer_<enquete_question_id>`） | ETL設計 §5-5 の規則で展開し、設問タイプごとに入れる列を変える |
 | `enquete_reply_time` NULL可 | `survey_responses.submitted_at` **NOT NULL** | 型 | 中 | NULL 行を入れられない | **移らない**（[共通仕様 3.5.1](../../migration-spec.md#351-not-null--unique--外部キーに当たる行)）。代替値を入れるか許容するかは [移行仕様 1-1 #3](../open-questions.md) |
 | `tenant_id` が無い | `survey_responses.tenant_id` NOT NULL | 性質 | 中 | **`enquete` と join しないとテナントが決まらない。** join を落とすと全73テナントが混ざる（棚卸しの 64,883件はこの誤り） | `enquete` と join して `tenant_id = 12` で絞る（区分共通の規則） |
 | `suspended_chk` | — | カラム | 低 | 中断フラグを入れる列が無い | A4 の `survey_responses.suspended` を追加して移す |
 | — | `anonymous_allowed` / `open_at` / `close_at` / `max_length` / `description` | カラム | 低 | 旧に対応なし | 既定値に任せる。対応不要 |
 
-**まとめ**: 受け皿が無い列 1 / 変換規則が要る列 4 / **高 1 件**
+**まとめ**: 受け皿が無い列 1 / 変換規則が要る列 4 / **高 2 件**
+
+#### `entity_type_id` の3種類は別物
+
+**1つの表に3種類の回答が同居している。** 同じに扱えないので、行き先も別々になる。
+
+| 旧 `entity_type_id` | `entity_id` が指す先 | 実測 | 新の行き先 | 状態 |
+|---:|---|---:|---|---|
+| 2 ユニット | `user_learning_unit_id` | 80件 | `survey_responses`（`lesson_id` = アンケートユニット） | **移行済み**（77件。残り3件は下の注記） |
+| 3 レポート | `user_learning_report_id` | 149件 | 課題側（`submissions`）。**受け皿が無い** | 未決 |
+| 1 お知らせ | `news_user_id` | 3件 | お知らせ側（[サポート機能](../05-support/review.md) O16）。**受け皿が無い** | 未決 |
+
+> **type 2 の80件のうち3件は移らない。** 回答が記録している `enquete_id` を、
+> そのユニットがもう参照していない（定義を差し替えた／ユニット自体がアンケートではない）。
+> **旧データの不整合**なので移行ツールでは解決できない。
 
 ### なし → `survey_submission_log`
 
@@ -319,15 +337,19 @@
 
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
-| `certificate_no`（次番号） | `certificate_settings.serial_next` | 性質 | 中 | **引き継がないと採番が衝突する**（実測で連番は 709 まで到達） | 旧の次番号をそのまま `serial_next` に入れる。**cutover 後に発行して重複しないことを確認する** |
+| `certificate_no`（次番号） | `certificate_settings.serial_next` | 性質 | 中 | **引き継がないと採番が衝突する**（ステージング実測は 7。発行済みは No.4〜6） | 旧の次番号をそのまま `serial_next` に入れる。**cutover 後に発行して重複しないことを確認する** |
+
+> **`config_certificate` が空でも `certificate_no` だけあることがある。** ステージングがまさにそれで、
+> 文面・発行者名の設定は 0 行、採番カウンタだけ 1 行。**設定行が無いからと `certificate_settings` を
+> 作らないと、採番が 1 に戻って既存の証書と衝突する**ので、カウンタ側だけでも行を作る。
 
 **まとめ**: 受け皿が無い列 — / 変換規則が要る列 1 / 高 0 件
 
-### `badge_item` → なし
+### `badge_item` → `badge_definitions`
 
 `badge_item` (8列) ／ ローカルデータ数 91 / C
 
-**該当テーブルなし。** `digital_badges` は**付与された1枚**を表す表で、定義は入らない（下記）。
+**受け皿を追加する（A11）。** `digital_badges` は**付与された1枚**を表す表（`user_id` / `course_id` / `issued_at` がいずれも NOT NULL）で、**定義は入らない**。バッジは定義と付与実績で置き場所が分かれる。
 
 > **バッジの付与実績は lw2 の DB ではなく、外部のバッジシステムにある。**
 > lw2 は `library/BadgeApi.class.php` で API を叩いており（接続先は `application.ini` の
@@ -339,10 +361,10 @@
 | 旧カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|:--:|---|---|
 | **付与記録が lw2 の DB に無い** | **テーブル** | **高** | **付与実績は外部のバッジシステムにあり、lw2 の DB には存在しない。** `badge_item` は `(tenant_id, entity_id, item_type)` で**「この講座はバッジ対象か」を引くだけの定義**で（`ApiLessonModel::chkBadge`）、`user_id` を持つ表も付与行を書く処理も lw2 側には無い。**新環境の `digital_badges.user_id` NOT NULL に入れる値が、ダンプの中には無い** | **定義は移す**（`badge_item` → `digital_badges` の対象指定）。**付与実績は、バッジシステムからデータを受け取れるかを先に確認する**（[移行仕様 1-1](../open-questions.md)）。受け取れない場合にはじめて、修了実績からの再発行を検討する |
-| `item_type` / `entity_id` | **性質** | **高** | **定義を入れる受け皿が無い。** 旧は「どの講座/ユニットにバッジを出すか」の**定義**（実測 `lesson` 49 / `unit` 12）。新 `digital_badges` は `user_id` / `course_id` / `issued_at` がいずれも **NOT NULL** で、**付与された1枚**を表す。定義は1行も入らない | **受け皿の設計が要る。** バッジの定義を持つ表（例: `course_badge_policies`）を足すか、外部システムに任せて移さないかを決める。**Step を書けば済む話ではない** |
-| `reference_item_id` | カラム | 低 | バッジ同士の参照関係を入れる列が無い | A6 の `digital_badges.reference_badge_id` を追加して移す |
+| `item_type` / `entity_id` | 性質 | 中 | **ポリモーフィック参照。** 旧 `lesson` は**講座**、`unit` は**ユニット**で、新環境では `courses` と `lessons` に分かれる（実測 49 / 12）。**新旧で名前が入れ替わっているので取り違えやすい** | A11 の `badge_definitions` に `course_id` / `lesson_id` を両方持たせ、**どちらか一方だけを埋める**（CHECK で担保） |
+| `reference_item_id` | カラム | 中 | **外部のバッジシステムが払い出した ID。** `BadgeController:838` が `$badgeApi->putBadge()` の戻り値 `$json['ID']` をそのまま書いており、`BadgeItemModel:143` は `AS badge_id` で読み出している。**`badge_item` を指す自己参照ではない**（実測 4件の値 771〜774 は `badge_item` に存在しない）。**付与実績を外部から受け取るときの突き合わせキー** | A11 の `badge_definitions.external_badge_id`（INT、FK なし）に旧の値のまま移す。`digital_badges` 側にも同じ列を足す |
 
-**まとめ**: 受け皿が無い列 2 / **高 2 件**
+**まとめ**: 受け皿が無い列 1 / 変換規則が要る列 2 / **高 1 件**
 
 ### なし → `course_certificate_policies` / マスタ4件
 
@@ -356,7 +378,12 @@
 
 ### `user_certificate` → `certificates`
 
-`user_certificate` (8列) → `certificates` (20列) ／ ETL段 L7 ／ ローカルデータ数 912 / C（**recademy 実測 469件**）
+`user_certificate` (8列) → `certificates` (20列) ／ ETL段 L7 ／ ローカルデータ数 3 / C（**recademy 実測 3件**）
+
+> **`entity_id` は講座 ID ではない。** `certificate_type = 1` のとき中身は
+> **`user_learning_lesson_id`**（`LessonController:3668` の `$entityId = $userLearningLessonId`）で、
+> 講座を引くには `user_learning_lesson` をたどる。`lesson_id` と取り違えると
+> `certificates.course_id` が参照先なしになり**全件落ちる**。`certificate_type = 2` のときは `item_id`。
 
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
@@ -370,7 +397,7 @@
 
 ### なし → `certificate_events` / `digital_badges` / `digital_badge_events`
 
-**旧に対応データなし**（バッジの付与実績は**外部のバッジシステム**にあり、ダンプの範囲外。[`badge_item` → なし](#badge_item--なし) を参照）。`certificate_events` は空で始める。
+**旧に対応データなし**（バッジの付与実績は**外部のバッジシステム**にあり、ダンプの範囲外。[`badge_item` → なし](#badge_item--badge_definitions) を参照）。`certificate_events` は空で始める。
 
 ---
 
@@ -388,9 +415,10 @@
 | **A1** | `quiz_attempts.passed` BOOLEAN NULL / `duration_sec` INT NULL | `user_learning_test.test_pass` / `test_time` | ・**当時の合否を表示に使う。** 新は `score >= passing_score` で都度判定するため、**合格点を後から変えると過去の合格が不合格になる**<br>・**終了判定は `test_end_time` で見る**。`finished_chk` は lw2 が一度も書いていない（全件が「中断」になる） |
 | **A2** | `quiz_answers.is_correct` / `option_order` / `sort_no` / `pre_question_pass` | `question_pass` / `option_order` ほか | ・**当時の正誤を表示に使う**（採点基準を変えても過去が変わらないように）<br>・選択肢の表示順が無いと**回答の再現ができない** |
 | **A3** | `submission_files`（提出ファイルを行に展開）/ `submissions.score` / `settings` / `submission_feedbacks.question_comments` | `eval_disp_file_name1..5` / `eval_save_file_name1..5` / `report_question_comment` | ・**5本 → 1本に畳むと2本目以降が消える**（実測 4,963件中2件）<br>・添削が無い提出のスコアを `submissions` 側で持つ<br>・設問ごとの添削コメントの表示 |
-| **A4** | `survey_responses.entity_type` / `entity_id` / `suspended` | `enquete_answer.entity_type_id` 1/2/3 | ・**これが無いと回答の 47%（2,464件中1,156件）が落ちる**<br>・お知らせ・レポートに紐づく回答の表示経路 |
+| **A4** | `survey_responses.entity_type` / `entity_id` / `suspended` | `enquete_answer.entity_type_id` 1/2/3 ＋ `suspended_chk` | ・中断状態を移す先<br>・**これだけでは type 1/3 は移せない**（`lesson_id` が NOT NULL）。行き先は受け皿の設計から決め直す |
 | **A5** | `live_reservations.verification_key` / `settings` ／ `live_reservation_statuses` に `host_canceled` | `verification_key` / `cancel_chk` + `attendance_chk` + `stop_chk` + `recent_access_date` | ・出席確認（QR・コード入力）<br>・**`stop_chk`（開催側の中止）を `canceled` に入れない。** 受講者都合のキャンセルとして記録される<br>・**振替予約（`change_reserve_id`）は実測0件**。本番で出たら A5 に列を足す |
-| **A6** | `certificates.product_id` / `digital_badges.reference_badge_id`（＋自己参照 FK） | `payment_item` / `badge_item.reference_item_id` | ・**`product_id` に FK は張らない**（課金 4-2 が未移行）。移行後に埋める<br>・**`digital_badges` 本体の Step がまだ無い**（旧 `badge_item` は61行あり移す対象）。列だけ足しても入れる行が無い |
+| **A11** | `badge_definitions`（バッジの定義） | `badge_item`（`lesson` 49 / `unit` 12） | ・**`digital_badges` は付与1枚の表**で定義は入らない。専用の受け皿が要る<br>・旧 `lesson` は**講座**、`unit` は**ユニット**。`course_id` / `lesson_id` の**どちらか一方だけ**を埋める（CHECK で担保）<br>・**付与実績は移さない**（外部のバッジシステムが持つ）。`users.legacy_id` があるので参照は続けられる |
+| **A6** | `certificates.product_id` | `payment_item` | ・**`product_id` に FK は張らない**（課金 4-2 が未移行）。移行後に埋める<br>・課金（4-2）の移行後に埋める |
 | **A7** | `live_lesson_reviews`（ライブ単位のレビュー） | `live_lesson_review`（実測3件） | ・**`course_reviews` はコース単位**なので、受け皿 course に付けると**全ライブのレビューが1つの course に混ざる**<br>・`tenants` を RESTRICT で参照するので `cleanupDemoData` に列挙が要る |
 | **A8** | `enrollments.settings` JSON NULL | `payment_item_lesson_authority` の `cancel_chk` / `no_limit_chk` / `payment_no_limit_chk` / `remote_chk` / `item_id` / `application_id` / `authority_key` / `payment_authority_end_date` | ・**`cancel_chk` を `status` に写さない。** 名前に反してキャンセルフラグではなく、作成時に定数が入るだけで UPDATE されない<br>・**無期限（`no_limit_chk`）は `expires_at = NULL` で表す。** ただし「未設定」と区別が付かないので元の値を残す<br>・`item_id` は課金（4）の移行後に商品と紐付け直す<br>・**`TIMESTAMP` の上限を超えた期限**（2038超、151件）は無期限に寄せ、元の日付を `legacy_expires_at_beyond_timestamp` に残す |
 | **A10** | `enrollment_statuses` に `revoked`（取り消し） | `payment_item_lesson_authority.del_chk = 1`（実測 828行 → 273組） | ・**既存の3値では表せない。** `expired` は期間の満了、`refunded` は返金で、どちらも「運営が権限を取り下げた」とは別の軸<br>・`is_terminal = 1`（期限が来て戻るものではない） |

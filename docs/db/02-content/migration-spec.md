@@ -41,7 +41,7 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | 画像（問題22列・設問21列） | **移す。** L9 でファイルを移送し `image_url` に入れる（A7 / A12） |
 | 提出ファイル・配布ファイル | **5本とも移す**（`submission_files` / `assignment_materials`）。1本に畳まない（A13 / A14） |
 | ユニットの順序制御・免除 | **移す。** `lesson_preconditions` / `lesson_exemptions` を追加する（A15） |
-| アンケート回答の `entity_type` 1/3（お知らせ・レポート添付） | **移す。** `survey_responses` に `entity_type` / `entity_id` を追加する（A12）。**47%が落ちるのを避ける** |
+| アンケート回答の `entity_type` 1/3（お知らせ・レポート添付） | **受講（3）の担当。** 列（A12）だけでは移せない — `survey_responses.lesson_id` が NOT NULL なので、行き先を設計し直す（→ [受講 E7](../03-enrollment/review.md#e7-アンケート回答)） |
 
 **データの持ち方（畳まない・元の粒度を保つ）**
 
@@ -226,10 +226,15 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 **本番と違う前提**
 
 - ステージングのテナントは4件（本番は73件）。ReCADemy は `tenant_id = 10`（本番は 12）
-- **修了証が3件しかなく、重複の検証になっていない**（しかも3件とも孤児。下記）
+- **修了証が3件しかなく、重複の検証になっていない**
 - `live` / 課金まわりの参照先が未移行なので、それに依存する列は NULL で入る
 
 **件数（投入 27,834 行 / 移行しない 314 行）。dry-run と予行で一致する。**
+
+> **この表は区分を組み替える前（旧 `ondemand.1`〜`8`）の記録。** 受講（3）の Step が
+> 混ざっており、いまの区分2の実測とは一致しない。**現在の値は
+> [1-5 実測](#1-5-検証データでの実測2026-09-24-実施)と[受講の移行仕様](../03-enrollment/migration-spec.md)を見る**
+> （2026-09-26 の通し実行で 基盤 35,580 / コンテンツ 47,118 / 受講 28,806 行）。
 
 | フェーズ | Step | 抽出 | 投入 | 移行しない |
 |---|---|---:|---:|---:|
@@ -268,7 +273,7 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 
 | 事象 | 実測 | 対処 |
 |---|---:|---|
-| `assignments.created_at` に NULL | 113件中6件 | **旧 `report.regist_date` にゼロ日付がある。** `update_date` で代替する。**両方ゼロの1件は移らない** |
+| `assignments.created_at` に NULL | 250件中23件 | **旧 `report.regist_date` にゼロ日付がある。** `update_date` で代替する。**両方ゼロの17件は移らない**（→ [制約に当たって移らない行 #8](../constraint-violations.md)） |
 | `library_folders.created_at` に NULL | 1件 | ユニット添付用に**移行が作るフォルダ**。旧に対応する日時が無いので**実行時刻**を入れる |
 | （検証の穴） | — | `_not_null` が**既定値のある列を見ていなかった**。`created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP` は書かなければ DB が埋めるが、**INSERT の列に入れて NULL を渡すと既定値は効かない**。**Step が書く列は既定値があっても見る**よう直した |
 
@@ -282,12 +287,12 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | 何が | 件数 | なぜ |
 |---|---:|---|
 | `video_lessons` | 140 | `video_url` が NOT NULL。p-movie トークンも `lecture_path.pc_path` も空 |
-| `submissions` | 105 | 参照先の課題が無い。**34件は孤児**（`report` が物理削除）、**72件は別テナントの課題を指している** |
+| `submissions` | 105 | 参照先の課題が無い。**32件は孤児**（`report` が物理削除）。残りを「別テナントの課題」としていたのは**読み違い**で、実体は**共有講座（`tenant_id = 0`）の課題**と、**`created_at` に入れる値が無くて落ちた課題17件の巻き添え** |
 | `submissions` | 13 | **未提出**（`submit_date` が NULL）。`submitted_at` は NOT NULL のままにする決定どおり |
 | `submission_feedbacks` / `submission_files` | 40 | 上の巻き添え（提出が移らないので添削・ファイルも移らない） |
-| `assignments` | 1 | `regist_date` も `update_date` もゼロ日付で、`created_at` に入れる値が無い |
+| `assignments` | 17 | `regist_date` も `update_date` もゼロ日付で、`created_at` に入れる値が無い（当時は1件と記録していたが、共有講座ぶんを数えられていなかった） |
 | `survey_answers` | 7 | 回答 JSON が、そのアンケートに属さない設問を指している |
-| `certificates` / `certificate_events` | 6 | **3件とも孤児。** `entity_id` が指す講座（`lesson` 35480 / 35483 / 35484）が lw2 に存在しない |
+| `certificates` / `certificate_events` | 6 | **読み違いだった（2026-09-26 に修正済み、いまは6件とも入る）。** `entity_id` を講座 ID と解釈していたが、実体は `user_learning_lesson_id`（→ [受講 E10](../03-enrollment/review.md#user_certificate--certificates)） |
 | `quizzes` | 2 | 見出しブロック（`unit_type_id = 0`）にテストがぶら下がっている。見出しは `lessons` に入れないので巻き添え |
 
 **移せなかったもの（制約違反ではなく、受け皿が無い）**
@@ -496,7 +501,7 @@ python -m migrator verify
 | ユニット種別 | `lessons.type` の分布を出し、**全部 `text` になっていないこと**（A20 が効いているか） |
 | 点数 | `quiz_attempts` の `score` / `max_score` を数件抽出し、lw2 の画面表示と突き合わせる |
 | 合否 | `passed` が当時の `test_pass` と一致すること |
-| アンケート回答 | `entity_type` 1 / 2 / 3 がすべて入っていること（**47%が落ちていないか**） |
+| アンケート回答 | `entity_type` 2（ユニット）が入っていること。**1 / 3 は受け皿が未定**（→ [受講 E7](../03-enrollment/review.md#e7-アンケート回答)） |
 | 提出ファイル | 5本使っている提出（実測2件）でファイルが5行あること |
 | 画像 | 問題・選択肢・解説の `image_url` が埋まっていること |
 

@@ -100,7 +100,7 @@
 | `config_certificate` | `certificate_settings` | O25 修了証 | 設定 | 3 | C | 修了証の発行設定 | **`cmd/import-certificates` が既にある**ので、ツールの責任範囲を決める |
 | `certificate` | `certificate_layouts` | O25 修了証 | データ | 15 | C | 修了証のレイアウト | **任意 HTML のアップロードは新環境に無い**（実測で recademy は既定レイアウトのみ） |
 | `certificate_no` | `certificate_serial_formats` | O25 修了証 | 設定 | 10 | C | 証書番号の採番規則 | |
-| `badge_item` | **受け皿なし** | O27 バッジ | データ | 91 | C | バッジの定義（この講座/ユニットが対象か） | **付与実績は外部のバッジシステムにあり、lw2 の DB には無い**（`BadgeApi` 経由。ダンプの範囲外）。定義は移せる |
+| `badge_item` | `badge_definitions`（A11 で追加） | O27 バッジ | データ | 91 | C | バッジの定義（この講座/ユニットが対象か） | **付与実績は外部のバッジシステムにあり、lw2 の DB には無い**（`BadgeApi` 経由。ダンプの範囲外）。定義は移せる |
 | — | `course_certificate_policies` | O25 修了証 | データ | — | — | 講座ごとの発行条件 | 旧に対応なし |
 | — | `certificate_event_kinds` / `certificate_revoke_reasons` / `badge_revoke_reasons` / `digital_badge_event_kinds` | O25 / O27 | マスタ | — | — | イベント種別・失効理由 | migration で投入 |
 
