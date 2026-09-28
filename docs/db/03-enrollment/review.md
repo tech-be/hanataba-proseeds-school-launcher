@@ -304,7 +304,7 @@
 
 # チケット
 
-## E9 修了証・バッジの設定
+## E9 修了証の設定（バッジは対象外）
 
 内訳: [breakdown.md](breakdown.md) の同名の節
 
@@ -345,11 +345,13 @@
 
 **まとめ**: 受け皿が無い列 — / 変換規則が要る列 1 / 高 0 件
 
-### `badge_item` → `badge_definitions`
+### `badge_item` → なし（移行対象外）
 
 `badge_item` (8列) ／ ローカルデータ数 91 / C
 
-**受け皿を追加する（A11）。** `digital_badges` は**付与された1枚**を表す表（`user_id` / `course_id` / `issued_at` がいずれも NOT NULL）で、**定義は入らない**。バッジは定義と付与実績で置き場所が分かれる。
+> **移行対象外**（2026-09-28 決定。→ [対象外](../06-out-of-scope/breakdown.md#決定で対象外にしたもの)）。以下は判断の前に調べた内容で、**移行はしない**。
+
+`digital_badges` は**付与された1枚**を表す表（`user_id` / `course_id` / `issued_at` がいずれも NOT NULL）で、**定義は入らない**。バッジは定義と付与実績で置き場所が分かれる。
 
 > **バッジの付与実績は lw2 の DB ではなく、外部のバッジシステムにある。**
 > lw2 は `library/BadgeApi.class.php` で API を叩いており（接続先は `application.ini` の
@@ -364,7 +366,7 @@
 | `item_type` / `entity_id` | 性質 | 中 | **ポリモーフィック参照。** 旧 `lesson` は**講座**、`unit` は**ユニット**で、新環境では `courses` と `lessons` に分かれる（実測 49 / 12）。**新旧で名前が入れ替わっているので取り違えやすい** | A11 の `badge_definitions` に `course_id` / `lesson_id` を両方持たせ、**どちらか一方だけを埋める**（CHECK で担保） |
 | `reference_item_id` | カラム | 中 | **外部のバッジシステムが払い出した ID。** `BadgeController:838` が `$badgeApi->putBadge()` の戻り値 `$json['ID']` をそのまま書いており、`BadgeItemModel:143` は `AS badge_id` で読み出している。**`badge_item` を指す自己参照ではない**（実測 4件の値 771〜774 は `badge_item` に存在しない）。**付与実績を外部から受け取るときの突き合わせキー** | A11 の `badge_definitions.external_badge_id`（INT、FK なし）に旧の値のまま移す。`digital_badges` 側にも同じ列を足す |
 
-**まとめ**: 受け皿が無い列 1 / 変換規則が要る列 2 / **高 1 件**
+**まとめ**: 移行対象外（A11 は取り下げ）
 
 ### なし → `course_certificate_policies` / マスタ4件
 
@@ -372,7 +374,7 @@
 
 ---
 
-## E10 修了証・バッジの発行
+## E10 修了証の発行（バッジは対象外）
 
 内訳: [breakdown.md](breakdown.md) の同名の節
 
@@ -397,7 +399,7 @@
 
 ### なし → `certificate_events` / `digital_badges` / `digital_badge_events`
 
-**旧に対応データなし**（バッジの付与実績は**外部のバッジシステム**にあり、ダンプの範囲外。[`badge_item` → なし](#badge_item--badge_definitions) を参照）。`certificate_events` は空で始める。
+**旧に対応データなし**。`certificate_events` は空で始める。**バッジは移行対象外**なので、`digital_badges` / `digital_badge_events` も空で始める（[`badge_item` → なし](#badge_item--なし移行対象外)）。
 
 ---
 
@@ -417,7 +419,7 @@
 | **A3** | `submission_files`（提出ファイルを行に展開）/ `submissions.score` / `settings` / `submission_feedbacks.question_comments` | `eval_disp_file_name1..5` / `eval_save_file_name1..5` / `report_question_comment` | ・**5本 → 1本に畳むと2本目以降が消える**（実測 4,963件中2件）<br>・添削が無い提出のスコアを `submissions` 側で持つ<br>・設問ごとの添削コメントの表示 |
 | **A4** | `survey_responses.entity_type` / `entity_id` / `suspended` | `enquete_answer.entity_type_id` 1/2/3 ＋ `suspended_chk` | ・中断状態を移す先<br>・**これだけでは type 1/3 は移せない**（`lesson_id` が NOT NULL）。行き先は受け皿の設計から決め直す |
 | **A5** | `live_reservations.verification_key` / `settings` ／ `live_reservation_statuses` に `host_canceled` | `verification_key` / `cancel_chk` + `attendance_chk` + `stop_chk` + `recent_access_date` | ・出席確認（QR・コード入力）<br>・**`stop_chk`（開催側の中止）を `canceled` に入れない。** 受講者都合のキャンセルとして記録される<br>・**振替予約（`change_reserve_id`）は実測0件**。本番で出たら A5 に列を足す |
-| **A11** | `badge_definitions`（バッジの定義） | `badge_item`（`lesson` 49 / `unit` 12） | ・**`digital_badges` は付与1枚の表**で定義は入らない。専用の受け皿が要る<br>・旧 `lesson` は**講座**、`unit` は**ユニット**。`course_id` / `lesson_id` の**どちらか一方だけ**を埋める（CHECK で担保）<br>・**付与実績は移さない**（外部のバッジシステムが持つ）。`users.legacy_id` があるので参照は続けられる |
+| ~~**A11**~~ | ~~`badge_definitions`（バッジの定義）~~ | `badge_item` | **取り下げ**（2026-09-28 バッジは移行対象外） |
 | **A6** | `certificates.product_id` | `payment_item` | ・**`product_id` に FK は張らない**（課金 4-2 が未移行）。移行後に埋める<br>・課金（4-2）の移行後に埋める |
 | **A7** | `live_lesson_reviews`（ライブ単位のレビュー） | `live_lesson_review`（実測3件） | ・**`course_reviews` はコース単位**なので、受け皿 course に付けると**全ライブのレビューが1つの course に混ざる**<br>・`tenants` を RESTRICT で参照するので `cleanupDemoData` に列挙が要る |
 | **A8** | `enrollments.settings` JSON NULL | `payment_item_lesson_authority` の `cancel_chk` / `no_limit_chk` / `payment_no_limit_chk` / `remote_chk` / `item_id` / `application_id` / `authority_key` / `payment_authority_end_date` | ・**`cancel_chk` を `status` に写さない。** 名前に反してキャンセルフラグではなく、作成時に定数が入るだけで UPDATE されない<br>・**無期限（`no_limit_chk`）は `expires_at = NULL` で表す。** ただし「未設定」と区別が付かないので元の値を残す<br>・`item_id` は課金（4）の移行後に商品と紐付け直す<br>・**`TIMESTAMP` の上限を超えた期限**（2038超、151件）は無期限に寄せ、元の日付を `legacy_expires_at_beyond_timestamp` に残す |

@@ -24,7 +24,7 @@
 > **新環境の制約は緩めない**（2026-09-23 決定）。旧データが入らない箇所は、
 > **制約を外すのではなく、当たった行が移らないことを受け入れる**。
 
-ツール側の定義は `migrator/steps/schema.py` の `ENROLLMENT_SCHEMA`（21件）。**この表とコードは一致させること。**
+ツール側の定義は `migrator/steps/schema.py` の `ENROLLMENT_SCHEMA`（20件）。**この表とコードは一致させること。**
 
 ---
 
@@ -37,7 +37,7 @@
 3  アンケート回答への列追加    ← survey_responses
 4  ライブ予約への列追加        ← live_reservations
 5  ライブレビュー              ← lessons / users を参照
-6  バッジの定義
+6  （欠番）バッジの定義 — 取り下げ
 7  修了証への列追加
 ```
 
@@ -248,53 +248,13 @@ CREATE TABLE live_lesson_reviews (
 
 ---
 
-## 6. バッジの定義（A11）
+## 6. バッジの定義（A11）— 取り下げ
 
-**必須。** **新環境にバッジの「定義」を置く表が無い。**
+**バッジは移行対象外になった**（2026-09-28 決定。→ [対象外](../06-out-of-scope/breakdown.md#決定で対象外にしたもの)）。`badge_definitions` は
+移行ツールが書かないので、school-launcher 側で扱いを決める。`ENROLLMENT_SCHEMA` からも外した。
 
-`digital_badges` / `digital_badge_events` / ルックアップ2件はいずれも**発行側**で、
-`digital_badges` は `user_id` / `course_id` / `issued_at` がすべて NOT NULL の
-「付与された1枚」を表す。**どの講座にバッジを出すかの定義は入らない。**
-
-旧 `badge_item` は `chkBadge(tenant_id, entity_id, item_type)` で「この講座/ユニットに
-バッジが設定されているか」を判定するのに使われている（`ApiLessonModel::chkBadge`）。
-**移さないと新環境からバッジの有無を引けない。**
-
-```sql
-CREATE TABLE badge_definitions (
-    id            CHAR(26) NOT NULL PRIMARY KEY,
-    tenant_id     CHAR(26) NOT NULL,
-    legacy_id     INT NOT NULL,              -- 旧 badge_item.item_id
-    course_id     CHAR(26) NULL,             -- 旧 item_type = 'lesson'（講座）
-    lesson_id     CHAR(26) NULL,             -- 旧 item_type = 'unit'（ユニット）
-    external_badge_id INT NULL,               -- 旧 reference_item_id（外部バッジシステムの ID）
-    deprecated_at DATETIME(3) NULL,          -- 旧 del_chk = 1
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_badge_definitions_legacy (tenant_id, legacy_id),
-    -- **どちらか一方だけを指す。** 両方 NULL / 両方セットは不正
-    CONSTRAINT chk_badge_definitions_target
-        CHECK ((course_id IS NULL) <> (lesson_id IS NULL)),
-    ...
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-```
-
-> **旧 `lesson` は講座、`unit` はユニット。** 新環境では `courses` と `lessons` に分かれる。
-> **新旧で名前が入れ替わっている**ので取り違えやすい。
-
-> **`reference_item_id` は外部のバッジシステムが払い出した ID。**
-> `BadgeController:838` が `$badgeApi->putBadge()` の戻り値 `$json['ID']` を書き、
-> `BadgeItemModel:143` が `AS badge_id` で読み出している。
-> **`badge_item` を指す自己参照ではない**（実測の 771〜774 は `badge_item` に無い）ので、
-> **FK は張らず旧の整数のまま持つ**。自己参照の FK にしていた頃は4件が落ちていた。
->
-> 同じ値を `digital_badges.external_badge_id` にも足す。**付与実績を外部から
-> 受け取るときに、どの定義のバッジかを突き合わせるキーになる。**
-
-> **付与実績は移さない。** lw2 の DB に無く、外部のバッジシステムが持つ
-> （`BadgeApi` が `/tenant/{id}/user/{id}/badges` を叩く）。
-> **新環境が旧 ID を持っていれば参照を続けられる**ので、`users.legacy_id` /
-> `tenants.legacy_id` を基盤で追加済み。
+> 付与実績が lw2 の DB に無く外部のバッジシステムにあること、`badge_item.reference_item_id` が
+> 外部の ID であることなど、調べた内容は [突き合わせ](review.md#badge_item--なし移行対象外) に残してある。
 
 ## 7. 修了証への列追加
 

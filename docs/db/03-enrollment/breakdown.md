@@ -1,6 +1,8 @@
 # 受講テーブルの内訳
 
-移行計画の **3 受講**（受講権限 / 学習履歴 / テスト結果 / 課題提出 / アンケート回答 / ライブ予約 / 修了証・バッジ）。
+移行計画の **3 受講**（受講権限 / 学習履歴 / テスト結果 / 課題提出 / アンケート回答 / ライブ予約 / 修了証）。
+
+> **バッジは移行対象外**（2026-09-28 決定）。定義（`badge_item`）も付与実績も移さない（→ [対象外](../06-out-of-scope/breakdown.md#決定で対象外にしたもの)）。
 
 [データ種別対照表](../data-type-mapping.md) が分類したデータ種を、**移行計画の区分**で切り直したもの。
 移行ツールの**投入順序を決めるための一覧**として使う。新環境は実 FK を持つため、
@@ -93,22 +95,22 @@
 
 ---
 
-## E9 修了証・バッジの設定
+## E9 修了証の設定（バッジは対象外）
 
 | 旧テーブル | 新テーブル | データ種 | lw2区分 | ローカルデータ数 | A·B·C | 説明 | 移行の注意 |
 |---|---|---|---|---:|:--:|---|---|
 | `config_certificate` | `certificate_settings` | O25 修了証 | 設定 | 3 | C | 修了証の発行設定 | **`cmd/import-certificates` が既にある**ので、ツールの責任範囲を決める |
 | `certificate` | `certificate_layouts` | O25 修了証 | データ | 15 | C | 修了証のレイアウト | **任意 HTML のアップロードは新環境に無い**（実測で recademy は既定レイアウトのみ） |
 | `certificate_no` | `certificate_serial_formats` | O25 修了証 | 設定 | 10 | C | 証書番号の採番規則 | |
-| `badge_item` | `badge_definitions`（A11 で追加） | O27 バッジ | データ | 91 | C | バッジの定義（この講座/ユニットが対象か） | **付与実績は外部のバッジシステムにあり、lw2 の DB には無い**（`BadgeApi` 経由。ダンプの範囲外）。定義は移せる |
+| `badge_item` | — | O27 バッジ | データ | 91 | C | バッジの定義（この講座/ユニットが対象か） | **移行対象外**（2026-09-28 決定。→ [対象外](../06-out-of-scope/breakdown.md#決定で対象外にしたもの)） |
 | — | `course_certificate_policies` | O25 修了証 | データ | — | — | 講座ごとの発行条件 | 旧に対応なし |
 | — | `certificate_event_kinds` / `certificate_revoke_reasons` / `badge_revoke_reasons` / `digital_badge_event_kinds` | O25 / O27 | マスタ | — | — | イベント種別・失効理由 | migration で投入 |
 
-## E10 修了証・バッジの発行
+## E10 修了証の発行（バッジは対象外）
 
 | 旧テーブル | 新テーブル | データ種 | lw2区分 | ローカルデータ数 | A·B·C | 説明 | 移行の注意 |
 |---|---|---|---|---:|:--:|---|---|
 | `user_certificate` | `certificates` | O25 修了証 | データ | 912 | C | 発行済み修了証 | **`cmd/import-certificates` が既存**。ツールと役割が重複しないよう決める |
-| — | `certificate_events` / `digital_badges` / `digital_badge_events` | O25 / O27 | データ / イベント | — | — | 修了証のイベント、バッジの付与 | **バッジの付与行は移行元が存在しない** |
+| — | `certificate_events` / `digital_badges` / `digital_badge_events` | O25 / O27 | データ / イベント | — | — | 修了証のイベント、バッジの付与 | **バッジは移行対象外**。`digital_badges` / `digital_badge_events` は空で始める |
 
 ---

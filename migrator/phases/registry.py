@@ -124,7 +124,7 @@ def build_sections() -> list[Section]:
                 # 予約はチケット定義（billing.1）のあと。台帳が予約を参照する
                 Phase(6, "ライブ予約", "予約とライブレビューを移す",
                       steps=bl_tickets.reservations_steps() + bl_extras.reviews()),
-                Phase(7, "修了証・バッジ", "修了証の設定と発行済みの証書を移す",
+                Phase(7, "修了証", "修了証の設定と発行済みの証書を移す",
                       steps=en_certificates.build()),
             ],
         ),

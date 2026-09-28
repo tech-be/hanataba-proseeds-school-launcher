@@ -180,8 +180,6 @@ ENROLLMENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
     ("survey_responses", "entity_type"),
     ("survey_responses", "entity_id"),
     ("survey_responses", "suspended"),
-    # バッジの定義（付与実績は外部システム）
-    ("badge_definitions", None),
     # ライブ予約
     ("live_reservations", "verification_key"),
     ("live_reservations", "settings"),

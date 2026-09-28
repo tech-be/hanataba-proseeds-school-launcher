@@ -89,8 +89,6 @@ class SourceDatabase:
               JOIN payment_item p ON p.item_id = a.item_id WHERE p.tenant_id = %s
             UNION SELECT ul.lesson_id FROM user_learning_lesson ul
               JOIN user u ON u.user_id = ul.user_id WHERE u.tenant_id = %s
-            UNION SELECT b.entity_id FROM badge_item b
-             WHERE b.tenant_id = %s AND b.item_type = 'lesson'
             UNION SELECT al.lesson_id FROM attribute_lesson al
               JOIN attribute at ON at.attribute_id = al.attribute_id WHERE at.tenant_id = %s
             UNION SELECT pil.lesson_id FROM payment_item_lesson pil
@@ -103,7 +101,9 @@ class SourceDatabase:
         """このテナントが参照している**共有講座**（`lesson.tenant_id = 0`）の旧 ID。
 
         **lw2 は講座をテナント間で共有できる**（実測161件）。このテナントの会員が
-        受講権限・学習実績・バッジ・属性の必須講座・商品で参照している分だけ移す。
+        受講権限・学習実績・属性の必須講座・商品で参照している分だけ移す。
+        **バッジ（`badge_item`）は経路に入れない。** 移行対象外なので、バッジからしか
+        参照されていない共有講座を移す理由が無い（ステージング実測では該当 0 件）。
 
         **拾わないと連鎖して落ちる。** 実測で受講権限807行・バッジ定義27件が
         外部キー違反になっていた。当初これを「他テナントのデータなので弾いて正しい」と
@@ -112,7 +112,7 @@ class SourceDatabase:
         **1回だけ引いて覚える。** `fetch_joined` が毎回呼ぶため。
         """
         if self._shared_lessons is None:
-            rows = self.fetch("lesson", self._SHARED_LESSON_SQL, (self._tenant_id,) * 5)
+            rows = self.fetch("lesson", self._SHARED_LESSON_SQL, (self._tenant_id,) * 4)
             self._shared_lessons = frozenset(int(r["lid"]) for r in rows)
         return self._shared_lessons
 

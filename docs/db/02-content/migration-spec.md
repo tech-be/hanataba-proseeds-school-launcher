@@ -64,7 +64,7 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | **新環境の制約を緩めない** | **2026-09-23 決定。** 旧データが入らない箇所でも `NOT NULL` / `UNIQUE` を外さない。帰結として**移らないデータ**がある（下の3行） |
 | 未提出の課題 | **移らない。** `submissions.submitted_at` は NOT NULL のまま（A21 から NULL 可化を取り下げ）。**「誰が提出していないか」は新環境に残らない** |
 | 商品単位の修了証 | **移らない。** `certificates.course_id` は NOT NULL のまま（A16 から NULL 可化を取り下げ）。旧 `certificate_type=2` が対象（ステージング0件） |
-| 講座以外を指すバッジ | **移らない。** `digital_badges.course_id` は NOT NULL のまま（同上）。旧 `badge_item.item_type='unit'` が対象（recademy 12件） |
+| バッジ（定義・付与実績とも） | **移さない。** 2026-09-28 に移行対象外と決定（→ [対象外](../06-out-of-scope/breakdown.md#決定で対象外にしたもの)） |
 | 1ユニットに複数のテスト | **2件目以降は移らない。** `quizzes` の `UNIQUE (tenant_id, lesson_id)` は外さない |
 | migration の実装 | **school-launcher 側で行う。** [マイグレーション対象](schema-additions.md)は当てる内容と順序を示すもので、ファイルの作成・適用は school-launcher のリポジトリの作業 |
 | 当たった行の処理 | **移さず `out/not-migrated.csv` に出し、暫定対応で直してから再実行する。** **どこが当たるか**は [確認事項](../open-questions.md)の確認事項に挙げる |
@@ -86,7 +86,6 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | 修了証の通し番号（`certificates.serial_text` が NOT NULL） | **仮データを入れる。** 旧 `certificate_no` を文字列にして入れる（書式定義は後から適用する） |
 | 通し番号の重複（`uk_cert_tenant_serial`） | **仮データを入れる。** 重複した2件目以降に**未使用の番号を振り直す**。振り直した対象を記録する |
 | 修了証の重複（`uk_cert_tenant_user_course`） | **移行しない。** 同じ会員・同じ講座に複数ある場合、**その組はどれも移さない**（`(tenant_id, user_id, course_id)` が UNIQUE で、仮データでは一意にできない）。件数と対象を記録し、**あとで運営が選べるようにする** |
-| バッジの付与実績 | **移行する。** 外部のバッジシステムからデータを受け取る（`BadgeApi` 経由。**ダンプの範囲外なので別途提供が要る**） |
 
 **実行の段取り**
 
@@ -172,7 +171,6 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 
 | 確認 | 効く先 |
 |---|---|
-| `badge_item` で `item_type` が講座以外を指す行の件数 | そのバッジは移らない（recademy は `unit` 12件） |
 | 1ユニットに複数のテストを持つ件数（`test.unit_id` の重複） | 2件目以降のテストは移らない |
 | `report_answer.submit_date` が NULL の件数 | その未提出データは移らない |
 
@@ -185,7 +183,6 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | `enquete_question.question_text` に500文字超があるか | `survey_questions.prompt` |
 | `question.selection1..20` に1000文字超があるか | `quiz_options.body` |
 | `drive.drive_name` に200文字超があるか | `library_folders.name` |
-| `badge_item.item_type` が講座以外を指す行の有無 | `digital_badges.course_id` は NOT NULL |
 | `lesson_attached_file` 3テーブルが0行であること | 移行するデータが無いことの確認 |
 | `lecture_path_test` の中身と用途 | 検証用なら移行しない |
 | **`unit.detail` に HTML が入っていないか**（同梱ダンプでは0件） | 入っていればサニタイズ方針を決める |
@@ -446,7 +443,7 @@ python -m migrator verify
 | 重複 | 1ユニットあたりの `test` / `lecture` 件数、複数ユニットから参照される `enquete` | 0件でなければ PK / UNIQUE を見直す |
 | 桁溢れ | `lesson_cate_name`(50/128) / `question.selection*`(1000) / `enquete_question.question_text`(500) / `drive_name`(200) | **超過があれば列を広げる**（切り捨てない） |
 | 文字コード | `test` 系のテキスト列 | **cp932 混入の疑いがある。** 検出したら人が見る |
-| コード値の網羅 | `unit_type_id` / `question_type_id` / `enquete_question.question_type` / `badge_item.item_type` | 対応表に無い値があれば停止する |
+| コード値の網羅 | `unit_type_id` / `question_type_id` / `enquete_question.question_type` | 対応表に無い値があれば停止する |
 | 件数 | `lesson_attached_file` 3件が0行か | 0行なら実装は通すだけ |
 
 ### 3.2 変換（transform）
@@ -774,7 +771,7 @@ python -m migrator verify
 | 項目 | 状態 |
 |---|---|
 | 未決13件 | 1-1 の確認事項。**4・5・6（点数・単位・回答形式）は lw2 の実装を読めば閉じる** |
-| バッジの付与実績 | **lw2 の DB に無い**（外部のバッジシステムが保持）。**ダンプの範囲外**のため、データを受け取れるかを確認中（[確認事項](../open-questions.md)）。対象外と確定したわけではない |
+| バッジ（定義・付与実績とも） | **移行対象外**（2026-09-28 決定。→ [対象外](../06-out-of-scope/breakdown.md#決定で対象外にしたもの)） |
 | `cmd/import-certificates` との役割分担 | 修了証を二重投入しないための切り分け |
 
 ---

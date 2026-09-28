@@ -38,6 +38,11 @@ class ExcludedTableTest(unittest.TestCase):
             with self.assertRaises(ExcludedTableError):
                 guards.check_excluded_tables(table)
 
+    def test_badge_is_out_of_scope(self) -> None:
+        """バッジは移行対象外（2026-09-28 決定）。定義も読まない。"""
+        with self.assertRaises(ExcludedTableError):
+            guards.check_excluded_tables("badge_item")
+
     def test_named_log_but_not_a_log(self) -> None:
         """`user_login_chk_log` は名前が _log でも「有効期間の変更履歴」なので移行する。"""
         guards.check_excluded_tables("user_login_chk_log")
