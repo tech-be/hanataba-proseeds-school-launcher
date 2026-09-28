@@ -309,6 +309,58 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class BadgeDefinitionsTest(unittest.TestCase):
+    """**バッジは定義と付与実績で置き場所が違う。**
+
+    定義は lw2 の `badge_item` にあるが、付与実績は外部のバッジシステムにあり
+    lw2 の DB に無い。`digital_badges`（付与1枚）に定義は入らない。
+    """
+
+    def _records(self, rows):
+        ctx = make_ctx()
+        return en_certificates.BadgeDefinitionsStep().transform(ctx, rows)
+
+    def _row(self, **over):
+        row = {"item_id": 1, "item_type": "lesson", "entity_id": 2506,
+               "reference_item_id": None, "update_date": None, "del_chk": 0}
+        row.update(over)
+        return row
+
+    def test_lesson_goes_to_courses(self) -> None:
+        """**旧 `lesson` は講座。** 新環境の `lessons`（ユニット）ではない。"""
+        ctx = make_ctx()
+        [rec] = en_certificates.BadgeDefinitionsStep().transform(ctx, [self._row(item_type="lesson")])
+        self.assertEqual(rec.values["course_id"], ctx.ulid.for_row("lesson", 2506))
+        self.assertIsNone(rec.values["lesson_id"])
+
+    def test_unit_goes_to_lessons(self) -> None:
+        ctx = make_ctx()
+        [rec] = en_certificates.BadgeDefinitionsStep().transform(ctx, [self._row(item_type="unit")])
+        self.assertEqual(rec.values["lesson_id"], ctx.ulid.for_row("unit", 2506))
+        self.assertIsNone(rec.values["course_id"])
+
+    def test_reference_is_the_external_badge_id(self) -> None:
+        """`reference_item_id` は**外部のバッジシステムの ID**。自己参照ではない。
+
+        `BadgeController:838` が `putBadge()` の戻り値 `$json['ID']` を書いている。
+        ULID に読み替えると、**参照先の無い外部キーになって行ごと落ちる**。
+        """
+        ctx = make_ctx()
+        [rec] = en_certificates.BadgeDefinitionsStep().transform(ctx, [self._row(reference_item_id=771)])
+        self.assertEqual(rec.values["external_badge_id"], 771)
+
+    def test_unknown_item_type_is_skipped(self) -> None:
+        """**対応表に無い種別は黙って講座に倒さない。** 警告して移さない。"""
+        self.assertEqual(self._records([self._row(item_type="product")]), [])
+
+    def test_exactly_one_target_is_set(self) -> None:
+        """`chk_badge_definitions_target` が「どちらか一方」を要求する。"""
+        for kind in ("lesson", "unit"):
+            [rec] = self._records([self._row(item_type=kind)])
+            both = (rec.values["course_id"] is None) == (rec.values["lesson_id"] is None)
+            self.assertFalse(both, f"{kind}: 片方だけが入るべき")
+
+
 class CertificateSettingsTest(unittest.TestCase):
     """修了証のテナント設定。**採番カウンタは別テーブルにある。**"""
 
