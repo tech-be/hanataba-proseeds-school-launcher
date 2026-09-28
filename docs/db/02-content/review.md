@@ -596,7 +596,7 @@
 |---|---|---|---|
 | **A4** | `lessons.open_at` / `close_at` DATETIME(3) NULL、`close_after_days` INT NULL、`drip_delay_basis` VARCHAR(16) NOT NULL DEFAULT 'enrollment'、`complete_message` / `search_keyword` TEXT NULL、`duration_min` INT NULL、`settings` JSON NULL | `unit.open_datetime` / `close_datetime` / `close_day_from_lesson_start_date` / `open_day` / `payment_open_day` ほか | ・**絶対日時の開閉判定**（新は相対日数しか見ていない）<br>・**`drip_delay_basis` を見る**。受講開始起点と決済起点を1列に畳むと起点が消える<br>・修了時メッセージの表示、検索キーワードでの絞り込み、想定学習時間の表示 |
 | **A5** | `video_lessons.complete_type` VARCHAR(32) NULL / `skip_prevention` BOOLEAN NOT NULL DEFAULT FALSE / `settings` JSON NULL | `lecture_complete_type` / `pmovie_complete_type` / `skip_prevention_setting` | ・**「どこまで見たら修了か」の判定**。無いと移行後に修了状態がずれる<br>・早送り禁止の再生制御（資格・研修系の要件だった場合の後退を防ぐ） |
-| **A20** | `lesson_types` に `quiz` / `assignment` / `document` | `unit_type_id` 2 / 4 / 6 | ・**これが無いとテスト・課題・資料が全部 `text` に畳まれる**<br>・種別ごとの受講画面の出し分け<br>・**`discussion`（7）/ `skill_check`（8）は追加していない** — 移行ツールが該当ユニットを移していないため（→ [対象外 B](#b-方針として移行しないもの)） |
+| **A20** | `lesson_types` に `quiz` / `assignment` / `document` / `discussion` / `skill_check` | `unit_type_id` 2 / 4 / 6 / 7 / 8 | ・**これが無いとテスト・課題・資料が全部 `text` に畳まれる**<br>・種別ごとの受講画面の出し分け<br>・**`discussion`（7）/ `skill_check`（8）も足す**（2026-09-28 決定）。ユニットは移し、中身（投稿・診断結果）はこの区分の範囲外 |
 
 ### C3 受講制御
 
@@ -659,5 +659,4 @@
 | 対象 | 理由 |
 |---|---|
 | `live_lesson_preview` / `live_lesson_date_preview` 全体 | **編集中の内容を保存する UI の一時データ。** 画面を開き直せば作り直される |
-| `unit_type_id` が 7（ディスカッション）/ 8（スキル診断）のユニット | **本体の機能が新環境に無い。** ユニットだけ移しても開けない。`lesson_types` にも値を追加していない（機能を作ると決まった時点で、値とユニットをまとめて足す） |
 | `facility` テーブル全体 | **集合研修（X01、対象外）のテーブル。** 実測3件はすべて施設「ご自身のパソコン」で住所・TEL・URL が空。施設名と説明は A22 の `live_lessons.settings` に文字列で残す |

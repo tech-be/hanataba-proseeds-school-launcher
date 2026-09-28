@@ -149,10 +149,13 @@ def email_kinds() -> LookupValueStep:
         values=[
             {"code": code, "name_ja": label, "sort_order": order, "is_system": True}
             for code, label, order in (
-                ("announcement", "アナウンス・お知らせ", 200),
-                ("scout", "スカウト", 210),
-                ("footprint", "足あと", 220),
-                ("bbs_comment", "掲示板コメント", 230),
+                # **300 番台。** 200〜230 は既存の enrollment_confirm / payment_receipt /
+                # lesson_reminder / quiz_result が使っている（school-launcher の
+                # `20260922070747_add_lw2_lookup_values.sql` と同じ値にする）
+                ("announcement", "アナウンス・お知らせ", 300),
+                ("scout", "スカウト", 310),
+                ("footprint", "足あと", 320),
+                ("bbs_comment", "掲示板コメント", 330),
             )
         ],
     )

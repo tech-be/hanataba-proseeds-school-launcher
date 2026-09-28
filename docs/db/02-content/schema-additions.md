@@ -66,8 +66,8 @@ FK の参照先を先に作る。**1本のファイルの中で、この順に�
 | 表 | 足す値 | 無いとどうなるか |
 |---|---|---|
 | `content_statuses` | `deleted` | 削除済みの講座・ユニットが `archived` に畳まれ、**運営が意図して非公開にしたものと区別できなくなる** |
-| `lesson_types` | `quiz` / `assignment` / `document` | **テスト・課題・資料が全部 `text` に畳まれる** |
-| `quiz_question_types` | `free_text` | 自由記述設問が入らない |
+| `lesson_types` | `quiz` / `assignment` / `document`（講座資料）/ `discussion` / `skill_check` | **テスト・課題・資料が全部 `text` に畳まれる**。ディスカッション・スキル診断のユニットが入らない |
+| `quiz_question_types` | `free_text`（記述式） | 記述式の設問が入らない。**`text_free` ではない**（設問の変換が `free_text` を書く） |
 | `survey_question_kinds` | `file_upload` | ファイル添付設問が入らない |
 
 `sort_order` は既存と重ならない値にしてある（`lesson_types` は video(10)/live(20)/text(30)/survey(40) が

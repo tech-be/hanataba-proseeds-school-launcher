@@ -84,11 +84,13 @@ FK 先なので、これらを使う行より先に入れる。
 INSERT IGNORE INTO tenant_statuses (code, name_ja, is_operational, is_trial, sort_order, is_system) VALUES
     ('deleted', '削除済み', FALSE, FALSE, 40, TRUE);
 
-INSERT IGNORE INTO user_roles (code, name_ja, is_admin, is_instructor, sort_order, is_system) VALUES
-    ('system_admin',    'システム管理者', TRUE,  TRUE,  5,  TRUE),
-    ('group_manager',   'グループ管理者', FALSE, FALSE, 50, TRUE),
-    ('company_manager', '求人企業',       FALSE, FALSE, 60, TRUE),
-    ('supporter',       'サポーター',     FALSE, FALSE, 70, TRUE);
+INSERT IGNORE INTO user_roles
+    (code, name_ja, is_admin, is_instructor, sort_order, is_system, active, deprecated_at) VALUES
+    ('system_admin',     'システム管理者', TRUE,  FALSE, 1, TRUE, TRUE,  NULL),
+    ('facility_manager', '運営管理者',     FALSE, FALSE, 3, TRUE, FALSE, CURRENT_TIMESTAMP(3)),
+    ('group_manager',    'グループ管理者', FALSE, FALSE, 4, TRUE, TRUE,  NULL),
+    ('supporter',        'サポーター',     FALSE, FALSE, 4, TRUE, FALSE, CURRENT_TIMESTAMP(3)),
+    ('company_manager',  '求人企業',       FALSE, FALSE, 6, TRUE, TRUE,  NULL);
 
 INSERT IGNORE INTO auth_methods (code, name_ja, is_external, requires_password, sort_order, is_system) VALUES
     ('saml',      'SAML SSO',          TRUE,  FALSE, 60,  TRUE),
@@ -111,12 +113,15 @@ INSERT IGNORE INTO tenant_secret_kinds (code, name_ja, is_sensitive, sort_order,
 -- ただし tenant_statuses の 'deleted' だけは必ず消す（下記）。
 ```
 
-> **`name_ja` と `sort_order` は移行時に上書きする。** 旧 `role_master.role_index` が並び順、
-> 表示名は `translate_master`（`master_type='role'`, `language_code='ja'`）が持っている。
-> ここに入れるのは、Step が走る前に FK を通すための暫定値。
+> **ロールの値は旧システムに揃える**（2026-09-28 決定）。表示名は `translate_master`
+> （`master_type='role'`, `language_code='ja'`）、並び順は `role_master.role_index` をそのまま使う。
+> **移行ツールは既にある行を上書きしない**ので、この migration の値が移行後の値になる。
+> 移行ツールの `UserRolesStep` も旧データから同じ値を作っており、`verify` で一致を確かめる。
 >
-> **ロールの `code` は運営の対応表しだい**で変わりうる（`role_id` 3 と 8 が未確認）。
-> 対応表を受け取ったらこの INSERT と `config.yaml` の両方を直す。
+> - `system_admin` は `is_instructor = FALSE`（旧に揃える）
+> - 旧で削除済み（`del_chk = 1`）の `facility_manager`（role_id 3）と `supporter`（role_id 8）は、
+>   **移行するが削除済み**（`active = FALSE`）で入れる
+> - 並び順 1〜6 は seed のロール（10〜90）より前に並ぶ。seed のロールは全テナント共通なので変えない
 
 **ロールバックの注意.** `172_tenant_lesson_quiz_lookup.sql` の Down は `tenants.status` を
 `ENUM('active','suspended','trial')` に戻すため、**`deleted` の行や `deleted` のテナントが
@@ -129,7 +134,7 @@ INSERT IGNORE INTO tenant_secret_kinds (code, name_ja, is_sensitive, sort_order,
 | `auth_methods` / `email_kinds` / `tenant_secret_kinds` の `is_system` の値を補った | 案は列 4 個に対し値 3 個で、`Column count doesn't match` で落ちる |
 | `auth_methods` に `is_external` / `requires_password` を指定 | 実表にある NOT NULL 列。既定のままだと SAML や SNS が「外部 IdP でない」ことになる |
 | `email_kinds` に `user_optional = TRUE` を指定 | 実表にある NOT NULL 列。既定 FALSE だと受講者が受信を止められない種別になる |
-| `email_kinds` の `sort_order` を 200/210/220/230 → **300/310/320/330** | 既存の `enrollment_confirm`(200) / `payment_receipt`(210) / `lesson_reminder`(220) / `quiz_result`(230) と重複し、画面の並びが不定になる |
+| `email_kinds` の `sort_order` を 200/210/220/230 → **300/310/320/330** | 既存の `enrollment_confirm`(200) / `payment_receipt`(210) / `lesson_reminder`(220) / `quiz_result`(230) と重複し、画面の並びが不定になる（移行ツールの値も 300 番台に揃えた） |
 | `INSERT` → `INSERT IGNORE`、Down を `NOT EXISTS` 付きに | 部分適用・再適用で止まらないようにする（school-launcher の既存 migration と同じ手筋） |
 
 ---
