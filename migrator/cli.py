@@ -24,7 +24,7 @@ from .db.target import TargetDatabase
 from .errors import MigrationError
 from .logging_setup import setup
 from .overrides import Overrides
-from .phases.registry import bootstrap, build_sections, resolve_tenant_id
+from .phases.registry import bootstrap, build_sections, check_schema, resolve_tenant_id
 from .phases.selection import resolve
 from .validation import postcheck, preflight, reconcile
 
@@ -118,6 +118,8 @@ def main(argv: list[str] | None = None) -> int:
         # 途中のフェーズから始める場合は、tenant_id と完了印をここで用意する
         bootstrap(ctx, sections, selected)
         ctx.selected = {phase.key for phase in selected}
+        # 途中から流しても、選んだ区分の追加スキーマは先に確かめる
+        check_schema(ctx, selected)
 
         if args.command == "verify":
             return _verify(ctx, sections, selected)
