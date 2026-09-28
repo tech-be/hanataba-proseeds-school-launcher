@@ -172,9 +172,10 @@ cd -
 
 ### 3.5 検証
 
-- `verify` が OK になること
+- `verify --section enrollment` が OK になること。**移行元から作り直した行と全列で突き合わせる**ので、
+  決定論 ULID の照合（`enrollments` は畳んだ組）もここに含まれる
 - 再実行で 0 行（冪等）
-- **決定論 ULID を旧DBから再計算して照合**する。`enrollments` は畳んだ組が対象
+- `enrollments.status` の期限切れ判定は実行時刻に依存する。**`run` の直後に `verify` を流す**
 - `out/not-migrated.csv` の件数と理由が、1-1 で決めた内容と矛盾しないこと
 
 ---

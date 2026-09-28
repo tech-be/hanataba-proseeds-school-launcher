@@ -101,7 +101,7 @@ python -m migrator doctor    # 接続・対象テナント・追加スキーマ�
 python -m migrator plan        # 実行計画を出す（DB 接続なし）
 python -m migrator doctor      # 接続と前提を確認する（書き込みなし）
 python -m migrator preflight   # 事前検査だけ通す
-python -m migrator verify      # 投入後の検証だけ通す
+python -m migrator verify      # 投入後の検証（移行元から作り直して移行先と照合する。書き込みなし）
 python -m migrator run         # 移行を実行する
 ```
 
@@ -225,7 +225,30 @@ DB ドキュメントは **1区分 = 1ディレクトリ**で、その中に「�
 4. `out/not-migrated.csv` を見て、[暫定対応](#暫定対応fixups)で直す
 5. 旧環境・新環境のバックアップを取得する
 6. **フェーズごとに**投入する（`run --phase foundation.1` → `.2` → …）。区切る単位でコミットと検証が入る
-7. `verify` で検証する
+7. `verify` で検証する（投入と同じ `--section` / `--phase` を付ける）
+
+## 投入後の照合（verify）
+
+`run` の再実行は自然キーが既にある行を飛ばすだけで、**値までは見ません**。
+古いツールで入れた行に誤りが残っていても、件数は合い、再実行も 0 行で終わります。
+`verify` はそれを拾うために、**移行元から全 Step を作り直し（書き込みなし）、移行先の行と1行ずつ突き合わせます。**
+
+```bash
+python -m migrator verify --section foundation --section content --section enrollment
+```
+
+| 見るもの | 内容 |
+| --- | --- |
+| 行が無い | 変換結果にあるのに、移行先に自然キーが一致する行が無い |
+| 値が違う | 自然キーは一致するが列の値が違う。**`id` も比べる**ので決定論 ULID の照合を兼ねる |
+| 移行先にだけある | 対象テナントの行なのに、変換結果のどれにも当たらない（そのテーブルに書く Step をすべて流したときだけ数える） |
+| パスワード | bcrypt はソルトが毎回変わるので、**旧パスワードを復号した平文と移行先のハッシュを `checkpw` で照らす**。平文は一覧にもログにも出さない |
+
+- 差の一覧は `out/verify/differences.csv`。差が1件でもあれば終了コード 1
+- 制約に当たって移さない行は照合の対象外（`run` と同じ判定）。一覧は `out/verify/not-migrated.csv` に出し、`run` の作業リストは上書きしない
+- **実行した時刻で値が決まる列**（`live_lessons.scheduled_at` など）は `Step.volatile_columns` に書き、有無だけを見る
+- 期限切れの判定（`enrollments.status`）も実行時刻に依存する。**`run` の直後に流す**こと。日を置くと、その間に期限を迎えた行が差に出る
+- テナント・`platform_admin`・メール重複の事後検証も続けて通す
 
 ## 暫定対応（fixups）
 
