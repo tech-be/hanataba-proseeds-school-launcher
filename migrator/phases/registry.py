@@ -27,6 +27,8 @@ from __future__ import annotations
 from ..errors import DependencyError, MigrationError
 from ..steps import auth_config, masters, org, tenant_config, user_related, users
 from ..steps.billing import extras as bl_extras
+from ..steps.billing import payments as bl_payments
+from ..steps.billing import receipts as bl_receipts
 from ..steps.billing import tickets as bl_tickets
 from ..steps.content import assignments as ct_assignments
 from ..steps.content import courses as ct_courses
@@ -138,8 +140,10 @@ def build_sections() -> list[Section]:
                 Phase(1, "チケット", "種別・必要枚数・付与・消費の台帳・月次配布を移す",
                       steps=(bl_tickets.definitions() + bl_tickets.grants()
                              + bl_extras.allowances())),
-                Phase(2, "決済", "決済・継続課金・分割払い（未実装）", steps=[]),
-                Phase(3, "帳票", "領収書・消費税・規約（未実装）", steps=[]),
+                Phase(2, "決済", "商品と、お金が動く申込を決済として移す",
+                      steps=bl_payments.build()),
+                Phase(3, "帳票", "領収書の設定・発行済みの領収書・規約の本文を移す",
+                      steps=bl_receipts.build()),
             ],
         ),
         # --- 5 サポート機能 -------------------------------------------------

@@ -193,6 +193,13 @@ BILLING_SCHEMA: tuple[tuple[str, str | None], ...] = (
     ("ticket_types", "legacy_type"),
     ("ticket_grants", "starts_at"),
     ("monthly_ticket_allowances", None),
+    # 決済（A3 / A4）と帳票（A7 / A8）。school-launcher 20260928132756
+    ("tenant_plans", "legacy_id"),
+    ("tenant_plans", "settings"),
+    ("payments", "legacy_id"),
+    ("payments", "settings"),
+    ("receipts", "legacy_id"),
+    ("tenant_legal_documents", None),
 )
 
 #: サポート機能（5）の追加。教材・ライブラリの公開対象。

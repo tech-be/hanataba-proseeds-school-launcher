@@ -79,6 +79,8 @@ class EnrollmentRightsStep(Step):
             f"SELECT {cols}, "
             "p.`is_auto_extension` AS _auto_extension, "
             "pa.`is_cancel` AS _is_cancel, "
+            "pa.`payment_type` AS _payment_type, "
+            "pa.`application_result` AS _application_result, "
             "pa.`cancel_date_time` AS _cancel_date_time "
             "FROM `payment_item_lesson_authority` AS c "
             "INNER JOIN `user` AS u ON u.user_id = c.user_id "
@@ -181,14 +183,31 @@ class EnrollmentRightsStep(Step):
                 "expires_at": expires_at,
                 # 講座の修了日は `user_learning_lesson` 側。ここでは埋めない
                 "completed_at": None,
-                # 決済は課金（4）が未移行
-                "provider_payment_id": None,
+                # **決済と結ぶ値**（課金 04 の暫定の規則 P10）。返金で受講を取り消す処理と、
+                # 修了証の金額印字がこの値で決済を引く（外部キーではない）
+                "provider_payment_id": _payment_of(members),
                 "subscription_id": None,
                 "settings": _settings(members, unlimited, beyond_range, bool(subscribed)),
             },
             natural_key=("tenant_id", "user_id", "course_id"),
             source_key=f"{user_id}:{lesson_id}",
         )
+
+
+def _payment_of(rows: list[dict]) -> str | None:
+    """畳んだ権限のうち、**決済として移す申込の最も新しいもの**の決済 ID。
+
+    無料・チケット払い・支払い不要の申込は決済にならないので結ばない（→ `billing.payments`）。
+    """
+    from ..billing.payments import is_migrated, provider_payment_id
+
+    ids = [
+        int(r["application_id"])
+        for r in rows
+        if r.get("application_id") is not None
+        and is_migrated(r.get("_payment_type"), r.get("_application_result"))
+    ]
+    return provider_payment_id(max(ids)) if ids else None
 
 
 def _has_item(rows: list[dict]) -> bool:

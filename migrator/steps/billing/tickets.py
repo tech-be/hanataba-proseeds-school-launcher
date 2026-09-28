@@ -434,7 +434,7 @@ class TicketLedgerStep(Step):
         if unresolved:
             ctx.logger.warning(
                 "チケットを使った予約 %d 件で、戻し先の付与が見つからない。"
-                "**キャンセルしてもチケットが戻らない**（会員が使い切って `ticket_num = 0` の付与は移らないため）",
+                "**キャンセルしてもチケットが戻らない**（種別が無い残高と `ticket_num = 0` の残高は移らないため）",
                 unresolved,
             )
         return out
