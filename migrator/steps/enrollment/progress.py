@@ -11,8 +11,8 @@
 **講義（`unit_type_id = 1`）の値は定数ファイルに定義が無い。** 実測でも
 `learning_status` と相関しない（4通りすべて出現）。**意味が決まるまで畳まない。**
 
-**修了は `learning_status` で決まる。** 実測で `1` の 4,895件は `complete_date` が
-すべて非 NULL、`0` の 2,314件はすべて NULL で完全に一致する。
+**修了は `learning_status` で決まる。** 実測（会員側で絞った 13,008件）で `1` の 9,760件は
+`complete_date` がすべて非 NULL、`0` の 3,248件はすべて NULL で完全に一致する。
 """
 
 from __future__ import annotations

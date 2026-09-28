@@ -7,9 +7,6 @@
 > **コンテンツ（2）が先。** 実績は定義に紐づく（`quiz_attempts.quiz_id` /
 > `submissions.assignment_id` / `survey_responses.lesson_id` / `live_reservations.occurrence_id`）。
 
-> **この区分のマイグレーションはまだ無い。** `doctor` が `[TODO]` で出るのが現在の正しい状態で、
-> `run --section enrollment` は `common.0` で止まる。
-
 ---
 
 ## 1. 前提
@@ -135,10 +132,15 @@ cd -
 - **母集合は `payment_item_lesson_authority`。** 権限が要るのは 235講座中 71件で、残りは無料講座
 - **lw2 の解決規則に従う。** `LessonModel::1804` が `GROUP BY user_id, lesson_id` で畳み、
   期限は `MAX(authority_end_date)` を取っている。**独自に決めない**
-- `status` は **`del_chk`** で決める（`1` → `canceled` / `0` → `active`）。
-  **`cancel_chk` は使わない** — 名前に反してキャンセルフラグではなく、
+- `status` は次の順で決める（`enrollment_statuses` に `canceled` という値は無い）
+  - 畳んだ行が**すべて `del_chk = 1`** → `revoked`
+  - 自動継続の商品で**未解約**（`payment_application.is_cancel IS NULL`）→ `active`。期限は見ない（`PaymentModel:383`）
+  - 自動継続の商品で**すべて解約済み** → `revoked`
+  - 期限（`MAX(authority_end_date)`）が過去 → `expired`、それ以外 → `active`
+- **`cancel_chk` は使わない** — 名前に反してキャンセルフラグではなく、
   `PaymentAuthorityModel` の INSERT 5か所で定数が入るだけで UPDATE されない
-- `source` は **`purchase`**（`manual` という値は存在しない）
+- `source` は、畳んだ行のどれかが**商品に紐づけば `purchase`**、どれも紐づかなければ **`admin`**
+  （`item_id` が NULL の付与。`purchase` にすると売上集計に乗る）。`manual` という値は存在しない
 - `no_limit_chk = 1` なら `expires_at = NULL`。元の値は `settings` に残す
 - **期限切れはそのまま移す。** 実測で 1,874組中 1,603組（86%）が失効済みだが、旧環境でも開けない。**期限を延ばさない**
 
