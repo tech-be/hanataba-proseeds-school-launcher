@@ -36,6 +36,15 @@ SITE_COLUMNS = (
     "daily_mail_send_flg",
 )
 
+#: 旧 `payment_infomation` から読む列（P13。課金 04 の暫定の規則）。
+#: **`agreement` は読まない** — 旧が使っていない古い列で、本文は `agreement` 表が正。
+#: 規約の URL・表題の上書きは `tenant_legal_documents`（billing.3）に入れる
+PAYMENT_INFO_COLUMNS = (
+    "is_use_bank", "bank_account_information", "is_use_credit_card", "is_use_convenience",
+    "is_visa", "is_mastercard", "is_jcb", "is_amex", "is_diners",
+    "is_use_split_payment", "use_split_payment_number", "is_use_memo", "payment_trigger_media_chk",
+)
+
 #: 旧 `tenant` から読む列。**禁止列は含めない**（ガードが落とす）
 SOURCE_COLUMNS = (
     "tenant_id",
@@ -48,7 +57,38 @@ SOURCE_COLUMNS = (
 )
 
 
-def _settings(ctx: RunContext, site: dict | None) -> str:
+def _payment_settings(info: dict | None, receipt: dict | None) -> dict:
+    """旧の決済まわりのテナント設定（P13）。**新の決済処理は読まない**（記録として残す）。"""
+    if not info and not receipt:
+        return {}
+    info = info or {}
+    flag = lambda key: bool(int(info.get(key) or 0))  # noqa: E731
+    out = {
+        "methods": {
+            "bank": flag("is_use_bank"), "credit_card": flag("is_use_credit_card"),
+            "convenience": flag("is_use_convenience"),
+        },
+        "card_brands": [
+            brand for brand, key in (("visa", "is_visa"), ("mastercard", "is_mastercard"),
+                                     ("jcb", "is_jcb"), ("amex", "is_amex"), ("diners", "is_diners"))
+            if flag(key)
+        ],
+        # カード会社の分割で選べる回数（カンマ区切り）
+        "card_installments": [
+            int(n) for n in str(info.get("use_split_payment_number") or "").split(",") if n.strip().isdigit()
+        ] if flag("is_use_split_payment") else [],
+        "ask_memo": flag("is_use_memo"),
+        "ask_trigger_media": flag("payment_trigger_media_chk"),
+    }
+    bank = (info.get("bank_account_information") or "").strip()
+    if bank:
+        out["bank_account_information"] = bank
+    if receipt is not None:
+        out["receipt_invoice_chk"] = bool(int(receipt.get("invoice_chk") or 0))
+    return out
+
+
+def _settings(ctx: RunContext, site: dict | None, payment: dict | None = None) -> str:
     """旧 `site` の運用値を `tenants.settings` に入れる（A3）。
 
     **新環境に対応する機能が無くても移す**（[移行の原則](../../docs/00-template/review.md)の1）。
@@ -58,7 +98,7 @@ def _settings(ctx: RunContext, site: dict | None) -> str:
     - `features` … 旧のバッチ・機能フラグ（`lw_type` / テスト分析 / ランキング / 日次メール）
     """
     if not site:
-        return "{}"
+        return json.dumps({"lw2_payment": payment}, ensure_ascii=False) if payment else "{}"
 
     def clean(key: str):
         value = site.get(key)
@@ -90,6 +130,8 @@ def _settings(ctx: RunContext, site: dict | None) -> str:
     features["lw_type"] = int(site.get("lw_type") or 0)
 
     settings = {"legacy_site_id": int(site["site_id"])}
+    if payment:
+        settings["lw2_payment"] = payment
     if service:
         settings["service"] = service
     settings["features"] = features
@@ -115,6 +157,10 @@ class TenantStep(Step):
         # サービス名・提供期間・機能フラグ（A3）。**1行を1回の INSERT で完成させる**
         site = source.fetch_global("site", SITE_COLUMNS)
         rows[0]["_site"] = site[0] if site else None
+        # 決済まわりの設定（P13）。どちらもテナントに1行
+        info = source.fetch_for_tenant("payment_infomation", PAYMENT_INFO_COLUMNS)
+        receipt = source.fetch_for_tenant("receipt_setting", ("invoice_chk",))
+        rows[0]["_payment"] = _payment_settings(info[0] if info else None, receipt[0] if receipt else None)
         return rows
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
@@ -156,7 +202,7 @@ class TenantStep(Step):
                     "db_type": "shared",
                     "plan_id": None,
                     "custom_domain": None,
-                    "settings": _settings(ctx, row.get("_site")),
+                    "settings": _settings(ctx, row.get("_site"), row.get("_payment")),
                     "status": "active",
                     "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
                 },
