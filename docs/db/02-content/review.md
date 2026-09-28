@@ -320,7 +320,7 @@
 
 | 旧カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|:--:|---|---|
-| テーブル全体 | **テーブル** | 中 | **カテゴリが無いと `test_sub` の出題条件（カテゴリ×レベルから N 問）が成立しない** | `quiz_question_categories` を新設して移す（→ A6） |
+| テーブル全体 | **テーブル** | 中 | **カテゴリが無いと `test_sub` の出題条件（カテゴリ×レベルから N 問）が成立しない** | `quiz_question_labels`（管理者が作るラベルと同じ表）に `legacy_id` 付きで移す（→ A6）。名前が重なる分は区別を付ける |
 
 **まとめ**: 受け皿が無い列 — / 高 0 件
 
@@ -608,9 +608,9 @@
 
 | # | 追加するもの | 旧環境の対応 | 変更が必要な機能 |
 |---|---|---|---|
-| **A6** | `quiz_question_categories` / `quiz_question_banks` | `question_cate` / `question`（3,880行） | ・**問題バンクの管理画面**（テストに属さない問題の一覧・編集）<br>・出題条件から問題を引く出題ロジック |
+| **A6** | `quiz_question_labels.legacy_id`（分類。当初の `quiz_question_categories` から統合）/ `quiz_question_banks` | `question_cate` / `question`（3,880行） | ・**問題バンクの管理画面**（テストに属さない問題の一覧・編集）<br>・出題条件から問題を引く出題ロジック<br>・分類は管理画面の「カテゴリ」として見え、編集できる（2026-09-28 に統合） |
 | **A7** | `quiz_questions.bank_id`（＋FK）/ `image_url` / `name` / `hint` / `required`、`quiz_options.image_url`、`quizzes.max_attempts` / `suspend_enabled` / `display_settings` ／ `quiz_question_types` に `free_text` | `question_name` / `hint` / 画像ファイル名 / `test.exam_max_number` / `suspended_chk` / 表示設定6列 | ・受験回数の上限チェック<br>・中断・再開（`suspend_enabled`）<br>・正解 / 解説 / 点数を見せるかの出し分け<br>・**`free_text` は候補との完全一致で自動採点する。** lw2 の `UserLearningLessonModel::_markAnswers` が `question_type_id == 3` のとき `explode('|', answer)` した候補に `in_array` で判定しており、移行先も同じ形。**正解候補は `quiz_options` に `is_correct = TRUE` の行として展開する**（候補はすべて正解。記述式に不正解の選択肢は無い） |
-| **A8** | `quiz_question_rules`（カテゴリ・難易度・出題数） | `test_sub`（285行） | ・**ランダム出題。** 「このカテゴリ・この難易度から N 問」を解釈する出題ロジック<br>・**これが無いと固定リストのテストにしかならない** |
+| **A8** | `quiz_question_rules`（カテゴリ・難易度・出題数） | `test_sub`（285行） | ・**ランダム出題。** 「このカテゴリ・この難易度から N 問」を解釈する出題ロジック<br>・**これが無いと固定リストのテストにしかならない**<br>・**スキーマだけ先に置いてある**（2026-09-28 決定）。作るかどうかは cutover 前に決める（→ [確認事項 C6](../open-questions.md)） |
 
 ### C6 課題定義
 

@@ -164,12 +164,16 @@ NULL を重複扱いしないので、NULL の行がいくつ並んでも問題�
 「このカテゴリ・この難易度から N 問出す」という**出題条件**を持つ。
 新環境の「クイズに属する固定リスト（`quiz_questions`）」では表現できない。
 
+> **アプリはまだ問題バンクと出題条件を読まない。ランダム出題はスキーマだけ先に置いてある**
+> （2026-09-28 決定）。cutover 前に「作る」か「固定リストに展開する」かを決める
+> （→ [確認事項 C6](../open-questions.md)）。
+
 | 追加するもの | 旧の対応 |
 |---|---|
-| `quiz_question_categories` | `question_cate`（124行） |
+| ~~`quiz_question_categories`~~ → **`quiz_question_labels.legacy_id`** | `question_cate`（124行）。**管理者が作るラベルと同じ表に統合した**（school-launcher `20260928082433`、2026-09-28 決定） |
 | `quiz_question_banks` | `question`（3,880行）。テストに属さない |
 | `quiz_question_rules` | `test_sub`（285行）。カテゴリ・難易度・出題数 |
-| `quiz_questions.bank_id`（＋FK）/ `image_url` / `name` / `hint` / `required` | 固定出題では `bank_id` は NULL のまま |
+| `quiz_questions.bank_id`（＋FK）/ `image_url` / `name` / `hint` / `required` | **移した設問には `bank_id` が必ず入る**（旧の固定出題も問題バンクを指すため）。NULL になるのは新環境で作ったテストだけ |
 | `quiz_options.image_url` | |
 | `quizzes.max_attempts` / `suspend_enabled` / `display_settings` | `test.exam_max_number` / `suspended_chk` / 表示設定6列 |
 
@@ -179,8 +183,13 @@ NULL を重複扱いしないので、NULL の行がいくつ並んでも問題�
 > **`quiz_options.body` は VARCHAR(1000) のまま。** 旧 `selection1..20` は TEXT だが、
 > 1000文字超が見つかった時点で TEXT に広げる migration を足す（切り捨てない）。
 
-> **`quiz_question_banks` / `quiz_question_categories` は `tenants` を NO ACTION で参照する。**
-> `cleanupDemoData` に**設問より後・分類より前**で列挙が要る。
+> **`quiz_question_banks` は `tenants` を NO ACTION で参照する。** `cleanupDemoData` に**設問より後**で列挙が要る。
+> 分類（`quiz_question_labels`）は `tenants` の CASCADE で消えるので列挙しない。
+
+> **labels は `(tenant_id, name)` が一意。** 同じテナントに自テナントと共有（旧 `tenant_id = 0`）の
+> 分類が入るので名前が重なる（ステージングで 28 組、共有内でも `ITパスポート` が 8 件）。
+> **そのまま入れるとカテゴリ 35 件・問題バンク 546 件・固定出題の設問 407 問が連鎖して移らない**ので、
+> 移行ツールが名前に「（共有）」「（2）」などを付けて区別する（2026-09-28 決定）。旧の ID は `legacy_id` に残る。
 
 ---
 
