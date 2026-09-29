@@ -137,7 +137,7 @@
 |---|---|---|:--:|---|---|
 | `(item_id, lesson_id)` | `tenant_plans` / `plan_courses` | 性質 | 中 | **商品と講座が 1:N。** 新環境にも**まとめ商品の受け皿はある**（`tenant_plans` ＋ `plan_courses`、`plan_type = course_bundle`）。買い切りも `interval_type = one_time` で表せる | **商品は `tenant_plans` に移す**（P1。**すべて `inactive`**、`provider_price_id` は `lw2-item-{id}`）。情報は落ちない。**`courses.price`（講座1本の値段）には写す元が無い**ので NULL のままにする — 埋めると lw2 に無かった単品販売を始めることになる（→ [確認事項 B2 / C3](../open-questions.md#c-新環境の制約が意図的かの確認)） |
 | `item_type` | — | 性質 | 中 | 商品の種別。0 講座 / 1 チケット（都度）/ 2 チケット（月次）/ 3 ライブ（`PaymentItemController`）。受講可否判定は `item_type = 0` で絞る（`LessonModel::1814`） | **講座（0）だけを `tenant_plans` に移す**（P1）。1/2/3 は新の商品に受け皿が無いので、決済の `settings` に商品の情報を残す（P2） |
-| `display_chk` / `valid_chk` / `del_chk` | `tenant_plans.settings` | カラム | 中 | 表示中か・有効か・削除済みか | `settings.legacy` に残す。**新ではすべて `inactive`**（P1） |
+| `display_chk` / `valid_chk` / `del_chk` | `tenant_plans.settings` | カラム | 中 | 表示中か・有効か・削除済みか | `settings.legacy` に残す。**新ではすべて `inactive`**（P1）。切り替え後も売るかは[確認事項 D7](../open-questions.md#d-cutover-の運用で決めておきたいこと) |
 | `price` / `first_price` | `price` / `settings` | 性質 | 中 | **税込**（コメントの「税抜」は誤り。管理画面の JavaScript が税抜から税込を計算して入れる） | そのまま `price` に入れる |
 
 **まとめ**: 受け皿が無い列 — （A3 の `settings`）/ 高 0 件
@@ -152,7 +152,7 @@
 |---|---|---|:--:|---|---|
 | `payment_type` | `type` / `provider` | **性質** | **高** | 0 無料 / 1 カード / 2 コンビニ / 3 振込 / 4 無料クーポン / 5・6・7 チケット払い（`PaymentApplicationController:630-676`）。**継続課金と分割は支払い方法ではなく、商品のフラグで決まる**（どれもカード） | 1/2/3 だけを決済にする（P3）。種類は商品で決める（P5） |
 | `payment_type = 0` | — | **性質** | **高** | **金額0のライブ予約起票が決済の大半を占める**（ETL 設計の本番実測で全 13,737件の86%。→ [db README B](../README.md#b-意味が変わって誤ったデータになるもの変換規則の取り違えが致命傷)）。素直に全件移すと決済データが実際の支払いと合わなくなる | **決済として移さない**（P3。ステージングでは無料・チケット払い 112件）。未決: それでよいか（→ 確認事項 D5） |
-| 決済手段（副次列） | `payment_types` / `payment_providers` | **性質** | **高** | **1表に5種類が同居**しており、どの列の組み合わせで種別が決まるかを読み解く必要がある | `PaymentModel` / `PaymentController` を読んで確定した（上の `payment_type` の行）。**支払い済みは `application_result = 1`**（0 入金待ち / 2 エラー / 3 支払い不要）→ P6 |
+| 決済手段（副次列） | `payment_types` / `payment_providers` | **性質** | **高** | **1表に5種類が同居**しており、どの列の組み合わせで種別が決まるかを読み解く必要がある | `PaymentModel` / `PaymentController` を読んで確定した（上の `payment_type` の行）。**支払い済みは `application_result = 1`**（0 入金待ち / 2 エラー / 3 支払い不要）→ P6。入金待ちのまま移す申込の扱いは[確認事項 D8](../open-questions.md#d-cutover-の運用で決めておきたいこと) |
 | 決済代行の識別 | `payment_providers` | カラム | 中 | lw2 は J-Payment を使っている。新の `payment_providers` は `bank_transfer` / `robotpayment` / `stripe` の3値 | **`legacy_jpayment` を足した**（A5）。J-Payment の ID（`gid` / 継続課金の `acid`）は `settings.jpayment` |
 | 継続課金のカード | — | **性質** | **高** | **カード情報はプロバイダ側にあり lw2 の DB に無い。** 移しても継続課金は引き継げない | **移行の範囲外**（P9）。**J-Payment 側の継続課金は cutover で止めるか移管するかを決める**（→ 確認事項 D4）。止めないと旧の課金が続く |
 | 分割払いの未完済 | `installment_plans` / `installment_charges` | 性質 | 中 | **未完済 61件・契約総額 2,907万円が cutover をまたぐ**（ETL設計の実測）。lw2 の「分割」は2種類: カード会社の分割（1回の課金。`split_payment_number`、**1 は一括**）と、自動解約つきの継続課金（分割商品）。**どちらも毎月の課金の行が無い** | `installment_plans` は作らない（P9。作ると新の催促メールのバッチが動く）。初回の申込を `subscription` として移し、回数・解約日は `settings`。残債の扱いは D4 と一緒に決める |
@@ -175,7 +175,7 @@
 
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
-| 発行済み領収書 | `receipts` | 性質 | 中 | **決済に紐づく。** B3 が先に入っていないと 1 行も入らない。**旧はダウンロードのたびに1行**（再発行も1行）で、印字する番号は `receipt_log_id` | 決済の後に流す。`issue_no` は決済ごとに 1..n、旧の番号は `receipt_log_id`（A7）。取引日は入金日（P11） |
+| 発行済み領収書 | `receipts` | 性質 | 中 | **決済に紐づく。** B3 が先に入っていないと 1 行も入らない。**旧はダウンロードのたびに1行**（再発行も1行）で、印字する番号は `receipt_log_id` | 決済の後に流す。`issue_no` は決済ごとに 1..n、旧の番号は `receipt_log_id`（A7）。取引日は入金日（P11）。再発行で番号が変わってよいかは[確認事項 D9](../open-questions.md#d-cutover-の運用で決めておきたいこと) |
 | 発行設定 | `receipt_settings` | 型 | 低 | 実測1件 | そのまま移す。インボイスの有無は `tenants.settings.lw2_payment` |
 
 **まとめ**: 受け皿が無い列 — / 高 0 件

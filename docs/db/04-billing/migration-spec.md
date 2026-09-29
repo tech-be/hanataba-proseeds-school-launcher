@@ -22,7 +22,7 @@
 **この区分の分も含めて [open-questions.md](../open-questions.md) に1枚でまとめてある。**
 同じ話を2か所に置かない。
 
-**課金の項目は D4〜D6**（継続課金の止め方・決済に含めない申込・規約の本文）。
+**課金の項目は D4〜D9**（継続課金の止め方・決済に含めない申込・規約の本文・販売を止めた商品・入金待ちの申込・領収書番号）。1-3 の P の表の「運営への確認」列で、どの P をどの D で聞いているかが分かる。
 チケットで決めることは制約に当たる行の扱いなので 1-2 にある。
 
 ### 1-2. 制約による不整合
@@ -51,22 +51,22 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 **決済・帳票はこの規則で作ってある。** 運営の回答で差し替える。実装は `migrator/steps/billing/payments.py` /
 `receipts.py`、固定しているテストは `tests/test_billing.py`。
 
-| # | 対象 | 暫定の規則 | 理由 |
-|---|---|---|---|
-| P1 | 講座の商品（`payment_item.item_type = 0`） | `tenant_plans` に移す。買い切りは `one_time`、自動継続は `month`。**すべて `inactive`**。`provider_price_id` は `lw2-item-{item_id}`。講座は `plan_courses` | 新で売るには Stripe の価格を作り直す。`active` にすると購入ボタンが出て決済が失敗する |
-| P2 | チケット商品・ライブ商品（`item_type` 1/2/3） | 商品は移さない。決済の `settings` に商品の情報を残す | 新の商品は講座の束だけ |
-| P3 | 無料・無料クーポン・チケット払い（`payment_type` 0/4/5/6/7） | **決済として移さない**。権限は受講（3）、チケットは 4-1 で移っている | 金額0。決済一覧・売上を埋める（本番で86%）。→ 確認事項 D5 |
-| P4 | 支払い不要（`application_result = 3`） | 決済として移さない | 管理者が「払わなくてよい」とした申込。入金は無い |
-| P5 | 決済の種類 | 自動継続の商品 → `subscription`、講座1つの買い切り → `course_purchase`、それ以外（講座2つ以上・講座なし・チケット商品）→ **`lw2_purchase`**（A6） | 講座が1つに決まらない購入を `course_purchase` に入れると講座を選ぶことになる |
-| P6 | 決済の状態 | `application_result` 1 → `succeeded`、0 → `pending`、2 → `failed`。**解約は状態にしない**（`settings` に残す） | 解約は継続課金を止めただけで返金ではない。lw2 に返金の概念は無い |
-| P7 | 決済代行と決済 ID | カード・コンビニ → `legacy_jpayment`（A5）、振込 → `bank_transfer`。`provider_payment_id` は `lw2-{application_id}` | 一意で決定論的。J-Payment の ID は `settings` |
-| P8 | 手数料 | `platform_fee = 0` | lw2 に手数料の概念が無い。売上 = `amount - platform_fee` |
-| P9 | 継続課金・分割商品 | `learner_subscriptions` / `installment_plans` は作らない。初回の申込だけ決済にする | lw2 に毎月の課金の行が無く、新の必須 ID（Stripe）も無い。**J-Payment の継続課金の止め方は確認事項 D4** |
-| P10 | 受講との結びつき | `enrollments.provider_payment_id` に、畳んだ権限のうち**決済として移す最も新しい申込**の決済 ID | 返金で受講を取り消す処理と、修了証の金額印字がこの値で決済を引く |
-| P11 | 領収書 | `receipt_log` → `receipts`。決済ごとに `issue_no` 1..n（旧の番号は `receipt_log_id`）。取引日は入金日（lw2 の `real_payment_date`） | lw2 はダウンロードのたびに1行 |
-| P12 | 規約の本文 | `tenant_legal_documents`（A8）。空の本文は移さない。URL・表題の上書きも同じ表 | 受け皿を追加して受ける。**アプリはまだ読まない**（→ D6） |
-| P13 | 決済の設定（`payment_infomation`） | `tenants.settings.lw2_payment` | 既存の JSON 列で受けられる |
-| P14 | 消費税の一覧（`tax`） | 移さない | 設定画面の選択肢で、取引の税計算に使っていない |
+| # | 対象 | 暫定の規則 | 理由 | 運営への確認 |
+|---|---|---|---|---|
+| P1 | 講座の商品（`payment_item.item_type = 0`） | `tenant_plans` に移す。買い切りは `one_time`、自動継続は `month`。**すべて `inactive`**。`provider_price_id` は `lw2-item-{item_id}`。講座は `plan_courses` | 新で売るには Stripe の価格を作り直す。`active` にすると購入ボタンが出て決済が失敗する | [D7](../open-questions.md#d-cutover-の運用で決めておきたいこと) |
+| P2 | チケット商品・ライブ商品（`item_type` 1/2/3） | 商品は移さない。決済の `settings` に商品の情報を残す | 新の商品は講座の束だけ | 聞かない（新の商品は講座の束だけで、チケット・ライブの商品を置く表が無い。表の制約で決まる） |
+| P3 | 無料・無料クーポン・チケット払い（`payment_type` 0/4/5/6/7） | **決済として移さない**。権限は受講（3）、チケットは 4-1 で移っている | 金額0。決済一覧・売上を埋める（本番で86%）。→ 確認事項 D5 | [D5](../open-questions.md#d-cutover-の運用で決めておきたいこと) |
+| P4 | 支払い不要（`application_result = 3`） | 決済として移さない | 管理者が「払わなくてよい」とした申込。入金は無い | 聞かない（D5 と一緒に扱える。入金の無い申込を決済にしないのは P3 と同じ理由） |
+| P5 | 決済の種類 | 自動継続の商品 → `subscription`、講座1つの買い切り → `course_purchase`、それ以外（講座2つ以上・講座なし・チケット商品）→ **`lw2_purchase`**（A6） | 講座が1つに決まらない購入を `course_purchase` に入れると講座を選ぶことになる | 聞かない（新の表の制約で決まる。利用者に見える違いは一覧で講座が空欄になるだけ） |
+| P6 | 決済の状態 | `application_result` 1 → `succeeded`、0 → `pending`、2 → `failed`。**解約は状態にしない**（`settings` に残す） | 解約は継続課金を止めただけで返金ではない。lw2 に返金の概念は無い | [D8](../open-questions.md#d-cutover-の運用で決めておきたいこと) |
+| P7 | 決済代行と決済 ID | カード・コンビニ → `legacy_jpayment`（A5）、振込 → `bank_transfer`。`provider_payment_id` は `lw2-{application_id}` | 一意で決定論的。J-Payment の ID は `settings` | 聞かない（決済 ID の形。利用者に見えない） |
+| P8 | 手数料 | `platform_fee = 0` | lw2 に手数料の概念が無い。売上 = `amount - platform_fee` | 聞かない（旧に手数料の概念が無く、他の値にしようがない。売上 = 金額になる） |
+| P9 | 継続課金・分割商品 | `learner_subscriptions` / `installment_plans` は作らない。初回の申込だけ決済にする | lw2 に毎月の課金の行が無く、新の必須 ID（Stripe）も無い。**J-Payment の継続課金の止め方は確認事項 D4** | [D4](../open-questions.md#d-cutover-の運用で決めておきたいこと) |
+| P10 | 受講との結びつき | `enrollments.provider_payment_id` に、畳んだ権限のうち**決済として移す最も新しい申込**の決済 ID | 返金で受講を取り消す処理と、修了証の金額印字がこの値で決済を引く | 聞かない（新システムの返金・修了証の処理のための結びつけ。利用者に見えない） |
+| P11 | 領収書 | `receipt_log` → `receipts`。決済ごとに `issue_no` 1..n（旧の番号は `receipt_log_id`）。取引日は入金日（lw2 の `real_payment_date`） | lw2 はダウンロードのたびに1行 | [D9](../open-questions.md#d-cutover-の運用で決めておきたいこと) |
+| P12 | 規約の本文 | `tenant_legal_documents`（A8）。空の本文は移さない。URL・表題の上書きも同じ表 | 受け皿を追加して受ける。**アプリはまだ読まない**（→ D6） | [D6](../open-questions.md#d-cutover-の運用で決めておきたいこと) |
+| P13 | 決済の設定（`payment_infomation`） | `tenants.settings.lw2_payment` | 既存の JSON 列で受けられる | 聞かない（設定の写し。新の決済処理は読まない） |
+| P14 | 消費税の一覧（`tax`） | 移さない | 設定画面の選択肢で、取引の税計算に使っていない | 聞かない（取引の税計算に使っていない一覧） |
 
 ### 1-4. 本番ダンプ受領後に確認すること
 
@@ -217,7 +217,7 @@ billing.3    receipt_settings → receipts（決済に紐づくので後）→ t
 
 ## 未確定として残っているもの
 
-- **1-3 の暫定対応 P1〜P14。** 運営の回答（確認事項 D4〜D6）で差し替える
+- **1-3 の暫定対応 P1〜P14。** 運営の回答（確認事項 D4〜D9）で差し替える
 - チケットの #14 / #15 / #17、会員が物理削除された申込（旧データの不整合 #11）（→ [制約に当たって移らない行](../constraint-violations.md)）
 - `certificates.product_id`（受講 A6）は未解決。**決済は移ったが、修了証が商品を指す規則は未実装**
 - `monthly_ticket_allowances.application_id` を決済に結ぶのも未実装（旧 ID のまま。`payments.application_id` で引ける）
