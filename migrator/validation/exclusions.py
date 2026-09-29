@@ -27,6 +27,8 @@ class ExclusionLog:
         self._logger = logger
         self._started = False
         self.total = 0
+        #: 表 → 移さなかった行の旧キー。**旧 DB との突き合わせが「説明のつく欠け」を見分けるのに使う**
+        self.keys: dict[str, set[str]] = {}
 
     @property
     def path(self) -> Path:
@@ -38,6 +40,8 @@ class ExclusionLog:
             return ""
         self._write(step, violations)
         self.total += len(violations)
+        for violation in violations:
+            self.keys.setdefault(violation.table, set()).add(str(violation.key))
 
         by_reason: dict[str, list[str]] = {}
         for violation in violations:
