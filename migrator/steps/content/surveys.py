@@ -56,7 +56,7 @@ QUESTION_KINDS: dict[int, str] = {
 CHOICE_KINDS = frozenset({"single_choice", "multiple_choice"})
 
 
-def _survey_units(ctx: RunContext) -> list[dict]:
+def _survey_units(ctx: RunContext, drop=None) -> list[dict]:
     """アンケートユニットと、それが指す定義を組み立てる。
 
     **`unit_type_id = 3` かつ `enquete_id` が入っているものだけ。** `0` は未設定。
@@ -74,7 +74,11 @@ def _survey_units(ctx: RunContext) -> list[dict]:
     for unit in units:
         enquete = enquetes.get(int(unit["enquete_id"]))
         if enquete is None:
-            # **孤児**。アンケート定義が物理削除されている。親は復元できないので移さない
+            # **孤児**。アンケート定義が物理削除されている。親は復元できないので移さない。
+            # **共有アンケート（tenant_id = 0）は `shared_enquetes` で拾うので、ここには来ない**
+            if drop:
+                drop("survey_lessons", unit["unit_id"], "旧データの不整合",
+                     f"アンケートの定義（enquete_id={unit['enquete_id']}）が物理削除されている")
             continue
         rows.append({**unit, "_enquete": enquete})
     return rows
@@ -90,7 +94,7 @@ class SurveyLessonsStep(Step):
     depends_on = ("content.lessons",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        return _survey_units(ctx)
+        return _survey_units(ctx, drop=self.drop)
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         tenant_id = ctx.tenant_id.value

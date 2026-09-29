@@ -121,7 +121,8 @@ def _learning_units(ctx: RunContext) -> dict[int, dict]:
 # --- テスト受験 ---------------------------------------------------------------
 
 
-def _attempts(ctx: RunContext) -> list[dict]:
+def _attempts(ctx: RunContext, drop=None) -> list[dict]:
+    """受験に会員とテストを添える。`drop` を渡すと、引けない行を一覧に出す。"""
     source = ctx.require_source()
     units = _learning_units(ctx)
     tests = {
@@ -151,10 +152,17 @@ def _attempts(ctx: RunContext) -> list[dict]:
     ):
         unit = units.get(int(attempt["user_learning_unit_id"]))
         if unit is None:
+            if drop:
+                drop("quiz_attempts", attempt["user_learning_test_id"], "旧データの不整合",
+                     "受講の行（user_learning_lesson）が物理削除されている")
             continue
         test = tests.get(int(unit["unit_id"]))
         if test is None:
-            continue  # ユニットにテストが無い（定義が消えている）
+            # ユニットにテストが無い（ユニットかテストの定義が旧で物理削除されている）
+            if drop:
+                drop("quiz_attempts", attempt["user_learning_test_id"], "旧データの不整合",
+                     f"テストの定義を引けない（unit_id={unit['unit_id']} が物理削除）")
+            continue
         rows.append({**attempt, "_user_id": unit["_user_id"], "_test_id": test["test_id"]})
     return rows
 
@@ -176,7 +184,7 @@ class QuizAttemptsStep(Step):
     depends_on = ("content.quiz_options",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        return _attempts(ctx)
+        return _attempts(ctx, drop=self.drop)
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         tenant_id = ctx.tenant_id.value
@@ -368,7 +376,7 @@ class QuizAnswerSelectedOptionsStep(Step):
 # --- アンケート回答 -----------------------------------------------------------
 
 
-def _responses(ctx: RunContext) -> list[dict]:
+def _responses(ctx: RunContext, drop=None) -> list[dict]:
     """アンケート回答に、回答先のレッスンを添える。
 
     **`enquete_answer` は会員を直接持たない。** `entity_type_id` で指す先が変わる。
@@ -400,6 +408,9 @@ def _responses(ctx: RunContext) -> list[dict]:
             continue  # お知らせ・レポート添付は回答先のレッスンが決まらない
         learning_unit = units.get(int(answer.get("entity_id") or 0))
         if learning_unit is None:
+            if drop:
+                drop("survey_responses", answer["enquete_answer_id"], "旧データの不整合",
+                     "回答した学習の行（user_learning_unit）が物理削除されている")
             continue
         # 同じアンケートを複数ユニットが参照している場合、**回答したユニットの複製**を選ぶ
         target = next(
@@ -411,6 +422,10 @@ def _responses(ctx: RunContext) -> list[dict]:
             None,
         )
         if target is None:
+            if drop:
+                drop("survey_responses", answer["enquete_answer_id"], "旧データの不整合",
+                     f"回答したユニット（unit_id={learning_unit['unit_id']}）がこのアンケート"
+                     f"（enquete_id={answer['enquete_id']}）を使っていない")
             continue
         rows.append(
             {**answer, "_unit_id": target["unit_id"], "_user_id": learning_unit["_user_id"]}
@@ -428,7 +443,7 @@ class SurveyResponsesStep(Step):
     depends_on = ("content.survey_question_options",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        return _responses(ctx)
+        return _responses(ctx, drop=self.drop)
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         tenant_id = ctx.tenant_id.value

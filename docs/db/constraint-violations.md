@@ -138,6 +138,9 @@
 | 9 | 講座の分類 | `lesson.lesson_cate_id` | `lesson_cate.lesson_cate_id` | 9講座 / 分類3種 | **解決済み**（`courses.category` は NULL 可なので、分類だけ落として講座は移す） |
 | 10 | バッジの対象講座 | `badge_item.entity_id` | `lesson.lesson_id` | 1件 | **判断不要**（バッジは移行対象外。→ [対象外](06-out-of-scope/breakdown.md#決定で対象外にしたもの)） |
 | 11 | 決済（申込） | `payment_application.user_id` | `user.user_id` | 11件 | 同上。**会員の行が物理削除されている**（2017〜2019年。1件は `user_id = 0`）。うち支払い済み6件。明細（`subscription_payments`）10件も連鎖して移らない |
+| 12 | テストの受験 | `user_learning_test` → `user_learning_unit.unit_id` | `unit.unit_id` | 29件 | 同上。**ユニットが物理削除され、テストの定義を引けない**。以前は一覧に出さず黙って落としていた（旧 DB との突き合わせで判明） |
+| 13 | アンケートの定義 | `unit.enquete_id` | `enquete.enquete_id` | 5件 | 同上。**共有講座のアンケートユニットが指す定義が物理削除**（enquete_id 100005703 / 28823） |
+| 14 | アンケートの回答 | `enquete_answer.entity_id` / `enquete_id` | `user_learning_unit` / ユニットのアンケート | 4件 | 同上。3件は**回答したユニットがそのアンケートを使っていない**（03 の仕様書に記載済み）、1件は回答した学習の行が物理削除 |
 
 > **#4〜#6 は親が消えているためテナントを判定できない**（`unit` / `lesson` を辿れない）。
 > 全テナントの合計値。対象テナントぶんがいくつかは、本番ダンプでも同じく切り分けられない。

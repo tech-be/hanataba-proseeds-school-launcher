@@ -50,6 +50,22 @@ class Step(ABC):
         """投入する。既定では自然キーで重複を避けてまとめて INSERT する。"""
         return ctx.target.insert_many(records)
 
+    # --- 抽出で落とした行 ----------------------------------------------------
+    def drop(self, table: str, key: object, reason: str, detail: str = "") -> None:
+        """**抽出の段階で落とす行を、一覧（not-migrated.csv）に出す。**
+
+        旧データの不整合（親が物理削除されている など）で変換まで持っていけない行は、
+        黙って `continue` せずここに渡す。制約に当たった行と同じく件数と一覧に出る。
+        黙って落とすと、旧 DB との突き合わせで「一覧に無い欠け」として NG になる。
+        """
+        if not hasattr(self, "_dropped"):
+            self._dropped = []
+        self._dropped.append(constraints.Violation(table, reason, detail, str(key)))
+
+    def _take_dropped(self) -> list:
+        dropped, self._dropped = getattr(self, "_dropped", []), []
+        return dropped
+
     # --- 実行 --------------------------------------------------------------
     def check_dependencies(self, ctx: RunContext) -> None:
         missing = [d for d in self.depends_on if d not in ctx.completed]
@@ -65,7 +81,11 @@ class Step(ABC):
             logger.warning("%s: %s", self.name, result.notes[-1])
             return ctx.record(result)
         rows = self.extract(ctx)
-        result.extracted = len(rows)
+        dropped = self._take_dropped()
+        result.extracted = len(rows) + len(dropped)
+        if dropped:
+            result.excluded += len(dropped)
+            result.note(ctx.exclusions().add(self.name, dropped))
         records = self.transform(ctx, rows)
         result.transformed = len(records)
         # **投入する前に**移行先の制約と突き合わせる。dry-run では INSERT が
@@ -76,7 +96,7 @@ class Step(ABC):
                 records, ctx.schema_reader().get(records[0].table), ctx.target
             )
             if violations:
-                result.excluded = len(violations)
+                result.excluded += len(violations)
                 result.note(ctx.exclusions().add(self.name, violations))
         result.loaded = self.load(ctx, records)
         result.skipped = max(result.transformed - result.loaded, 0)
