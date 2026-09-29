@@ -54,7 +54,7 @@ class BillingChecksTest(unittest.TestCase):
 
     def run_checks(self, src_rows, dst_rows):
         src, dst = fake(src_rows, dst_rows)
-        return lc.billing_checks(src, dst, 12, "T")
+        return lc.billing_checks(lc.Env(src, dst, 12, "T"))
 
     def test_everything_empty_is_ok(self) -> None:
         results = self.run_checks({}, {})
@@ -85,8 +85,9 @@ class BillingChecksTest(unittest.TestCase):
 
 
 class RunTest(unittest.TestCase):
-    def test_only_sections_with_checks_run(self) -> None:
-        self.assertEqual(set(lc.CHECKS), {"billing"})
+    def test_every_implemented_section_has_checks(self) -> None:
+        self.assertEqual(set(lc.CHECKS), {"foundation", "content", "enrollment", "billing"})
+        self.assertEqual(set(lc.ORDER), set(lc.CHECKS))
 
 
 if __name__ == "__main__":

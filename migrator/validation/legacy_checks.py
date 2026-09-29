@@ -4,7 +4,10 @@
 間違ったまま一致する。ここでは**旧 DB に直接 SQL を投げて**、金額・件数・日付・本文が
 旧の値を引き継いでいるかを見る。旧の値の意味（入金日の式など）は旧アプリの実装から写す。
 
-- **区分ごとに持つ。** いまは課金（billing）だけ。`CHECKS` に足せば他の区分にも広げられる
+- **区分ごとに持つ**（基盤・コンテンツ・受講・課金）。`CHECKS` に足せば他の区分にも広げられる
+- **行の漏れ・紛れ:** 旧の対象の行が移行先に無いときは、同じ `verify` で「制約に当たって移さない」と
+  一覧に出たもの（`ExclusionLog.keys`）だけを許す。**どこにも出ずに消えた行**と、旧の対象に無い行を NG にする
+- **値:** 取り違えると気づかないまま誤データになるもの（名前・金額・得点・日数・種別・状態）に絞る
 - 暫定の規則で**意図して移さない**もの（0円の申込など）は、移行先に入っていないことを確かめる
 - 旧データの不整合で移らないもの（会員が物理削除された申込）は、旧側の数字から除いて比べる
 """
@@ -53,6 +56,325 @@ def _sample(items, n: int = 3) -> str:
     return f"{len(items)} 件（例: {items[:n]}）"
 
 
+@dataclass
+class Env:
+    """突き合わせに渡すもの。**移行ツールの変換コードは渡さない。**
+
+    `ulid` は旧キー → 新 ID の対応（設定で決まる採番規則。変換の規則ではない）。
+    旧 ID の列を持たない表を引き当てるのに使う。
+    """
+
+    src: Source
+    dst: Target
+    legacy_tenant: int
+    tenant_id: str
+    ulid: Callable[[str, object], str] = lambda ns, key: f"{ns}:{key}"
+    #: 表 → その実行で「制約に当たって移さない」と一覧に出た旧キー
+    excluded: dict[str, set[str]] | None = None
+    #: 旧 role_id → 新 users.role（設定の対応表）
+    roles: dict[int, str] | None = None
+
+    def skipped(self, table: str) -> set[str]:
+        return (self.excluded or {}).get(table, set())
+
+
+class Checker:
+    def __init__(self, section: str) -> None:
+        self.section = section
+        self.results: list[CheckResult] = []
+
+    def __call__(self, name: str, ok, detail: str = "") -> None:
+        self.results.append(CheckResult(self.section, name, bool(ok), detail))
+
+    def coverage(self, name: str, legacy: dict, new: set, skipped: set[str]) -> None:
+        """**漏れと紛れ。** `legacy` は 新キー → 旧キー（一覧の目印）。
+
+        旧にあって新に無い行は、一覧に出ていれば説明がつく（制約に当たって移さない）。
+        一覧にも無いものは**黙って消えた行**として NG。新にだけある行も NG。
+        """
+        missing = [old for key, old in legacy.items() if key not in new]
+        silent = [old for old in missing if str(old) not in skipped]
+        stray = [key for key in new if key not in legacy]
+        self(f"{name}: 漏れ", not silent,
+             f"旧 {len(legacy)} / 新 {len(new) - len(stray)} / 移さない（一覧にあり）{len(missing) - len(silent)}"
+             + (f" / **一覧に無い欠け** {_sample(silent)}" if silent else ""))
+        self(f"{name}: 紛れ", not stray, _sample(stray) if stray else "")
+
+    def values(self, name: str, pairs: list[tuple]) -> None:
+        """旧と新の値の組（キー, 旧, 新）が同じか。"""
+        bad = [(k, a, b) for k, a, b in pairs if not same(a, b)]
+        self(name, not bad, _sample(bad) if bad else f"{len(pairs)} 件")
+
+
+def _in(values) -> tuple[str, tuple]:
+    values = tuple(values)
+    return (", ".join(["%s"] * len(values)) or "NULL"), values
+
+
+# --- 基盤 ---------------------------------------------------------------------
+def foundation_checks(env: Env) -> list[CheckResult]:
+    c = Checker("foundation")
+    t, d = (env.legacy_tenant,), (env.tenant_id,)
+
+    old = env.src("tenant", "SELECT tenant_name, tenent_name_short, language_code FROM tenant WHERE tenant_id = %s", t)
+    new = env.dst("SELECT name, short_name, language_code FROM tenants WHERE id = %s", d)
+    if old and new:
+        c.values("テナントの名前・略称・言語", [
+            ("name", (old[0]["tenant_name"] or "").strip(), new[0]["name"]),
+            ("short_name", old[0]["tenent_name_short"], new[0]["short_name"]),
+            ("language_code", old[0]["language_code"] or "ja", new[0]["language_code"]),
+        ])
+    else:
+        c("テナントがある", False, f"旧 {len(old)} / 新 {len(new)}")
+
+    # 会員
+    lu = {r["user_id"]: r for r in env.src("user", """
+        SELECT user_id, login_id, role_id, name_sei, name_mei, kana_sei, kana_mei, mail_add, tel,
+               birth_date, del_chk, valid_chk
+        FROM user WHERE tenant_id = %s""", t)}
+    nu = {r["user_id"]: r for r in env.dst("""
+        SELECT user_id, login_id, role, name_last, name_first, name_kana_last, name_kana_first,
+               email, phone, birth_year, birth_month, birth_day, status
+        FROM users WHERE tenant_id = %s AND user_id IS NOT NULL""", d)}
+    c.coverage("会員", {k: k for k in lu}, set(nu), env.skipped("users"))
+    both = [k for k in lu if k in nu]
+    names = (("name_sei", "name_last"), ("name_mei", "name_first"),
+             ("kana_sei", "name_kana_last"), ("kana_mei", "name_kana_first"))
+    c.values("会員の名前・カナ", [(k, lu[k][old], nu[k][new]) for k in both for old, new in names])
+    c.values("会員のメール・ログインID・電話", [
+        (k, a, b) for k in both for a, b in (
+            ((lu[k]["mail_add"] or "").strip() or None, nu[k]["email"]),
+            (lu[k]["login_id"], nu[k]["login_id"]), (lu[k]["tel"], nu[k]["phone"]))])
+    c.values("会員の生年月日（年・月・日の3列）", [
+        (k, _ymd(lu[k]["birth_date"]), (nu[k]["birth_year"], nu[k]["birth_month"], nu[k]["birth_day"]))
+        for k in both])
+    if env.roles:
+        c.values("会員のロール（設定の対応表）", [
+            (k, env.roles.get(int(lu[k]["role_id"])) if lu[k]["role_id"] is not None else None, nu[k]["role"])
+            for k in both])
+    c.values("会員の状態（削除 → deleted / 無効 → inactive）", [
+        (k, "deleted" if int(lu[k]["del_chk"] or 0) == 1
+         else "inactive" if int(lu[k]["valid_chk"] if lu[k]["valid_chk"] is not None else 1) == 0
+         else "active", nu[k]["status"]) for k in both])
+
+    # グループと所属
+    lg = {r["group_id"] for r in env.src("group", "SELECT group_id FROM `group` WHERE tenant_id = %s", t)}
+    ng = {r["group_id"] for r in env.dst(
+        "SELECT group_id FROM tenant_groups WHERE tenant_id = %s AND group_id IS NOT NULL", d)}
+    c.coverage("グループ", {k: k for k in lg}, ng, env.skipped("tenant_groups"))
+    lm = {(r["group_id"], r["user_id"]): r["user_id"] for r in env.src("user_group", """
+        SELECT ug.group_id, ug.user_id FROM user_group ug JOIN `group` g ON g.group_id = ug.group_id
+        JOIN user u ON u.user_id = ug.user_id WHERE g.tenant_id = %s""", t)}
+    nm = {(r["gid"], r["uid"]) for r in env.dst("""
+        SELECT g.group_id gid, u.user_id uid FROM tenant_group_members m
+        JOIN tenant_groups g ON g.id = m.group_id JOIN users u ON u.id = m.user_id
+        WHERE g.tenant_id = %s""", d)}
+    c.coverage("グループの所属", lm, nm, env.skipped("tenant_group_members"))
+    return c.results
+
+
+def _ymd(value):
+    if value is None:
+        return (None, None, None)
+    v = value.date() if hasattr(value, "date") and callable(value.date) else value
+    return (v.year, v.month, v.day)
+
+
+# --- コンテンツ -----------------------------------------------------------------
+#: 旧 `unit.unit_type_id` → 新 `lessons.type`。**02 の仕様書（A20）の決定**。0 見出し・5 集合研修は移さない
+UNIT_TYPE = {1: "video", 2: "quiz", 3: "survey", 4: "assignment", 6: "document",
+             7: "discussion", 8: "skill_check"}
+
+
+def content_checks(env: Env) -> list[CheckResult]:
+    c = Checker("content")
+    t, d = (env.legacy_tenant,), (env.tenant_id,)
+
+    # 講座: 自テナントの講座は全部。共有（tenant_id = 0）は移したものが旧に実在すること
+    own = {r["lesson_id"]: r for r in env.src("lesson",
+        "SELECT lesson_id, name, open_period FROM lesson WHERE tenant_id = %s", t)}
+    nc = {r["legacy_lesson_id"]: r for r in env.dst(
+        "SELECT legacy_lesson_id, title, access_days FROM courses WHERE tenant_id = %s AND legacy_lesson_id IS NOT NULL", d)}
+    shared_ids = [k for k in nc if k not in own]
+    marks, ids = _in(shared_ids)
+    shared = {r["lesson_id"]: r for r in env.src("lesson",
+        f"SELECT lesson_id, name, open_period FROM lesson WHERE tenant_id = 0 AND lesson_id IN ({marks})", ids)} \
+        if shared_ids else {}
+    c.coverage("講座（自テナント）", {k: k for k in own}, set(nc) - set(shared), env.skipped("courses"))
+    c("講座（共有）: 移したものは旧の共有講座に実在する", set(shared_ids) == set(shared),
+      _sample(set(shared_ids) - set(shared)) if set(shared_ids) != set(shared) else f"{len(shared)} 件")
+    lessons = {**own, **shared}
+    both = [k for k in nc if k in lessons]
+    c.values("講座名", [(k, (lessons[k]["name"] or "").strip(), nc[k]["title"]) for k in both])
+    c.values("受講日数（旧は月。× 30 日、0 は無期限）", [
+        (k, int(lessons[k]["open_period"]) * 30 if int(lessons[k]["open_period"] or 0) > 0 else None,
+         nc[k]["access_days"]) for k in both])
+
+    # ユニット（ライブ以外）: 移した講座のユニットのうち、見出し・集合研修以外
+    marks, ids = _in(nc)
+    lu = {r["unit_id"]: r for r in env.src("unit", f"""
+        SELECT u.unit_id, u.title, u.unit_type_id FROM unit u JOIN lesson l ON l.lesson_id = u.lesson_id
+        WHERE (l.tenant_id = %s OR l.lesson_id IN ({marks})) AND u.unit_type_id NOT IN (0, 5)""", t + ids)}
+    nl = {r["unit_id"]: r for r in env.dst("""
+        SELECT unit_id, title, type FROM lessons
+        WHERE tenant_id = %s AND unit_id IS NOT NULL AND type <> 'live'""", d)}
+    c.coverage("ユニット", {k: k for k in lu}, set(nl), env.skipped("lessons"))
+    both = [k for k in lu if k in nl]
+    c.values("ユニット名", [(k, lu[k]["title"], nl[k]["title"]) for k in both])
+    c.values("ユニットの種別（畳まない）", [(k, UNIT_TYPE.get(int(lu[k]["unit_type_id"])), nl[k]["type"]) for k in both])
+
+    # アンケートのユニットには定義（survey_lessons）が要る。**定義が無いと回答も入らない**
+    surveys = {k for k, v in lu.items() if int(v["unit_type_id"]) == 3}
+    marks_s, sids = _in(surveys)
+    with_enquete = {r["unit_id"] for r in env.src("unit", f"""
+        SELECT u.unit_id FROM unit u JOIN lesson l ON l.lesson_id = u.lesson_id
+        WHERE l.tenant_id IN (%s, 0) AND u.unit_id IN ({marks_s}) AND u.enquete_id > 0""", t + sids)} if surveys else set()
+    ns = {r["unit_id"] for r in env.dst("""
+        SELECT l.unit_id FROM survey_lessons s JOIN lessons l ON l.id = s.lesson_id WHERE l.tenant_id = %s""", d)}
+    c.coverage("アンケートの定義（アンケートを持つユニット）", {k: k for k in with_enquete}, ns, env.skipped("survey_lessons"))
+
+    # テスト・課題（移したユニットに付くもの）
+    marks_u, units = _in(nl)
+    tests = {env.ulid("test", r["test_id"]): r["test_id"] for r in env.src("test",
+        f"SELECT t.test_id FROM test t JOIN unit u ON u.unit_id = t.unit_id JOIN lesson l ON l.lesson_id = u.lesson_id "
+        f"WHERE l.tenant_id IN (%s, 0) AND t.unit_id IN ({marks_u})", t + units)} if nl else {}
+    nq = {r["id"] for r in env.dst("SELECT id FROM quizzes WHERE tenant_id = %s", d)}
+    c.coverage("テスト", tests, nq, env.skipped("quizzes"))
+    reports = {env.ulid("report", r["report_id"]): r["report_id"] for r in env.src("report",
+        f"SELECT r.report_id FROM report r JOIN unit u ON u.unit_id = r.unit_id JOIN lesson l ON l.lesson_id = u.lesson_id "
+        f"WHERE l.tenant_id IN (%s, 0) AND r.unit_id IN ({marks_u})", t + units)} if nl else {}
+    na = {r["id"] for r in env.dst("SELECT id FROM assignments WHERE tenant_id = %s", d)}
+    c.coverage("課題", reports, na, env.skipped("assignments"))
+
+    # 固定出題の設問（type 0 / 1）の数
+    marks_t, test_ids = _in(tests.values())
+    lq = env.src("test_sub_question", f"""
+        SELECT COUNT(*) n FROM test_sub_question q JOIN test_sub s ON s.test_sub_id = q.test_sub_id
+        JOIN test t ON t.test_id = s.test_id JOIN unit u ON u.unit_id = t.unit_id
+        JOIN lesson l ON l.lesson_id = u.lesson_id
+        WHERE l.tenant_id IN (%s, 0) AND s.test_sub_type_id IN (0, 1) AND s.test_id IN ({marks_t})""",
+        t + test_ids)[0]["n"] if tests else 0
+    nqq = env.dst("SELECT COUNT(*) n FROM quiz_questions WHERE tenant_id = %s", d)[0]["n"]
+    skipped = len(env.skipped("quiz_questions"))
+    c("固定出題の設問の数（旧 = 新 + 移さない）", int(lq) == int(nqq) + skipped,
+      f"旧 {lq} / 新 {nqq} / 移さない {skipped}")
+
+    # ライブと開催回
+    # **ライブ由来のレッスンは旧 ID（unit_id）を持たない**（02 の A27。ユニットと採番系が違い衝突する）。ID で引く
+    lives = {env.ulid("live_lesson", r["live_lesson_id"]): r["live_lesson_id"] for r in env.src(
+        "live_lesson", "SELECT live_lesson_id FROM live_lesson WHERE tenant_id = %s", t)}
+    nlive = {r["id"] for r in env.dst("SELECT id FROM lessons WHERE tenant_id = %s AND type = 'live'", d)}
+    c.coverage("ライブ", lives, nlive, env.skipped("lessons"))
+    dates = {env.ulid("live_lesson_date", r["live_lesson_date_id"]): r["live_lesson_date_id"] for r in env.src(
+        "live_lesson_date", """SELECT dt.live_lesson_date_id FROM live_lesson_date dt
+        JOIN live_lesson l ON l.live_lesson_id = dt.live_lesson_id WHERE l.tenant_id = %s""", t)}
+    nd = {r["id"] for r in env.dst("SELECT id FROM live_lesson_occurrences WHERE tenant_id = %s", d)}
+    c.coverage("ライブの開催回", dates, nd, env.skipped("live_lesson_occurrences"))
+    return c.results
+
+
+# --- 受講 ---------------------------------------------------------------------
+#: 学習記録は**会員側で絞る**（03 の決定。講座側で絞ると共有講座を通じて他テナントの会員を拾う）
+BY_MEMBER = "JOIN user u ON u.user_id = ul.user_id WHERE u.tenant_id = %s"
+
+
+def enrollment_checks(env: Env) -> list[CheckResult]:
+    c = Checker("enrollment")
+    t, d = (env.legacy_tenant,), (env.tenant_id,)
+
+    # 受講権限（会員 × 講座に畳む）
+    auth: dict = defaultdict(list)
+    for r in env.src("payment_item_lesson_authority", """
+        SELECT c.user_id, c.lesson_id, c.del_chk FROM payment_item_lesson_authority c
+        JOIN user u ON u.user_id = c.user_id WHERE u.tenant_id = %s""", t):
+        auth[(r["user_id"], r["lesson_id"])].append(int(r["del_chk"] or 0))
+    ne = {(r["uid"], r["cid"]): r["status"] for r in env.dst("""
+        SELECT u.user_id uid, c.legacy_lesson_id cid, e.status FROM enrollments e
+        JOIN users u ON u.id = e.user_id JOIN courses c ON c.id = e.course_id
+        WHERE e.tenant_id = %s AND c.legacy_lesson_id IS NOT NULL""", d)}
+    c.coverage("受講権限（会員 × 講座）", {k: f"{k[0]}:{k[1]}" for k in auth}, set(ne), env.skipped("enrollments"))
+    c.values("全部取り消された権限は revoked", [
+        (k, "revoked", ne[k]) for k, flags in auth.items() if k in ne and all(f == 1 for f in flags)])
+
+    # 学習状況（会員 × ユニット）。重複した組は新しい1件に絞る規則なので、1件だけの組で修了を比べる
+    progress: dict = defaultdict(list)
+    for r in env.src("user_learning_unit", f"""
+        SELECT ul.user_id, uu.unit_id, uu.learning_status FROM user_learning_unit uu
+        JOIN user_learning_lesson ul ON ul.user_learning_lesson_id = uu.user_learning_lesson_id {BY_MEMBER}""", t):
+        progress[(r["user_id"], r["unit_id"])].append(int(r["learning_status"] or 0))
+    np_ = {(r["uid"], r["lid"]): r["done"] for r in env.dst("""
+        SELECT u.user_id uid, l.unit_id lid, lp.completed_at IS NOT NULL done FROM lesson_progress lp
+        JOIN users u ON u.id = lp.user_id JOIN lessons l ON l.id = lp.lesson_id
+        WHERE lp.tenant_id = %s AND l.type <> 'live'""", d)}
+    c.coverage("学習状況（会員 × ユニット）", {k: f"{k[0]}:{k[1]}" for k in progress}, set(np_),
+               env.skipped("lesson_progress"))
+    c.values("修了（learning_status = 1 ⇔ 修了日あり）", [
+        (k, 1, int(np_[k])) if v[0] == 1 else (k, 0, int(np_[k]))
+        for k, v in progress.items() if len(v) == 1 and k in np_])
+
+    # テストの受験（得点）
+    attempts = {r["user_learning_test_id"]: r for r in env.src("user_learning_test", f"""
+        SELECT t.user_learning_test_id, t.sum_score FROM user_learning_test t
+        JOIN user_learning_unit uu ON uu.user_learning_unit_id = t.user_learning_unit_id
+        JOIN user_learning_lesson ul ON ul.user_learning_lesson_id = uu.user_learning_lesson_id {BY_MEMBER}""", t)}
+    na = {r["id"]: r["score"] for r in env.dst("SELECT id, score FROM quiz_attempts WHERE tenant_id = %s", d)}
+    keyed = {env.ulid("user_learning_test", k): k for k in attempts}
+    c.coverage("テストの受験", keyed, set(na), env.skipped("quiz_attempts"))
+    c.values("受験の得点（sum_score）", [
+        (old, attempts[old]["sum_score"] or 0, na[new]) for new, old in keyed.items() if new in na])
+
+    # 課題の提出（得点）
+    reports = {r["user_learning_report_id"]: r for r in env.src("user_learning_report", f"""
+        SELECT r.user_learning_report_id, r.score FROM user_learning_report r
+        JOIN user_learning_unit uu ON uu.user_learning_unit_id = r.user_learning_unit_id
+        JOIN user_learning_lesson ul ON ul.user_learning_lesson_id = uu.user_learning_lesson_id {BY_MEMBER}""", t)}
+    ns = {r["id"]: r["score"] for r in env.dst("SELECT id, score FROM submissions WHERE tenant_id = %s", d)}
+    keyed = {env.ulid("user_learning_report", k): k for k in reports}
+    c.coverage("課題の提出", keyed, set(ns), env.skipped("submissions"))
+    c.values("提出の得点", [(old, reports[old]["score"], ns[new]) for new, old in keyed.items() if new in ns])
+
+    # アンケートの回答（ユニットに付くもの = entity_type 2）
+    answers = {env.ulid("enquete_answer", r["enquete_answer_id"]): r["enquete_answer_id"] for r in env.src(
+        "enquete_answer", f"""SELECT a.enquete_answer_id FROM enquete_answer a
+        JOIN user_learning_unit uu ON uu.user_learning_unit_id = a.entity_id
+        JOIN user_learning_lesson ul ON ul.user_learning_lesson_id = uu.user_learning_lesson_id
+        {BY_MEMBER} AND a.entity_type_id = 2""", t)}
+    nr = {r["id"] for r in env.dst("SELECT id FROM survey_responses WHERE tenant_id = %s", d)}
+    c.coverage("アンケートの回答（ユニット）", answers, nr, env.skipped("survey_responses"))
+
+    # ライブの予約（開催側の中止・キャンセル・出席は旗のとおり）
+    reserves = {r["live_lesson_reserve_id"]: r for r in env.src("live_lesson_reserve", """
+        SELECT r.live_lesson_reserve_id, r.stop_chk, r.cancel_chk, r.attendance_chk FROM live_lesson_reserve r
+        JOIN live_lesson_date dt ON dt.live_lesson_date_id = r.live_lesson_date_id
+        JOIN live_lesson l ON l.live_lesson_id = dt.live_lesson_id WHERE l.tenant_id = %s""", t)}
+    nres = {r["id"]: r["status"] for r in env.dst("SELECT id, status FROM live_reservations WHERE tenant_id = %s", d)}
+    keyed = {env.ulid("live_lesson_reserve", k): k for k in reserves}
+    c.coverage("ライブの予約", keyed, set(nres), env.skipped("live_reservations"))
+
+    def flag_status(r):
+        if int(r["stop_chk"] or 0) == 1:
+            return "host_canceled"
+        if int(r["cancel_chk"] or 0) == 1:
+            return "canceled"
+        if int(r["attendance_chk"] or 0) == 1:
+            return "attended"
+        return None  # 予約中か欠席かは開催日で決まる（実行時刻に依存）
+
+    pairs = [(old, flag_status(reserves[old]), nres[new]) for new, old in keyed.items()
+             if new in nres and flag_status(reserves[old]) is not None]
+    c.values("予約の状態（中止 → host_canceled / キャンセル → canceled / 出席 → attended）", pairs)
+
+    # 修了証（講座単位）
+    certs = {env.ulid("user_certificate", f"{r['user_id']}:{r['entity_id']}"): r for r in env.src(
+        "user_certificate", """SELECT c.user_id, c.entity_id, c.certificate_no FROM user_certificate c
+        JOIN user u ON u.user_id = c.user_id WHERE u.tenant_id = %s AND c.certificate_type = 1""", t)}
+    nce = {r["id"]: r["serial_no"] for r in env.dst("SELECT id, serial_no FROM certificates WHERE tenant_id = %s", d)}
+    c.coverage("修了証", {k: f"{v['user_id']}:{v['entity_id']}" for k, v in certs.items()}, set(nce),
+               env.skipped("certificates"))
+    c.values("修了証の番号", [(k, certs[k]["certificate_no"] or 0, nce[k]) for k in certs if k in nce])
+    return c.results
+
+
 # --- 課金 ---------------------------------------------------------------------
 #: 会員の行が物理削除された申込は旧データの不整合（constraint-violations 旧 #11）。旧側から除く
 LIVE_USER = "EXISTS (SELECT 1 FROM user u WHERE u.user_id = a.user_id)"
@@ -68,7 +390,8 @@ REAL_PAYMENT_DATE = """DATE(IF(a.payment_type = 1,
 STATUS = {0: "pending", 1: "succeeded", 2: "failed"}
 
 
-def billing_checks(src: Source, dst: Target, legacy_tenant: int, tenant_id: str) -> list[CheckResult]:
+def billing_checks(env: Env) -> list[CheckResult]:
+    src, dst, legacy_tenant, tenant_id = env.src, env.dst, env.legacy_tenant, env.tenant_id
     out: list[CheckResult] = []
 
     def check(name, ok, detail=""):
@@ -245,23 +568,37 @@ def billing_checks(src: Source, dst: Target, legacy_tenant: int, tenant_id: str)
     return out
 
 
-#: 区分 → 突き合わせ。**いまは課金だけ**
-CHECKS: dict[str, Callable[[Source, Target, int, str], list[CheckResult]]] = {
+#: 区分 → 突き合わせ
+CHECKS: dict[str, Callable[[Env], list[CheckResult]]] = {
+    "foundation": foundation_checks,
+    "content": content_checks,
+    "enrollment": enrollment_checks,
     "billing": billing_checks,
 }
+ORDER = ("foundation", "content", "enrollment", "billing")
 
 
 def run(ctx, sections: set[str]) -> list[CheckResult]:
-    """選んだ区分の突き合わせを流す。旧 DB と移行先の両方に接続が要る。"""
+    """選んだ区分の突き合わせを流す。旧 DB と移行先の両方に接続が要る。
+
+    **同じ `verify` で照合を流したあとに呼ぶ。** 移さなかった行の一覧（`ctx.exclusions().keys`）を
+    「説明のつく欠け」として使うため。
+    """
     if ctx.target.connectionless or ctx.source is None:
         return []
     source = ctx.require_source()
+    roles = {int(k): str(v) for k, v in ((ctx.config.mappings.get("role") or {}).get("values") or {}).items()}
+    env = Env(
+        src=lambda table, sql, params: source.fetch(table, sql, params),
+        dst=lambda sql, params: ctx.target.query(sql, params),
+        legacy_tenant=ctx.config.tenant.legacy_id,
+        tenant_id=ctx.tenant_id.value,
+        ulid=lambda ns, key: ctx.ulid.for_row(ns, key),
+        excluded=ctx.exclusions().keys,
+        roles=roles,
+    )
     results: list[CheckResult] = []
-    for section in sorted(sections & set(CHECKS)):
-        results += CHECKS[section](
-            lambda table, sql, params: source.fetch(table, sql, params),
-            lambda sql, params: ctx.target.query(sql, params),
-            ctx.config.tenant.legacy_id,
-            ctx.tenant_id.value,
-        )
+    for section in ORDER:
+        if section in sections:
+            results += CHECKS[section](env)
     return results
