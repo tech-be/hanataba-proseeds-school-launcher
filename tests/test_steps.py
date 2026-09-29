@@ -128,6 +128,13 @@ class UsersStepTest(unittest.TestCase):
         self.ctx.tenant_id.resolve("0" * 26)
         self.records = UsersStep().transform(self.ctx, [USER_ROW])
 
+    def test_invalid_member_stays_invalid(self) -> None:
+        """**`valid_chk = 0` を有効にしない。** `or 1` と書くと 0 が 1 に化けていた。"""
+        [rec] = UsersStep().transform(self.ctx, [{**USER_ROW, "valid_chk": 0, "del_chk": 0}])
+        self.assertEqual((rec.values["is_valid"], rec.values["status"]), (False, "inactive"))
+        [rec] = UsersStep().transform(self.ctx, [{**USER_ROW, "valid_chk": None}])
+        self.assertTrue(rec.values["is_valid"])
+
     def test_name_is_split_and_generated(self) -> None:
         """姓 / 名は分割のまま持ち、name は生成する。"""
         values = self.records[0].values
