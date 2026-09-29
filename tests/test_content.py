@@ -360,13 +360,14 @@ class QuizQuestionLabelTest(unittest.TestCase):
 
     def names(self, rows):
         records = od_quizzes.QuizQuestionCategoriesStep().transform(make_ctx(), rows)
-        return {r.values["legacy_id"]: r.values["name"] for r in records}, records
+        return {r.values["question_cate_id"]: r.values["name"] for r in records}, records
 
-    def test_goes_to_labels_with_legacy_id(self) -> None:
+    def test_goes_to_labels_with_question_cate_id(self) -> None:
         _, [rec] = self.names([self.cate(7, "HTML講座")])
         self.assertEqual(rec.table, "quiz_question_labels")
-        self.assertEqual((rec.values["legacy_id"], rec.values["name"]), (7, "HTML講座"))
-        self.assertEqual(rec.natural_key, ("tenant_id", "legacy_id"))
+        self.assertEqual((rec.values["question_cate_id"], rec.values["name"]), (7, "HTML講座"))
+        self.assertEqual(rec.natural_key, ("tenant_id", "question_cate_id"))
+        self.assertNotIn("legacy_id", rec.values)
 
     def test_overlapping_names_are_distinguished(self) -> None:
         names, _ = self.names([

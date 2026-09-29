@@ -81,7 +81,7 @@ class GroupsStep(Step):
                     values={
                         "id": ctx.ulid.for_row("group", row["group_id"]),
                         "tenant_id": tenant_id,
-                        "legacy_id": int(row["group_id"]),
+                        "group_id": int(row["group_id"]),
                         "parent_id": ctx.ulid.for_row("group", parent) if parent else None,
                         "depth": int(row.get("hierarchy") or 0),
                         "code": row.get("group_code"),
@@ -91,7 +91,7 @@ class GroupsStep(Step):
                         "deleted_at": _deleted_at(row),
                         "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
                     },
-                    natural_key=("tenant_id", "legacy_id"),
+                    natural_key=("tenant_id", "group_id"),
                 )
             )
         # 親より先に子を入れると FK 違反になるので、深さの浅い順に並べる
@@ -117,7 +117,7 @@ class AttributesStep(Step):
                 values={
                     "id": ctx.ulid.for_row("attribute", row["attribute_id"]),
                     "tenant_id": tenant_id,
-                    "legacy_id": int(row["attribute_id"]),
+                    "attribute_id": int(row["attribute_id"]),
                     "code": None,
                     "name": row.get("attribute_name"),
                     "memo": row.get("attribute_memo"),
@@ -125,7 +125,7 @@ class AttributesStep(Step):
                     "deleted_at": _deleted_at(row),
                     "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
                 },
-                natural_key=("tenant_id", "legacy_id"),
+                natural_key=("tenant_id", "attribute_id"),
             )
             for row in rows
         ]

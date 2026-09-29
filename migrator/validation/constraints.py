@@ -363,7 +363,7 @@ def _unique(
                     # **同じ行の再実行。** 自然キーで引くと移行先に居る＝前回入れた行なので、
                     # 「別の行と衝突した」ではない。`insert_many` が自然キーで飛ばす。
                     # ここで違反にすると、再実行のたびに一覧が汚れ、Step によっては
-                    # 行が1件も残らず落ちる（`legacy_id` の UNIQUE を足したときに起きた）
+                    # 行が1件も残らず落ちる（旧 ID の列の UNIQUE を足したときに起きた）
                     continue
                 if values[0] in existing:
                     out.setdefault(

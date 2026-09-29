@@ -1,8 +1,8 @@
 """live.3 / live.4 — ライブ本体（旧 `live_lesson`）と開催回（旧 `live_lesson_date`）。
 
-**`lessons.legacy_id` は使わない。** その列はオンデマンドが `unit.unit_id` で使っており、
+**`lessons.unit_id`（旧 ID）は使わない。** その列はオンデマンドが `unit.unit_id` で使っており、
 ステージング実測で **18件中11件**がライブの ID と衝突する。旧 ID は
-`live_lessons.legacy_id`（A1 で追加）に持つ。
+`live_lessons.live_lesson_id`（A1 で追加。旧 `legacy_id`）に持つ。
 
 **開催回は `datetime(3)`、ライブ本体の `scheduled_at` は `timestamp`。**
 同じ区分の中で TZ の扱いが逆になるので、列ごとに `ColumnKind` を使い分ける。
@@ -128,9 +128,9 @@ class LiveLessonsStep(Step):
                     values={
                         "id": ctx.ulid.for_row("live_lesson", row["live_lesson_id"]),
                         "tenant_id": tenant_id,
-                        # **`lessons.legacy_id` には入れない。** オンデマンドの
+                        # **`lessons.unit_id` には入れない。** オンデマンドの
                         # `unit.unit_id` と衝突する（実測 18件中11件）
-                        "legacy_id": None,
+                        "unit_id": None,
                         "course_id": course_for(ctx, row["_course"]),
                         "title": row.get("live_lesson_name") or "",
                         "description": row.get("live_lesson_detail"),
@@ -178,7 +178,7 @@ class LiveLessonDetailsStep(Step):
                     values={
                         "lesson_id": ctx.ulid.for_row("live_lesson", row["live_lesson_id"]),
                         "tenant_id": tenant_id,
-                        "legacy_id": int(row["live_lesson_id"]),
+                        "live_lesson_id": int(row["live_lesson_id"]),
                         # **NOT NULL。** 開催回が1件も無いライブはここで弾かれて一覧に出る
                         "scheduled_at": convert(scheduled, ColumnKind.TIMESTAMP),
                         # LiveKit のルーム。旧に対応概念が無い（`live_lesson_url` は会議 URL）

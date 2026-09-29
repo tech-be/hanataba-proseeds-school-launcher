@@ -194,7 +194,7 @@ class TenantStep(Step):
                 values={
                     "id": tenant_id,
                     # 旧 ID。バッジ API の URL が /tenant/{lw2 の tenant_id}/... （A24）
-                    "legacy_id": config.tenant.legacy_id,
+                    "tenant_id": config.tenant.legacy_id,
                     "slug": config.tenant.slug,
                     "name": name,
                     "short_name": row.get("tenent_name_short"),

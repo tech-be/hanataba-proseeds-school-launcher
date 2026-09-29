@@ -320,7 +320,7 @@
 
 | 旧カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|:--:|---|---|
-| テーブル全体 | **テーブル** | 中 | **カテゴリが無いと `test_sub` の出題条件（カテゴリ×レベルから N 問）が成立しない** | `quiz_question_labels`（管理者が作るラベルと同じ表）に `legacy_id` 付きで移す（→ A6）。名前が重なる分は区別を付ける |
+| テーブル全体 | **テーブル** | 中 | **カテゴリが無いと `test_sub` の出題条件（カテゴリ×レベルから N 問）が成立しない** | `quiz_question_labels`（管理者が作るラベルと同じ表）に旧 ID（`question_cate_id`）付きで移す（→ A6）。名前が重なる分は区別を付ける |
 
 **まとめ**: 受け皿が無い列 — / 高 0 件
 
@@ -428,7 +428,7 @@
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
 | — | `lessons.course_id` char(26) **NOT NULL** + FK → `courses` | **テーブル** | **高** | **lw2 のライブは講座に属さないので、親となる course が存在しない。** この値が決まらないと**1行も入らない** | **商品制限のあるライブ（5件）は、その商品が売っている実在の講座に置く。** `live_lesson_limit_item` → `payment_item` → `payment_item_lesson` で講座に1対1でたどれ、**その2講座はオンデマンドで移行済み**。**制限の無い13件だけ受け皿が要る**（→ [`live_lesson_limit_item`](#live_lesson_limit_item--なし)）。ETL設計 §11-4 の案A / 案B は**カテゴリで分ける案**だが、カテゴリの紐付けは18件中6件しかなく成立しない |
-| `live_lesson_id` int(11) | `lessons.legacy_id` int + **UNIQUE `uk_lessons_legacy (tenant_id, legacy_id)`** | **テーブル** | **高** | **`lessons.legacy_id` はオンデマンドが `unit.unit_id` で使っている。** ライブの ID を同じ列に入れると衝突する。ステージング実測で **18件中 11件**が既存の `unit_id` と重なる | **`lessons.legacy_id` はライブでは使わず NULL にし、`live_lessons.legacy_id` を追加して旧 ID を持つ**（→ A22）。`UNIQUE (tenant_id, legacy_id)` はそちらに張る。**`uk_lessons_legacy` は外さない** |
+| `live_lesson_id` int(11) | `lessons.unit_id` int + **UNIQUE `uk_lessons_legacy (tenant_id, unit_id)`** | **テーブル** | **高** | **`lessons.unit_id` はオンデマンドが `unit.unit_id` で使っている。** ライブの ID を同じ列に入れると衝突する。ステージング実測で **18件中 11件**が既存の `unit_id` と重なる | **`lessons.unit_id` はライブでは使わず NULL にし、`live_lessons.live_lesson_id` を追加して旧 ID を持つ**（→ A22）。`UNIQUE (tenant_id, live_lesson_id)` はそちらに張る。**`uk_lessons_legacy` は外さない** |
 | — | `live_lessons.scheduled_at` timestamp **NOT NULL** | **性質** | **高** | **1ライブに複数の開催回がある**（ステージング実測 2,840件、最大 1,657回／ライブ）のに、`live_lessons` は単一の開催日時を要求する。**開催回は `live_lesson_occurrences` 側にあるため、この列は重複した情報を持つ** | **直近の開催予定日を入れる**（過去の回しか無ければ最後の回）。**ダッシュボードの「今日のライブ」がこの列だけを見ており**（`dashboard_repo.go: ListTodaysLiveLessons`）、開催回テーブルを参照していない。**誰も更新しないので移行の翌日には古くなる** — 導出に変えるかは新環境側の課題（[migration-spec の未確定](migration-spec.md#未確定として残っているもの)） |
 | `live_lesson_type` tinyint(4) | — | 性質 | 中 | **`0` = オンラインレッスン、`1` = 教室レッスン**（`LiveLessonController::$liveLessonTypeList`）。ステージング実測 15 / 3。**入力の必須項目が逆**で、`0` は `live_lesson_url` 必須、`1` は `facility_id` 必須（`LiveLessonController::570`） | **どちらもライブとして移す。** A22 の `live_lessons.settings` に種別と会場を残す。ReCADemy の教室レッスン3件はすべて施設「ご自身のパソコン」で、**対面の教室ではなく自席でソフトを使う予約枠**だった |
 | `live_lesson_url` text | `live_lesson_occurrences.meeting_url` varchar(1000) | 性質 | 中 | **レッスン側の URL → 開催回ごとの URL** へ移す。**`live_lessons.live_room_id`（LiveKit のルーム）とは別物**で、取り違えると会議 URL が消える。text → varchar(1000) の切り捨ても起きうる | 全開催回に同じ URL を複製する。**桁溢れは抽出時に検査**（ステージング実測の最大は 77文字で余裕がある）。`live_room_id` は NULL のままにする |
@@ -588,7 +588,7 @@
 | **A2** | `course_tags` / `course_tag_links` | `lesson_tag`（19行）/ `lesson_lesson_tag`（39行） | ・講座一覧のタグ絞り込み<br>・講座編集画面のタグ入力<br>・**`category` と併存する**（カテゴリは1件、タグは複数） |
 | **A3** | `course_categories.image_url` VARCHAR(512) NULL / `course_categories.created_by` CHAR(26) NULL ／ `content_statuses` に `deleted` | `lesson_cate_img_file_name` / `regist_user_id` ／ `lesson.del_chk` / `unit.del_chk` | ・カテゴリ画像の表示（**`icon` とは別物**。アイコン識別子に流用しない）<br>・**`deleted` を一覧から外す**判定（`is_visible=FALSE` / `is_editable=FALSE` で入れてある） |
 | **A21** | 代理講師の `users` 行（**DDL ではなくデータ**） | 該当なし（lw2 に講座単位の講師が無い） | ・**`courses.instructor_id` は NOT NULL のまま。** 移行ツールが1行作って全講座に割り当てる<br>・`password_hash` を空にして**ログインできない行**にする<br>・**対応表を受け取ったら付け替え、代理講師のままの講座が0件になったことを確認する** |
-| **A27** | `courses.legacy_id` INT NULL ＋ UNIQUE `uk_courses_legacy (tenant_id, legacy_id)` / `lessons.legacy_id` ＋ `uk_lessons_legacy` | `lesson.lesson_id` / `unit.unit_id` | ・**移行ツールが旧 ID で親子を突き合わせるのに要る**（無いと dry-run が止まる）<br>・cutover 後の問い合わせ調査で「旧画面のこの講座」を引く手段になる<br>・**ライブ由来の `lessons` は NULL のまま**（採番系が違うので衝突する。→ A22） |
+| **A27** | `courses.legacy_lesson_id` INT NULL ＋ UNIQUE `uk_courses_legacy (tenant_id, legacy_lesson_id)` / `lessons.unit_id` ＋ `uk_lessons_legacy` | `lesson.lesson_id` / `unit.unit_id` | ・**移行ツールが旧 ID で親子を突き合わせるのに要る**（無いと dry-run が止まる）<br>・cutover 後の問い合わせ調査で「旧画面のこの講座」を引く手段になる<br>・**ライブ由来の `lessons` は NULL のまま**（採番系が違うので衝突する。→ A22） |
 
 ### C2 ユニット・動画
 
@@ -608,7 +608,7 @@
 
 | # | 追加するもの | 旧環境の対応 | 変更が必要な機能 |
 |---|---|---|---|
-| **A6** | `quiz_question_labels.legacy_id`（分類。当初の `quiz_question_categories` から統合）/ `quiz_question_banks` | `question_cate` / `question`（3,880行） | ・**問題バンクの管理画面**（テストに属さない問題の一覧・編集）<br>・出題条件から問題を引く出題ロジック<br>・分類は管理画面の「カテゴリ」として見え、編集できる（2026-09-28 に統合） |
+| **A6** | `quiz_question_labels.question_cate_id`（分類。当初の `quiz_question_categories` から統合）/ `quiz_question_banks` | `question_cate` / `question`（3,880行） | ・**問題バンクの管理画面**（テストに属さない問題の一覧・編集）<br>・出題条件から問題を引く出題ロジック<br>・分類は管理画面の「カテゴリ」として見え、編集できる（2026-09-28 に統合） |
 | **A7** | `quiz_questions.bank_id`（＋FK）/ `image_url` / `name` / `hint` / `required`、`quiz_options.image_url`、`quizzes.max_attempts` / `suspend_enabled` / `display_settings` ／ `quiz_question_types` に `free_text` | `question_name` / `hint` / 画像ファイル名 / `test.exam_max_number` / `suspended_chk` / 表示設定6列 | ・受験回数の上限チェック<br>・中断・再開（`suspend_enabled`）<br>・正解 / 解説 / 点数を見せるかの出し分け<br>・**`free_text` は候補との完全一致で自動採点する。** lw2 の `UserLearningLessonModel::_markAnswers` が `question_type_id == 3` のとき `explode('|', answer)` した候補に `in_array` で判定しており、移行先も同じ形。**正解候補は `quiz_options` に `is_correct = TRUE` の行として展開する**（候補はすべて正解。記述式に不正解の選択肢は無い） |
 | **A8** | `quiz_question_rules`（カテゴリ・難易度・出題数） | `test_sub`（285行） | ・**ランダム出題。** 「このカテゴリ・この難易度から N 問」を解釈する出題ロジック<br>・**これが無いと固定リストのテストにしかならない**<br>・**スキーマだけ先に置いてある**（2026-09-28 決定）。作るかどうかは cutover 前に決める（→ [確認事項 C6](../open-questions.md)） |
 
@@ -622,13 +622,13 @@
 
 | # | 追加するもの | 旧環境の対応 | 変更が必要な機能 |
 |---|---|---|---|
-| **A12** | `survey_pages`（UNIQUE は `(tenant_id, lesson_id, legacy_id)`）/ `survey_lessons.name` / `survey_questions.page_id`（＋FK）/ `image_url`、`survey_questions.prompt` を TEXT へ、`survey_question_options.image_url` ／ `survey_question_kinds` に `file_upload` | `enquete_page` / `enquete_name` / 設問画像 / 添付設問 | ・ページ単位の設問表示とページ送り<br>・**UNIQUE に `lesson_id` を含めた理由**: 1つの `enquete` を複数ユニットが参照する（実測7件）。テナント単位だと 89行中 60行が入らない<br>・`prompt` を TEXT に広げたので**入力欄の文字数制限を合わせる**<br>・**回答側（`survey_responses` ほか）は受講（3）の担当** |
+| **A12** | `survey_pages`（UNIQUE は `(tenant_id, lesson_id, enquete_page_id)`）/ `survey_lessons.name` / `survey_questions.page_id`（＋FK）/ `image_url`、`survey_questions.prompt` を TEXT へ、`survey_question_options.image_url` ／ `survey_question_kinds` に `file_upload` | `enquete_page` / `enquete_name` / 設問画像 / 添付設問 | ・ページ単位の設問表示とページ送り<br>・**UNIQUE に `lesson_id` を含めた理由**: 1つの `enquete` を複数ユニットが参照する（実測7件）。テナント単位だと 89行中 60行が入らない<br>・`prompt` を TEXT に広げたので**入力欄の文字数制限を合わせる**<br>・**回答側（`survey_responses` ほか）は受講（3）の担当** |
 
 ### C8 ライブ定義
 
 | # | 追加するもの | 旧環境の対応 | 変更が必要な機能 |
 |---|---|---|---|
-| **A22** | `live_lessons.legacy_id` ＋ UNIQUE `uk_live_lessons_legacy` / `live_lessons.settings` JSON NULL | `live_lesson.live_lesson_id` ほか（予約上限・詳細 HTML・公開設定・画像・元の講師・種別・施設） | ・**`lessons.legacy_id` には入れない。** オンデマンドが `unit.unit_id` で使っており、実測18件中11件が衝突する<br>・1人あたりの予約上限（`reserve_max_count`）の判定は**新環境に無い**。機能を作るかを決める<br>・教室レッスンの会場（`facility`）は文字列で残すだけ。住所や地図が要るなら別表が要る |
+| **A22** | `live_lessons.live_lesson_id` ＋ UNIQUE `uk_live_lessons_legacy` / `live_lessons.settings` JSON NULL | `live_lesson.live_lesson_id` ほか（予約上限・詳細 HTML・公開設定・画像・元の講師・種別・施設） | ・**`lessons.unit_id` には入れない。** オンデマンドが `unit.unit_id` で使っており、実測18件中11件が衝突する<br>・1人あたりの予約上限（`reserve_max_count`）の判定は**新環境に無い**。機能を作るかを決める<br>・教室レッスンの会場（`facility`）は文字列で残すだけ。住所や地図が要るなら別表が要る |
 | **A23** | `live_lesson_categories` / `live_lesson_category_links` | `live_lesson_cate`（5件）/ `live_lesson_lesson_cate`（6件） | ・**ライブとカテゴリは多対多**（`live_lesson.live_lesson_cate_id` は使われていない）<br>・ライブ一覧のカテゴリ絞り込み |
 | **A24** | `live_lesson_group_targets`（`lesson_id` / `group_id`） | `live_lesson_group`（実測0件） | ・グループ単位の公開判定。参照先のグループは基盤 A10 で移行済み<br>・**実測0件なので、本番ダンプで件数を確認してから実装する** |
 

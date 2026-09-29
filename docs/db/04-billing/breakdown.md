@@ -68,7 +68,7 @@
 
 | 旧テーブル | 新テーブル | データ種 | lw2区分 | ローカルデータ数 | A·B·C | 説明 | 移行の注意 |
 |---|---|---|---|---:|:--:|---|---|
-| `receipt_log` | `receipts` | K08 領収書 | データ | 21 | C | 発行済み領収書。実測21件（全件が対象テナント） | 決済（B3）に紐づくので**先に決済が要る**。8決済に21件（再発行を含む）。`issue_no` は決済ごとに振り直し、旧の番号は `legacy_id`（A7） |
+| `receipt_log` | `receipts` | K08 領収書 | データ | 21 | C | 発行済み領収書。実測21件（全件が対象テナント） | 決済（B3）に紐づくので**先に決済が要る**。8決済に21件（再発行を含む）。`issue_no` は決済ごとに振り直し、旧の番号は `receipt_log_id`（A7） |
 | `receipt_setting` | `receipt_settings` | K08 領収書 | 設定 | 1 | C | 領収書の発行設定。実測1件 | |
 | `tax` | `receipt_settings.tax_rate` | K09 消費税 | 設定 | 1 | C | 消費税率 | **`tenant_id` を持たない全体設定。** 新は `receipt_settings.tax_rate` の1列で、期間別の税率は持てない。発行済みの領収書は `receipts.tax_rate` に当時の税率を持てる |
 | `agreement` / `cancel_policy` / `privacy_policy` / `tokusyo` | `tenant_legal_documents`（A8） | K12 特商法・規約 | 設定 | 4 / 2 / 2 / 2 | C | 規約・キャンセルポリシー・プライバシーポリシー・特商法表記。実測は各1〜2件 | 本文があるのは利用規約（ja / en）だけで、他は空（移さない）。**アプリはまだ読まない**。lw2 は同意を記録していないので `user_consents` には何も入らない |

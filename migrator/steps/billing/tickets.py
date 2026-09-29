@@ -94,10 +94,10 @@ class TicketTypesStep(Step):
                 values={
                     "id": ctx.ulid.for_row("ticket", row["ticket_id"]),
                     "tenant_id": tenant_id,
-                    "legacy_id": int(row["ticket_id"]),
+                    "ticket_id": int(row["ticket_id"]),
                     # **`user_ticket_log.ticket_type` が参照しているのはこの値**
                     # （`ticket_id` ではない）。履歴を移さなくても後から突き合わせられるよう残す
-                    "legacy_type": row.get("ticket_type"),
+                    "legacy_ticket_type": row.get("ticket_type"),
                     "name": row.get("ticket_name") or "",
                     "description": None,
                     "refund_deadline_days": None,  # 旧に対応なし
@@ -109,7 +109,7 @@ class TicketTypesStep(Step):
                     ),
                     "created_at": convert(row.get("regist_date"), ColumnKind.DATETIME),
                 },
-                natural_key=("tenant_id", "legacy_id"),
+                natural_key=("tenant_id", "ticket_id"),
                 source_key=int(row["ticket_id"]),
             )
             for row in rows

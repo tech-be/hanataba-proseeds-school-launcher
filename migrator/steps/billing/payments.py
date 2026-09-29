@@ -230,7 +230,7 @@ class PlansStep(Step):
                 values={
                     "id": ctx.ulid.for_row("payment_item", row["item_id"]),
                     "tenant_id": tenant_id,
-                    "legacy_id": int(row["item_id"]),
+                    "item_id": int(row["item_id"]),
                     "name": row.get("item_name") or "",
                     "description": row.get("description"),
                     "plan_type": "course_bundle",
@@ -251,7 +251,7 @@ class PlansStep(Step):
                     "settings": _json(_plan_settings(row)),
                     "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
                 },
-                natural_key=("tenant_id", "legacy_id"),
+                natural_key=("tenant_id", "item_id"),
                 source_key=int(row["item_id"]),
             )
             for row in rows
@@ -350,7 +350,7 @@ class PaymentsStep(Step):
                         "id": ctx.ulid.for_row("payment_application", app["application_id"]),
                         "tenant_id": tenant_id,
                         "user_id": ctx.ulid.for_row("user", app["user_id"]),
-                        "legacy_id": int(app["application_id"]),
+                        "application_id": int(app["application_id"]),
                         # **税込**の請求額（クーポン適用後）
                         "amount": app.get("amount") or 0,
                         "currency": "JPY",
@@ -363,7 +363,7 @@ class PaymentsStep(Step):
                         "settings": _json(_payment_settings(app, item)),
                         "created_at": convert(app.get("application_date_time"), ColumnKind.TIMESTAMP),
                     },
-                    natural_key=("tenant_id", "legacy_id"),
+                    natural_key=("tenant_id", "application_id"),
                     source_key=int(app["application_id"]),
                 )
             )

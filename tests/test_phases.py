@@ -289,7 +289,7 @@ class SchemaCheckTest(unittest.TestCase):
         with self.assertRaises(PreflightError) as caught:
             check_schema(ctx, selected)
         # 見るのは選んだ区分の分だけ
-        self.assertIn("ticket_types.legacy_id", str(caught.exception))
+        self.assertIn("ticket_types.ticket_id", str(caught.exception))
         self.assertNotIn("enrollments", str(caught.exception))
 
     def test_not_repeated_when_common_is_selected(self) -> None:

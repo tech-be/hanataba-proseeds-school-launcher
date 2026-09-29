@@ -108,7 +108,7 @@ class PaymentsStepTest(unittest.TestCase):
 
     def test_status_and_provider(self) -> None:
         recs = self.records([app(1, 1, 1), app(2, 1, 0), app(3, 1, 2), app(4, 3, 1), app(5, 2, 1)])
-        got = {r.values["legacy_id"]: (r.values["status"], r.values["provider"]) for r in recs}
+        got = {r.values["application_id"]: (r.values["status"], r.values["provider"]) for r in recs}
         self.assertEqual(got, {
             1: ("succeeded", "legacy_jpayment"), 2: ("pending", "legacy_jpayment"),
             3: ("failed", "legacy_jpayment"), 4: ("succeeded", "bank_transfer"),
@@ -180,7 +180,7 @@ class ReceiptsTest(unittest.TestCase):
         ctx = make_ctx(t)
         step = rcp.ReceiptsStep()
         recs = step.transform(ctx, step.extract(ctx))
-        got = {r.values["legacy_id"]: (r.values["issue_no"], r.values["transaction_date"]) for r in recs}
+        got = {r.values["receipt_log_id"]: (r.values["issue_no"], r.values["transaction_date"]) for r in recs}
         self.assertEqual(got, {11: (1, date(2024, 4, 3)), 12: (1, date(2024, 4, 1)), 13: (2, date(2024, 4, 3))})
 
 

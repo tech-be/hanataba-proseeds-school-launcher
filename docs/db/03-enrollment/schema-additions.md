@@ -225,7 +225,7 @@ CREATE TABLE live_lesson_reviews (
     tenant_id             CHAR(26)     NOT NULL,
     lesson_id             CHAR(26)     NOT NULL,
     user_id               CHAR(26)     NOT NULL,
-    legacy_id             INT          NOT NULL,   -- 旧 live_lesson_review_id
+    live_lesson_review_id INT          NULL,       -- 旧 live_lesson_review_id（新規作成の行は NULL）
     title                 VARCHAR(100) NULL,
     body                  TEXT         NULL,
     star_rating           INT          NULL,
@@ -235,7 +235,7 @@ CREATE TABLE live_lesson_reviews (
     deleted_at            DATETIME(3)  NULL,
     created_at            DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     updated_at            DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-    UNIQUE KEY uk_llr_legacy (tenant_id, legacy_id),
+    UNIQUE KEY uk_llr_legacy (tenant_id, live_lesson_review_id),
     KEY idx_llr_lesson (tenant_id, lesson_id),
     CONSTRAINT fk_llr_lesson FOREIGN KEY (lesson_id) REFERENCES lessons (id) ON DELETE CASCADE,
     CONSTRAINT fk_llr_user   FOREIGN KEY (user_id)   REFERENCES users (id) ON DELETE CASCADE,

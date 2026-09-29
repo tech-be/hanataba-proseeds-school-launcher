@@ -116,7 +116,7 @@ class LessonsStep(Step):
                     values={
                         "id": ctx.ulid.for_row("unit", row["unit_id"]),
                         "tenant_id": tenant_id,
-                        "legacy_id": int(row["unit_id"]),
+                        "unit_id": int(row["unit_id"]),
                         "course_id": ctx.ulid.for_row("lesson", row["lesson_id"]),
                         "title": row.get("title"),
                         "description": row.get("detail"),
@@ -136,7 +136,7 @@ class LessonsStep(Step):
                         "settings": _settings(row),
                         "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
                     },
-                    natural_key=("tenant_id", "legacy_id"),
+                    natural_key=("tenant_id", "unit_id"),
                     source_key=int(row["unit_id"]),
                 )
             )

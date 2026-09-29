@@ -86,7 +86,7 @@ def billing_checks(src: Source, dst: Target, legacy_tenant: int, tenant_id: str)
     }
     new: dict = defaultdict(lambda: [0, Decimal(0)])
     wrong_status = 0
-    for r in dst("SELECT status, amount, settings FROM payments WHERE tenant_id = %s AND legacy_id IS NOT NULL", d):
+    for r in dst("SELECT status, amount, settings FROM payments WHERE tenant_id = %s AND application_id IS NOT NULL", d):
         st = json.loads(r["settings"] or "{}")
         key = (st.get("legacy_payment_type"), st.get("legacy_application_result"))
         new[key][0] += 1
@@ -111,8 +111,8 @@ def billing_checks(src: Source, dst: Target, legacy_tenant: int, tenant_id: str)
         WHERE a.tenant_id = %s AND a.payment_type IN (1, 2, 3) AND a.application_result = 1 AND {LIVE_USER}
         GROUP BY 1""", t)}
     nu = {r["uid"]: num(r["amt"]) for r in dst("""
-        SELECT u.legacy_id uid, SUM(p.amount) amt FROM payments p JOIN users u ON u.id = p.user_id
-        WHERE p.tenant_id = %s AND p.status = 'succeeded' AND p.legacy_id IS NOT NULL GROUP BY 1""", d)}
+        SELECT u.user_id uid, SUM(p.amount) amt FROM payments p JOIN users u ON u.id = p.user_id
+        WHERE p.tenant_id = %s AND p.status = 'succeeded' AND p.application_id IS NOT NULL GROUP BY 1""", d)}
     diff = {k: (lu.get(k), nu.get(k)) for k in set(lu) | set(nu) if lu.get(k) != nu.get(k)}
     check(f"会員ごとの支払い済み金額（{len(lu)} 名）", not diff, _sample(diff.items()) if diff else "")
     check("支払い済みの総額", sum(lu.values()) == sum(nu.values()),
@@ -129,8 +129,8 @@ def billing_checks(src: Source, dst: Target, legacy_tenant: int, tenant_id: str)
         WHERE a.tenant_id = %s AND {MONEY} AND {LIVE_USER}""", t):
         kind[r["aid"]] = ("subscription" if r["ext"] == 1
                           else "course_purchase" if r["it"] == 0 and r["nl"] == 1 else "lw2_purchase")
-    nk = {r["legacy_id"]: r["type"] for r in dst(
-        "SELECT legacy_id, type FROM payments WHERE tenant_id = %s AND legacy_id IS NOT NULL", d)}
+    nk = {r["application_id"]: r["type"] for r in dst(
+        "SELECT application_id, type FROM payments WHERE tenant_id = %s AND application_id IS NOT NULL", d)}
     bad = [k for k in set(kind) | set(nk) if kind.get(k) != nk.get(k)]
     check(f"決済の種類（{len(kind)} 件）", not bad, _sample(bad) if bad else "")
 
@@ -143,11 +143,11 @@ def billing_checks(src: Source, dst: Target, legacy_tenant: int, tenant_id: str)
         JOIN payment_application_item x ON x.application_id = a.application_id
         JOIN payment_item i ON i.item_id = x.item_id
         WHERE r.tenant_id = %s""", t)}
-    nr = {r["legacy_id"]: r for r in dst("""
-        SELECT r.legacy_id, r.issue_no, r.amount, r.recipient_name, r.note, r.issuer_name, r.tax_rate,
-               r.tax_excluded_amount, r.issuer_invoice_registration_no, r.transaction_date, p.legacy_id app
+    nr = {r["receipt_log_id"]: r for r in dst("""
+        SELECT r.receipt_log_id, r.issue_no, r.amount, r.recipient_name, r.note, r.issuer_name, r.tax_rate,
+               r.tax_excluded_amount, r.issuer_invoice_registration_no, r.transaction_date, p.application_id app
         FROM receipts r JOIN payments p ON p.id = r.payment_id
-        WHERE r.tenant_id = %s AND r.legacy_id IS NOT NULL""", d)}
+        WHERE r.tenant_id = %s AND r.receipt_log_id IS NOT NULL""", d)}
     check(f"領収書の件数（旧 {len(lr)} / 新 {len(nr)}）", set(lr) == set(nr))
     for lf, nf, label in (
         ("receipt_price", "amount", "金額"), ("receipt_name", "recipient_name", "宛名"),
@@ -167,8 +167,8 @@ def billing_checks(src: Source, dst: Target, legacy_tenant: int, tenant_id: str)
     # 5. 商品
     li = {r["item_id"]: r for r in src("payment_item",
         "SELECT item_id, price, is_auto_extension ext FROM payment_item WHERE tenant_id = %s AND item_type = 0", t)}
-    np_ = {r["legacy_id"]: r for r in dst(
-        "SELECT legacy_id, price, interval_type, status FROM tenant_plans WHERE tenant_id = %s AND legacy_id IS NOT NULL", d)}
+    np_ = {r["item_id"]: r for r in dst(
+        "SELECT item_id, price, interval_type, status FROM tenant_plans WHERE tenant_id = %s AND item_id IS NOT NULL", d)}
     check(f"商品の件数（旧 {len(li)} / 新 {len(np_)}）", set(li) == set(np_))
     bad = [k for k in li if k in np_ and not (
         num(li[k]["price"]) == num(np_[k]["price"])
@@ -179,9 +179,9 @@ def billing_checks(src: Source, dst: Target, legacy_tenant: int, tenant_id: str)
         SELECT l.item_id, l.lesson_id FROM payment_item_lesson l JOIN payment_item i ON i.item_id = l.item_id
         WHERE i.tenant_id = %s AND i.item_type = 0 AND l.del_chk = 0""", t)}
     npc = {(r["pid"], r["cid"]) for r in dst("""
-        SELECT p.legacy_id pid, c.legacy_id cid FROM plan_courses x
+        SELECT p.item_id pid, c.legacy_lesson_id cid FROM plan_courses x
         JOIN tenant_plans p ON p.id = x.plan_id JOIN courses c ON c.id = x.course_id
-        WHERE x.tenant_id = %s AND p.legacy_id IS NOT NULL""", d)}
+        WHERE x.tenant_id = %s AND p.item_id IS NOT NULL""", d)}
     check(f"商品と講座の組（旧 {len(lpc)} / 新 {len(npc)}）", lpc == npc,
           f"旧だけ {sorted(lpc - npc)[:3]} / 新だけ {sorted(npc - lpc)[:3]}" if lpc != npc else "")
 
@@ -194,11 +194,11 @@ def billing_checks(src: Source, dst: Target, legacy_tenant: int, tenant_id: str)
         WHERE u.tenant_id = %s AND {MONEY}""", t):
         auth[(r["uid"], r["lid"])].add(r["aid"])
     links = {(r["uid"], r["cid"]): r["pp"] for r in dst("""
-        SELECT u.legacy_id uid, c.legacy_id cid, e.provider_payment_id pp FROM enrollments e
+        SELECT u.user_id uid, c.legacy_lesson_id cid, e.provider_payment_id pp FROM enrollments e
         JOIN users u ON u.id = e.user_id JOIN courses c ON c.id = e.course_id
         WHERE e.tenant_id = %s AND e.provider_payment_id LIKE 'lw2-%%'""", d)}
     enrolled = {(r["uid"], r["cid"]) for r in dst("""
-        SELECT u.legacy_id uid, c.legacy_id cid FROM enrollments e
+        SELECT u.user_id uid, c.legacy_lesson_id cid FROM enrollments e
         JOIN users u ON u.id = e.user_id JOIN courses c ON c.id = e.course_id WHERE e.tenant_id = %s""", d)}
     wrong = [k for k, v in links.items() if not auth.get(k) or v != f"lw2-{max(auth[k])}"]
     check(f"受講と決済の結びつき（{len(links)} 件は最も新しい申込を指す）", not wrong, _sample(wrong) if wrong else "")
@@ -223,7 +223,7 @@ def billing_checks(src: Source, dst: Target, legacy_tenant: int, tenant_id: str)
         JOIN user u ON u.user_id = c.user_id
         WHERE u.tenant_id = %s AND c.ticket_id IS NOT NULL AND c.ticket_num >= 1 GROUP BY 1, 2""", t)}
     nt = {(r["uid"], r["tid"]): int(r["n"]) for r in dst("""
-        SELECT u.legacy_id uid, t.legacy_id tid, SUM(g.remaining_quantity) n FROM ticket_grants g
+        SELECT u.user_id uid, t.ticket_id tid, SUM(g.remaining_quantity) n FROM ticket_grants g
         JOIN users u ON u.id = g.user_id JOIN ticket_types t ON t.id = g.ticket_type_id
         WHERE g.tenant_id = %s GROUP BY 1, 2""", d)}
     check(f"チケットの残枚数（会員 × 種別 {len(lt)} 組）", lt == nt, f"旧 {lt} / 新 {nt}" if lt != nt else "")
