@@ -26,7 +26,7 @@ from .logging_setup import setup
 from .overrides import Overrides
 from .phases.registry import bootstrap, build_sections, check_schema, resolve_tenant_id
 from .phases.selection import resolve
-from .validation import postcheck, preflight, reconcile
+from .validation import legacy_checks, postcheck, preflight, reconcile
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -152,13 +152,23 @@ def _verify(ctx, sections, selected) -> int:
     result = reconcile.reconcile(ctx, selected, sections)
     print(result.summary())
 
+    # **旧 DB との突き合わせ。** 照合は「移行先 = 変換結果」までしか言えないので、
+    # 旧 DB から独立に出した数字と比べる（いまは課金だけ）
+    checks = legacy_checks.run(ctx, {p.section for p in selected})
+    if checks:
+        print("\n=== 旧 DB との突き合わせ ===")
+        for check in checks:
+            print(f"  {check}")
+        failed = [c for c in checks if not c.ok]
+        print(f"  {len(checks)} 項目 / NG {len(failed)} 項目" if failed else f"  {len(checks)} 項目すべて一致")
+
     if not ctx.tenant_id.resolved:
         ctx.tenant_id.resolve(resolve_tenant_id(ctx))
     postcheck.target_tenant_once(ctx)
     postcheck.no_platform_admin(ctx)
     postcheck.email_unique(ctx)
     print("  テナント・管理者・メールの検証 OK")
-    return 0 if result.ok else 1
+    return 0 if result.ok and all(c.ok for c in checks) else 1
 
 
 if __name__ == "__main__":  # pragma: no cover
