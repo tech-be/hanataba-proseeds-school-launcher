@@ -166,7 +166,7 @@ class UsersStep(Step):
                         "birth_day": day,
                         "role": _role_of(row, role_map),
                         "status": _status_of(row),
-                        "is_valid": int(row.get("valid_chk") or 1) == 1,
+                        "is_valid": _valid(row),
                         "is_new": bool(row.get("new_user_chk")),
                         "member_no": row.get("_member_no"),
                         # **ロールに畳まない。** 旧は role_id=6 に付く追加フラグ
@@ -271,6 +271,16 @@ def _role_of(row: dict, role_map) -> str | None:
     return role_map.to_new(int(value))
 
 
+def _valid(row: dict) -> bool:
+    """`valid_chk`（1 有効 / 0 無効）。**NULL のときだけ有効とみなす。**
+
+    `int(valid_chk or 1)` と書くと **0 が 1 に化け、無効の会員が有効として入る**
+    （ステージングで2名。旧 DB との突き合わせで判明）。
+    """
+    value = row.get("valid_chk")
+    return True if value is None else int(value) == 1
+
+
 def _status_of(row: dict) -> str:
     """`del_chk` / `valid_chk` / 期間から `users.status` を決める。
 
@@ -279,7 +289,7 @@ def _status_of(row: dict) -> str:
     """
     if int(row.get("del_chk") or 0) == 1:
         return "deleted"
-    if int(row.get("valid_chk") or 1) == 0:
+    if not _valid(row):
         return "inactive"
     return "active"
 
