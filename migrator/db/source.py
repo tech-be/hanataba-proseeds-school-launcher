@@ -49,6 +49,8 @@ class SourceDatabase:
         self.zero_dates: Counter[tuple[str, str]] = Counter()
         #: 共有講座の旧 ID（遅延取得）。`shared_lessons` が埋める
         self._shared_lessons: frozenset[int] | None = None
+        #: 共有アンケートの旧 ID（遅延取得）。`shared_enquetes` が埋める
+        self._shared_enquetes: frozenset[int] | None = None
 
     @property
     def tenant_id(self) -> int:
@@ -116,6 +118,28 @@ class SourceDatabase:
             self._shared_lessons = frozenset(int(r["lid"]) for r in rows)
         return self._shared_lessons
 
+    @property
+    def shared_enquetes(self) -> frozenset[int]:
+        """移すユニットが参照している**共有アンケート**（`enquete.tenant_id = 0`）の旧 ID。
+
+        **共有講座のアンケートユニットは、共有のアンケート定義を指している。** 自テナントで
+        絞ると定義が見つからず、ユニットが「定義が物理削除された孤児」と誤って扱われ、
+        **定義も回答も黙って落ちていた**（ステージングで定義10件・回答6件。旧 DB との
+        突き合わせで判明）。移すユニット（自テナントの講座と `shared_lessons`）が
+        参照しているものだけを含める。
+        """
+        if self._shared_enquetes is None:
+            lessons = tuple(sorted(self.shared_lessons))
+            marks = ", ".join(["%s"] * len(lessons)) or "NULL"
+            rows = self.fetch("enquete", f"""
+                SELECT DISTINCT e.enquete_id AS eid FROM `enquete` AS e
+                INNER JOIN `unit` AS u ON u.enquete_id = e.enquete_id
+                INNER JOIN `lesson` AS l ON l.lesson_id = u.lesson_id
+                WHERE e.tenant_id = 0 AND (l.tenant_id = %s OR l.lesson_id IN ({marks}))""",
+                (self._tenant_id, *lessons))
+            self._shared_enquetes = frozenset(int(r["eid"]) for r in rows)
+        return self._shared_enquetes
+
     def fetch_for_tenant(self, table: str, columns: tuple[str, ...], where: str = "") -> list[dict]:
         """`tenant_id` を持つテーブルを、テナントで絞って読む。
 
@@ -127,6 +151,7 @@ class SourceDatabase:
         - `question` / `question_cate` … **問題バンクはテナントをまたいで共有される。**
           共有講座のテストがこれを引くので、`= tenant_id` だけで絞ると
           **設問が親無しと判定されて落ちる**（実測 1,676 件）
+        - `enquete` … 移すユニットが参照している共有アンケートだけ（→ `shared_enquetes`）
         """
         cols = ", ".join(f"`{c}`" for c in columns)
         params: tuple = (self._tenant_id,)
@@ -135,6 +160,11 @@ class SourceDatabase:
             ids = tuple(sorted(self.shared_lessons))
             marks = ", ".join(["%s"] * len(ids))
             scope = f"(tenant_id = %s OR lesson_id IN ({marks}))"
+            params = (self._tenant_id, *ids)
+        elif table == "enquete" and self.shared_enquetes:
+            ids = tuple(sorted(self.shared_enquetes))
+            marks = ", ".join(["%s"] * len(ids))
+            scope = f"(tenant_id = %s OR enquete_id IN ({marks}))"
             params = (self._tenant_id, *ids)
         elif table in SHARED_BANK_TABLES:
             scope = "tenant_id IN (%s, 0)"
@@ -194,6 +224,12 @@ class SourceDatabase:
             ids = tuple(sorted(self.shared_lessons))
             marks = ", ".join(["%s"] * len(ids))
             scope = f"(p.tenant_id = %s OR p.lesson_id IN ({marks}))"
+            params = (self._tenant_id, *ids)
+        elif parent == "enquete" and self.shared_enquetes:
+            # 共有アンケートのページ・設問・回答も含める（→ `shared_enquetes`）
+            ids = tuple(sorted(self.shared_enquetes))
+            marks = ", ".join(["%s"] * len(ids))
+            scope = f"(p.tenant_id = %s OR p.enquete_id IN ({marks}))"
             params = (self._tenant_id, *ids)
         sql = (
             f"SELECT {cols} FROM `{table}` AS c "
