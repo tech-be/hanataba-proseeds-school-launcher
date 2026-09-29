@@ -259,10 +259,25 @@ class OrgStepTest(unittest.TestCase):
         from migrator.steps.org import GroupsStep
 
         records = GroupsStep().transform(self.ctx, GROUP_ROWS)
-        by_legacy = {r.values["legacy_id"]: r.values for r in records}
+        by_legacy = {r.values["group_id"]: r.values for r in records}
+        # 旧 ID は旧列名（group_id）で持ち、再移行の重複防止もその列で引く
+        self.assertNotIn("legacy_id", records[0].values)
+        self.assertEqual(records[0].natural_key, ("tenant_id", "group_id"))
         self.assertIsNone(by_legacy[1]["parent_id"])                    # 根は NULL
         self.assertEqual(by_legacy[2]["parent_id"], by_legacy[1]["id"])  # 子は親の ULID
         self.assertEqual(by_legacy[2]["depth"], 1)
+
+    def test_attribute_keeps_legacy_id_in_its_own_column(self) -> None:
+        """**属性の旧 ID は `attribute_id`。** 重複防止のキーも同じ列で引く（グループの列と取り違えない）。"""
+        from migrator.steps.org import AttributesStep
+
+        row = {"attribute_id": 3, "attribute_name": "新卒", "attribute_memo": None,
+               "sort_no": 1, "del_chk": 0, "regist_date": datetime(2020, 1, 1)}
+        record = AttributesStep().transform(self.ctx, [row])[0]
+        self.assertEqual(record.values["attribute_id"], 3)
+        self.assertNotIn("legacy_id", record.values)
+        self.assertEqual(record.natural_key, ("tenant_id", "attribute_id"))
+        self.assertTrue(set(record.natural_key) <= set(record.values))
 
     def test_parents_come_before_children(self) -> None:
         """親より先に子を入れると FK 違反になる。"""

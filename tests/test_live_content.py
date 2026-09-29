@@ -45,7 +45,7 @@ class PlacementTest(unittest.TestCase):
         ctx = make_ctx()
         rows = [{"live_lesson_id": 1, "lesson_instructor_id": 243, "del_chk": 0}]
         record = lv_courses.HostCourseStep().transform(ctx, rows)[0]
-        self.assertIsNone(record.values["legacy_id"])
+        self.assertIsNone(record.values["legacy_lesson_id"])
 
     def test_representative_instructor_is_the_busiest(self) -> None:
         """同数なら旧 ID の小さい順。**実行のたびに変わらないこと。**"""

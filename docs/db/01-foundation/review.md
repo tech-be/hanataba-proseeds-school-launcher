@@ -340,7 +340,7 @@
 
 | 旧カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|:--:|---|---|
-| テーブル全体 | 性質 | 中 | **`tenant_id` を持たない全テナント共通のカテゴリ**（5行）。新環境はテナントごとに持つ | `tenant_profile_item_categories` を新設し、**recademy 用の5行として投入する**（`config.profile_item_categories`。`legacy_id` に旧 `profile_cate_id` を残す）。→ [追加一覧](#新環境に追加するテーブルカラム) A9。**項目より先に入れる** — `tenant_profile_items.category_id` の FK 先になるため。旧 `profile_item.profile_cate_id = 0` は「分類なし」で NULL |
+| テーブル全体 | 性質 | 中 | **`tenant_id` を持たない全テナント共通のカテゴリ**（5行）。新環境はテナントごとに持つ | `tenant_profile_item_categories` を新設し、**recademy 用の5行として投入する**（`config.profile_item_categories`。`profile_cate_id` に旧 `profile_cate_id` を残す）。→ [追加一覧](#新環境に追加するテーブルカラム) A9。**項目より先に入れる** — `tenant_profile_items.category_id` の FK 先になるため。旧 `profile_item.profile_cate_id = 0` は「分類なし」で NULL |
 
 **まとめ**: 受け皿が無い列 5 / 高 0 件
 
@@ -847,7 +847,7 @@
 | **A14** | `users.is_lockout` / `failed_login_started_at` / `failed_login_count` / `last_login_at` / `last_access_at` / `total_login_count` | `user.is_lockout` / `start_date_failing_login` / `number_of_failing_login` / `recent_login_date` / `recent_access_time` / `total_login_count` | ・ログイン失敗時のロックアウト判定としきい値（lw2 は開始日時と連続失敗回数の2本立て）<br>・管理画面からのロック解除<br>・最終ログイン / 最終アクセスの表示と休眠会員の抽出<br>・`total_login_count` の加算箇所（ログイン成功時）
 | **A22** | `users.language_code` | `user_nationality_info.language_code`（ステージング実測 `ja` 133名 / `th` 1名） | ・**言語の判定を「cookie → 会員の既定 → テナントの既定（A2）→ `defaultLocale`」に直す**（`btoc-frontend/src/i18n/request.ts`）<br>・会員値をフロントに渡す経路（バックエンドの構造体 / repo / DTO / フロント型の4か所）<br>・プロフィール編集での言語選択 |
 | **A23** | `tenant_field_defaults`（`tenant_id` + `field_code` + `default_value`） | `user_item_default`（`item_name` は `profile_item` ではなく **`user` の列名**） | ・会員登録時に既定値を当てる処理<br>・テナント管理画面での既定値設定<br>・**`tenant_profile_items.default_value` と混同しない**（あちらはプロフィール項目の既定値） |
-| **A24** | `users.legacy_id` ＋ `UNIQUE (tenant_id, legacy_id)`、`tenants.legacy_id` ＋ `UNIQUE` | 旧 `user.user_id` / `tenant.tenant_id` | ・**外部のバッジシステムを引き続き参照する**（`BadgeApi` は `/tenant/{旧テナントID}/user/{旧会員ID}/badges`。バッジキーも `LESSON_{旧 lesson_id}_COMPLETION`）。**これが無いと「誰のバッジか」を新環境から引けない**<br>・移行後の問い合わせ調査で「旧 ID からこの会員を探す」<br>・`courses.legacy_id` / `lessons.legacy_id` はオンデマンドで追加済みだが、**会員とテナントには無かった** |
+| **A24** | `users.user_id` ＋ `UNIQUE (tenant_id, user_id)`、`tenants.tenant_id` ＋ `UNIQUE` | 旧 `user.user_id` / `tenant.tenant_id` | ・**外部のバッジシステムを引き続き参照する**（`BadgeApi` は `/tenant/{旧テナントID}/user/{旧会員ID}/badges`。バッジキーも `LESSON_{旧 lesson_id}_COMPLETION`）。**これが無いと「誰のバッジか」を新環境から引けない**<br>・移行後の問い合わせ調査で「旧 ID からこの会員を探す」<br>・`courses.legacy_lesson_id` / `lessons.unit_id` はオンデマンドで追加済みだが、**会員とテナントには無かった** |
 | **A15** | `user_two_factor_secrets` ＋ `auth_methods` に `totp` | `twostepverification`（ステージング実測 18行。**受け皿を作るだけで、移す行は無い**） | ・2FA の登録・検証フロー<br>・ログイン後のチャレンジ画面<br>・リカバリコードの発行と再設定<br>・テナント単位で 2FA を必須にするかの設定 |
 | **A16** | `login_history` に `input_login_id` / `logged_out_at` / `session_id` / `site_type` / `last_access_at` を追加、**`user_id` を NULL 可に**<br>**※ 移行のためではなく、新環境の運用のための改善** | `user_login_log` の該当列（**ログは移行しないので、データは入らない**） | ・**存在しない ID でのログイン試行を記録できるようにする**（現状は `user_id` NOT NULL + FK で記録できず、`auth_outcomes` の `user_not_found` が使えない）<br>・失敗ログを会員に紐付けずに一覧・集計する画面<br>・滞在時間の集計（ログイン〜ログアウト）<br>・セッション追跡とログアウト記録
 

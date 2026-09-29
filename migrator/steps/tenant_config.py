@@ -205,11 +205,11 @@ class ProfileItemCategoriesStep(Step):
                 values={
                     "id": category_id(ctx, row["profile_cate_id"]),
                     "tenant_id": ctx.tenant_id.value,
-                    "legacy_id": int(row["profile_cate_id"]),
+                    "profile_cate_id": int(row["profile_cate_id"]),
                     "name": row.get("profile_cate_name"),
                     "sort_order": int(row["profile_cate_id"]),
                 },
-                natural_key=("tenant_id", "legacy_id"),
+                natural_key=("tenant_id", "profile_cate_id"),
             )
             for row in rows
         ]

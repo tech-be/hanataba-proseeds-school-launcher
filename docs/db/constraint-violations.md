@@ -114,7 +114,7 @@
 |---|---|---|
 | `enrollments` | `(tenant_id, user_id, course_id)` | **lw2 自身が `GROUP BY user_id, lesson_id` で畳んでいる**（`LessonModel::1804`）。期限は `MAX()` |
 | `lesson_progress` | `(tenant_id, user_id, lesson_id)` | `update_date` の新しい順で1件に絞る |
-| `survey_pages` | `(tenant_id, lesson_id, legacy_id)` | **受け皿側に `lesson_id` を足して回避**（同じアンケートを複数ユニットが参照するため） |
+| `survey_pages` | `(tenant_id, lesson_id, enquete_page_id)` | **受け皿側に `lesson_id` を足して回避**（同じアンケートを複数ユニットが参照するため） |
 | `quiz_questions` | — | ID の採番キーを `(test_sub_id, question_id, sort_no)` に変えて衝突を回避 |
 | `enrollments.expires_at` | `TIMESTAMP`（上限 2038-01-19） | 旧は無期限を100年後の日付で表す。**上限超えは無期限（NULL）に寄せ、元の日付を `settings` に残す** |
 

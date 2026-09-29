@@ -5,8 +5,8 @@
 新環境の `survey_lessons` は `lesson_id` が主キーなので、**ユニットごとに複製して移す**。
 
 複製するため、ページ・設問・選択肢の ULID は**レッスンごとに別**になる。
-`survey_pages.legacy_id` も同じ旧 ID がレッスンの数だけ現れるので、
-**UNIQUE は `(tenant_id, lesson_id, legacy_id)` でなければならない**
+`survey_pages.enquete_page_id`（旧 ID）も同じ値がレッスンの数だけ現れるので、
+**UNIQUE は `(tenant_id, lesson_id, enquete_page_id)` でなければならない**
 （[schema-additions](../../../docs/db/02-ondemand/schema-additions.md) の M6 を参照）。
 """
 
@@ -165,7 +165,7 @@ class SurveyPagesStep(Step):
                     "id": page_ulid(ctx, row["_unit_id"], row["enquete_page_id"]),
                     "tenant_id": tenant_id,
                     "lesson_id": ctx.ulid.for_row("unit", row["_unit_id"]),
-                    "legacy_id": int(row["enquete_page_id"]),
+                    "enquete_page_id": int(row["enquete_page_id"]),
                     "sort_order": int(row["_sort"]),
                     # 旧はページ名を持たず説明文だけ。200文字に収まらないものは切らずに
                     # NULL にする（本文は設問側に残る）

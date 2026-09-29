@@ -7,6 +7,9 @@
 - **当てる時期**: **移行直前**（[migration-spec](migration-spec.md) のフェーズ0）
 - **確認**: `python -m migrator doctor` — この区分が未適用なら `[TODO]` で出る
 
+> **旧 ID の列は旧システムの列名にする**（`ticket_types.ticket_id` / `monthly_ticket_allowances.month_user_ticket_id` / `tenant_plans.item_id` / `payments.application_id` / `receipts.receipt_log_id`。NULL 可）。
+> 基盤・コンテンツと同じ規則（[ひな形](../00-template/schema-additions.md#旧-id-を持たせる基準)）。旧システムの値の列も同じ規則で、`monthly_ticket_allowances.application_id`（`payments.application_id` と同じ値）とする。`ticket_types.legacy_ticket_type`（旧 `ticket.ticket_type`）だけは、新の `ticket_types`（種別の表）と別物なので `legacy_` を付ける。**school-launcher の `20260928132756` と移行ツールはこの列名で揃えてある。**
+
 > **チケット（A1 / A2）・決済（A3〜A6）・帳票（A7 / A8）の3つ。** どれも移行ツールの Step が書き込む先なので**必須**。
 
 > **コンテンツ（2）が先。** `ticket_type_lessons` / `live_lesson_ticket_requirements` が
@@ -45,9 +48,9 @@ lookup への値の追加（A5 / A6）は列ではないので一覧に無い。
 
 ```sql
 ALTER TABLE ticket_types
-    ADD COLUMN legacy_id   INT NULL,   -- 旧 ticket.ticket_id
-    ADD COLUMN legacy_type INT NULL,   -- 旧 ticket.ticket_type（user_ticket_log が参照する値）
-    ADD UNIQUE KEY uk_tt_legacy (tenant_id, legacy_id);
+    ADD COLUMN ticket_id          INT NULL,   -- 旧 ticket.ticket_id
+    ADD COLUMN legacy_ticket_type INT NULL,   -- 旧 ticket.ticket_type（user_ticket_log が参照する値）
+    ADD UNIQUE KEY uk_tt_legacy (tenant_id, ticket_id);
 
 ALTER TABLE ticket_grants
     ADD COLUMN starts_at DATETIME(3) NULL;   -- 旧 user_ticket.ticket_start_date
@@ -55,7 +58,7 @@ ALTER TABLE ticket_grants
 
 | 列 | 旧の対応 | 備考 |
 |---|---|---|
-| `legacy_type` | `ticket.ticket_type` int(11) | **`user_ticket_log.ticket_type` が参照しているのはこの値**（`ticket_id` ではない）。**履歴を移さなくても、あとで人が突き合わせられるように残す** |
+| `legacy_ticket_type` | `ticket.ticket_type` int(11) | **`user_ticket_log.ticket_type` が参照しているのはこの値**（`ticket_id` ではない）。**履歴を移さなくても、あとで人が突き合わせられるように残す** |
 | `starts_at` | `user_ticket.ticket_start_date` date | 実測は全件 NULL |
 
 > **`chk_tg_qty (quantity >= 1)` は触っていない。** 使い切った残高（`ticket_num = 0`、実測2件）が
@@ -84,19 +87,19 @@ CREATE TABLE monthly_ticket_allowances (
     id                    CHAR(26)    NOT NULL PRIMARY KEY,
     tenant_id             CHAR(26)    NOT NULL,
     user_id               CHAR(26)    NOT NULL,
-    legacy_id             INT         NOT NULL,   -- 旧 month_user_ticket_id
+    month_user_ticket_id  INT         NULL,       -- 旧 month_user_ticket_id（新システムで作った行は NULL）
     target_month          VARCHAR(50) NOT NULL,   -- 旧 target_month（'YYYYMM' 等。書式を変えずに移す）
     agreed_on             DATE        NOT NULL,   -- 旧 agreement_date
     max_ticket_count      INT         NOT NULL,
     remaining_count       INT         NOT NULL,   -- 旧 ticket_count（残回数）
     expires_on            DATE        NOT NULL,   -- 旧 limit_date
-    legacy_application_id INT         NULL,       -- 旧 application_id（決済 4-2 の移行後に解決）
+    application_id        INT         NULL,       -- 旧 application_id（payments.application_id と同じ値。決済と結ぶのは未実装）
     is_applied            BOOLEAN     NOT NULL DEFAULT FALSE,   -- 旧 is_application
     is_trial              BOOLEAN     NOT NULL DEFAULT FALSE,
     deleted_at            DATETIME(3) NULL,
     created_at            DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     updated_at            DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-    UNIQUE KEY uk_mta_legacy (tenant_id, legacy_id),
+    UNIQUE KEY uk_mta_legacy (tenant_id, month_user_ticket_id),
     KEY idx_mta_user (tenant_id, user_id, target_month),
     CONSTRAINT fk_mta_user   FOREIGN KEY (user_id)   REFERENCES users (id) ON DELETE CASCADE,
     CONSTRAINT fk_mta_tenant FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE RESTRICT
@@ -117,14 +120,14 @@ CREATE TABLE monthly_ticket_allowances (
 
 ```sql
 ALTER TABLE tenant_plans
-    ADD COLUMN legacy_id INT  NULL,   -- 旧 payment_item.item_id
+    ADD COLUMN item_id   INT  NULL,   -- 旧 payment_item.item_id
     ADD COLUMN settings  JSON NULL,   -- 試用・受講期間・自動解約・支払日など、新の列に無い設定
-    ADD UNIQUE KEY uk_tenant_plans_legacy (tenant_id, legacy_id);
+    ADD UNIQUE KEY uk_tenant_plans_legacy (tenant_id, item_id);
 
 ALTER TABLE payments
-    ADD COLUMN legacy_id INT  NULL,   -- 旧 payment_application.application_id
-    ADD COLUMN settings  JSON NULL,   -- J-Payment の ID、解約、分割回数、クーポン、税の情報
-    ADD UNIQUE KEY uk_payments_legacy (tenant_id, legacy_id);
+    ADD COLUMN application_id INT  NULL,   -- 旧 payment_application.application_id
+    ADD COLUMN settings       JSON NULL,   -- J-Payment の ID、解約、分割回数、クーポン、税の情報
+    ADD UNIQUE KEY uk_payments_legacy (tenant_id, application_id);
 
 INSERT INTO payment_providers (code, name_ja, supports_marketplace, supports_subscription, sort_order, is_system)
     VALUES ('legacy_jpayment', 'J-Payment (lw2 から移行)', FALSE, FALSE, 90, TRUE);
@@ -147,8 +150,8 @@ INSERT INTO payment_types (code, name_ja, requires_course, is_revenue, sort_orde
 
 ```sql
 ALTER TABLE receipts
-    ADD COLUMN legacy_id INT NULL,   -- 旧 receipt_log.receipt_log_id（旧で印字していた領収書番号）
-    ADD UNIQUE KEY uk_receipts_legacy (tenant_id, legacy_id);
+    ADD COLUMN receipt_log_id INT NULL,   -- 旧 receipt_log.receipt_log_id（旧で印字していた領収書番号）
+    ADD UNIQUE KEY uk_receipts_legacy (tenant_id, receipt_log_id);
 
 CREATE TABLE tenant_legal_documents (
     id            CHAR(26)     NOT NULL PRIMARY KEY,
@@ -165,7 +168,7 @@ CREATE TABLE tenant_legal_documents (
 ```
 
 > **新の `issue_no` は決済ごとの連番**で、旧の番号（`receipt_log_id`）とは別物。旧はダウンロードのたびに1行作り、
-> 印字する番号は `receipt_log_id` だったので `legacy_id` に残す。
+> 印字する番号は `receipt_log_id` だったので、同じ名前の列 `receipts.receipt_log_id` に残す。
 
 > **規約の本文はアプリがまだ読まない。** 新は文面を画面に固定で持っており、テナントごとの本文を置く場所が無かった。
 > 本文を失わないために受ける。どう見せるかは確認事項 D6。

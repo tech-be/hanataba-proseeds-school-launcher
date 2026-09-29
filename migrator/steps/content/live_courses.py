@@ -136,8 +136,8 @@ class HostCourseStep(Step):
                     "id": host_course_id(ctx),
                     "tenant_id": ctx.tenant_id.value,
                     # **旧 ID は持たせない。** lw2 に対応する講座が無い行なので、
-                    # `legacy_id` を埋めると実在の講座と見分けが付かなくなる
-                    "legacy_id": None,
+                    # `legacy_lesson_id` を埋めると実在の講座と見分けが付かなくなる
+                    "legacy_lesson_id": None,
                     "title": HOST_COURSE_TITLE,
                     "description": (
                         "lw2 の「商品で制限していないライブ」を入れる講座。"

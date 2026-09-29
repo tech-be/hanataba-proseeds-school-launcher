@@ -166,12 +166,12 @@ CREATE TABLE tenant_limits (
 CREATE TABLE tenant_profile_item_categories (
     id         CHAR(26) NOT NULL PRIMARY KEY,
     tenant_id  CHAR(26) NOT NULL,
-    legacy_id  INT NULL,               -- 旧 profile_cate.profile_cate_id
+    profile_cate_id INT NULL,          -- 旧 profile_cate.profile_cate_id
     name       VARCHAR(100) NOT NULL,
     sort_order INT NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_profile_item_categories (tenant_id, legacy_id),
+    UNIQUE KEY uk_profile_item_categories (tenant_id, profile_cate_id),
     CONSTRAINT fk_profile_item_categories_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT = '[プロフィール項目の分類] 旧 profile_cate。項目を画面上でまとめる単位。';
@@ -376,7 +376,7 @@ ALTER TABLE notification_optouts
 CREATE TABLE tenant_groups (
     id         CHAR(26) NOT NULL PRIMARY KEY,
     tenant_id  CHAR(26) NOT NULL,
-    legacy_id  INT NOT NULL,                -- 旧 group.group_id（割当の突き合わせに使う）
+    group_id   INT NULL,                    -- 旧 group.group_id（割当の突き合わせに使う。新規作成の行は NULL）
     parent_id  CHAR(26) NULL,               -- 旧 parent_group_id。**階層の正本はこれ**
     depth      INT NOT NULL DEFAULT 0,      -- 旧 hierarchy
     code       VARCHAR(50)  NULL,           -- 旧 group_code
@@ -386,7 +386,7 @@ CREATE TABLE tenant_groups (
     deleted_at DATETIME(3) NULL,            -- 旧 del_chk=1
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_tenant_groups_legacy (tenant_id, legacy_id),
+    UNIQUE KEY uk_tenant_groups_legacy (tenant_id, group_id),
     CONSTRAINT fk_tenant_groups_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id),
     CONSTRAINT fk_tenant_groups_parent FOREIGN KEY (parent_id) REFERENCES tenant_groups(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -408,7 +408,7 @@ CREATE TABLE tenant_group_members (
 CREATE TABLE tenant_attributes (
     id         CHAR(26) NOT NULL PRIMARY KEY,
     tenant_id  CHAR(26) NOT NULL,
-    legacy_id  INT NOT NULL,
+    attribute_id INT NULL,                  -- 旧 attribute.attribute_id（新規作成の行は NULL）
     code       VARCHAR(50)  NULL,
     name       VARCHAR(100) NOT NULL,
     memo       TEXT NULL,
@@ -416,7 +416,7 @@ CREATE TABLE tenant_attributes (
     deleted_at DATETIME(3) NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_tenant_attributes_legacy (tenant_id, legacy_id),
+    UNIQUE KEY uk_tenant_attributes_legacy (tenant_id, attribute_id),
     CONSTRAINT fk_tenant_attributes_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT = '[会員の属性] 旧 attribute。グループと違い階層を持たない横断のタグ。';
@@ -448,7 +448,7 @@ CREATE TABLE attribute_required_courses (
   COMMENT = '[属性ごとの受講必須講座] 旧 attribute_lesson。course_id は講座移行後に埋める (FK 無し)。';
 ```
 
-> **`legacy_id` を持たせる理由。** 割当（`user_group` / `user_attribute` / `attribute_lesson`）は
+> **旧 ID（`tenant_groups.group_id` / `tenant_attributes.attribute_id`）を持たせる理由。**（school-launcher `20260929091539` で `legacy_id` から改名し、NULL 可にした） 割当（`user_group` / `user_attribute` / `attribute_lesson`）は
 > 旧 ID で親を指しているので、移行時に**旧 ID → 新 ULID** を引けるようにしておく。
 > 決定論 ULID でも引けるが、**cutover 後に人が突き合わせるときに要る。**
 >
@@ -623,22 +623,24 @@ ALTER TABLE users DROP COLUMN language_code;
 ```sql
 -- +goose Up
 ALTER TABLE users
-    ADD COLUMN legacy_id INT NULL COMMENT '旧 user.user_id (移行で作られた行のみ)',
-    ADD UNIQUE KEY uk_users_legacy (tenant_id, legacy_id);
+    ADD COLUMN user_id INT NULL COMMENT '旧 user.user_id (移行で作られた行のみ)',
+    ADD UNIQUE KEY uk_users_legacy (tenant_id, user_id);
 
 ALTER TABLE tenants
-    ADD COLUMN legacy_id INT NULL COMMENT '旧 tenant.tenant_id (移行で作られた行のみ)',
-    ADD UNIQUE KEY uk_tenants_legacy (legacy_id);
+    ADD COLUMN tenant_id INT NULL COMMENT '旧 tenant.tenant_id (移行で作られた行のみ)',
+    ADD UNIQUE KEY uk_tenants_legacy (tenant_id);
 
 -- +goose Down
-ALTER TABLE users DROP INDEX uk_users_legacy, DROP COLUMN legacy_id;
-ALTER TABLE tenants DROP INDEX uk_tenants_legacy, DROP COLUMN legacy_id;
+ALTER TABLE users DROP INDEX uk_users_legacy, DROP COLUMN user_id;
+ALTER TABLE tenants DROP INDEX uk_tenants_legacy, DROP COLUMN tenant_id;
 ```
+
+> 列名は school-launcher `20260929102209` で `legacy_id` から改名した（旧 `user` → `users`、旧 `tenant` → `tenants` は同じものを移しているので、旧列名のまま）。
 
 > **外部のバッジシステムが lw2 の ID で付与実績を持っている。**
 > `BadgeApi` は `/tenant/{lw2 の tenant_id}/user/{lw2 の user_id}/badges` を叩き、
 > バッジキーも `LESSON_{lw2 の lesson_id}_COMPLETION` の形。
-> `courses.legacy_id` / `lessons.legacy_id` は[コンテンツ](../02-content/schema-additions.md)で足したが、
+> `courses.legacy_lesson_id` / `lessons.unit_id` は[コンテンツ](../02-content/schema-additions.md)で足したが、
 > **会員とテナントには無く、このままでは「誰のバッジか」を引けない**。
 >
 > **バッジ以外にも効く。** 移行後の問い合わせ調査は「旧 ID でこの会員を探す」から始まることが多い。

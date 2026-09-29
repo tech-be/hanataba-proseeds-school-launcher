@@ -10,7 +10,7 @@ lw2 は `question`（テナント直下の**共有問題バンク**）から、`
 展開すると「受験者ごとに違う問題が出ていた」という事実が再現できなくなる。代わりに
 
 - `question`      → `quiz_question_banks`（問題の本体）
-- `question_cate` → `quiz_question_labels`（管理者が作るラベルと同じ表。`legacy_id` 付き）
+- `question_cate` → `quiz_question_labels`（管理者が作るラベルと同じ表。旧 ID は `question_cate_id`）
 - `test_sub`      → `quiz_question_rules`（出題条件をそのまま）
 - `test_sub_question` → `quiz_questions`（**固定出題ぶんだけ**。バンクへの参照）
 
@@ -129,7 +129,7 @@ class QuizQuestionCategoriesStep(Step):
     """問題カテゴリを `quiz_question_labels` に移す。**出題条件と問題バンクの参照先**なので先に入れる。
 
     管理者が画面から作るラベルと同じ表に入れる（2026-09-28 決定。school-launcher の
-    `20260928082433` で `quiz_question_categories` から統合した）。旧の ID は `legacy_id`。
+    `20260928082433` で `quiz_question_categories` から統合した）。旧の ID は `question_cate_id`。
 
     **labels は `(tenant_id, name)` が一意。** 新環境の同じテナントに、自テナントの分類と
     共有（旧 `tenant_id = 0`）の分類が一緒に入るので、同じ名前が重なる（ステージングで
@@ -154,7 +154,7 @@ class QuizQuestionCategoriesStep(Step):
         if renamed:
             ctx.logger.warning(
                 "問題カテゴリの名前が %d 件重なるので区別を付けて移す（「（共有）」「（2）」など）。"
-                "旧の ID は legacy_id に残る",
+                "旧の ID は question_cate_id に残る",
                 renamed,
             )
         return [
@@ -163,12 +163,12 @@ class QuizQuestionCategoriesStep(Step):
                 values={
                     "id": ctx.ulid.for_row("question_cate", row["question_cate_id"]),
                     "tenant_id": tenant_id,
-                    "legacy_id": int(row["question_cate_id"]),
+                    "question_cate_id": int(row["question_cate_id"]),
                     "name": names[int(row["question_cate_id"])],
                     "sort_order": int(row.get("sort_no") or 0),
                     "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
                 },
-                natural_key=("tenant_id", "legacy_id"),
+                natural_key=("tenant_id", "question_cate_id"),
                 source_key=int(row["question_cate_id"]),
             )
             for row in rows
@@ -258,7 +258,7 @@ class QuizQuestionBanksStep(Step):
                     values={
                         "id": ctx.ulid.for_row("question", row["question_id"]),
                         "tenant_id": tenant_id,
-                        "legacy_id": int(row["question_id"]),
+                        "question_id": int(row["question_id"]),
                         "category_id": _category_id(ctx, row.get("question_cate_id")),
                         "level": row.get("question_level_id"),
                         "name": row.get("question_name"),
@@ -270,7 +270,7 @@ class QuizQuestionBanksStep(Step):
                         "explanation_image_url": None,
                         "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
                     },
-                    natural_key=("tenant_id", "legacy_id"),
+                    natural_key=("tenant_id", "question_id"),
                     source_key=int(row["question_id"]),
                 )
             )

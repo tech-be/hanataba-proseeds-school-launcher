@@ -73,7 +73,7 @@ class CategoriesStep(Step):
                 values={
                     "id": ctx.ulid.for_row("live_lesson_cate", row["live_lesson_cate_id"]),
                     "tenant_id": tenant_id,
-                    "legacy_id": int(row["live_lesson_cate_id"]),
+                    "live_lesson_cate_id": int(row["live_lesson_cate_id"]),
                     "name": row.get("live_lesson_cate_name") or "",
                     "sort_order": int(row.get("sort_no") or 0),
                     "created_by": _user(ctx, row.get("regist_user_id")),
@@ -84,7 +84,7 @@ class CategoriesStep(Step):
                     ),
                     "created_at": convert(row.get("regist_date"), ColumnKind.DATETIME),
                 },
-                natural_key=("tenant_id", "legacy_id"),
+                natural_key=("tenant_id", "live_lesson_cate_id"),
                 source_key=int(row["live_lesson_cate_id"]),
             )
             for row in rows
@@ -203,7 +203,7 @@ class RecurrenceRulesStep(Step):
                     ),
                     "tenant_id": tenant_id,
                     "lesson_id": _live_ulid(ctx, row["live_lesson_id"]),
-                    "legacy_id": int(row["live_lesson_date_setting_id"]),
+                    "live_lesson_date_setting_id": int(row["live_lesson_date_setting_id"]),
                     # 0=設定しない 1=毎日 2=毎週 3=毎月 4=毎年
                     "rule_type": int(row.get("date_setting_type") or 0),
                     "seq_no": int(row.get("seq_no") or 0),
@@ -211,7 +211,7 @@ class RecurrenceRulesStep(Step):
                     "deleted_at": _deleted(row),
                     "created_at": convert(row.get("regist_date"), ColumnKind.DATETIME),
                 },
-                natural_key=("tenant_id", "legacy_id"),
+                natural_key=("tenant_id", "live_lesson_date_setting_id"),
                 source_key=int(row["live_lesson_date_setting_id"]),
             )
             for row in rows

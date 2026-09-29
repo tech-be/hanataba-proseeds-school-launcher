@@ -203,7 +203,7 @@ class CoursesStep(Step):
                     values={
                         "id": ctx.ulid.for_row("lesson", row["lesson_id"]),
                         "tenant_id": tenant_id,
-                        "legacy_id": int(row["lesson_id"]),
+                        "legacy_lesson_id": int(row["lesson_id"]),
                         "title": title,
                         "description": row.get("description"),
                         "category": category_code(ctx, row.get("lesson_cate_id")),
@@ -223,7 +223,7 @@ class CoursesStep(Step):
                         "settings": _settings(row),
                         "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
                     },
-                    natural_key=("tenant_id", "legacy_id"),
+                    natural_key=("tenant_id", "legacy_lesson_id"),
                     source_key=int(row["lesson_id"]),
                 )
             )
@@ -313,11 +313,11 @@ class CourseTagsStep(Step):
                     values={
                         "id": ctx.ulid.for_row("lesson_tag", row["lesson_tag_id"]),
                         "tenant_id": tenant_id,
-                        "legacy_id": int(row["lesson_tag_id"]),
+                        "lesson_tag_id": int(row["lesson_tag_id"]),
                         "name": name,
                         "sort_order": int(row.get("sort_no") or 0),
                     },
-                    natural_key=("tenant_id", "legacy_id"),
+                    natural_key=("tenant_id", "lesson_tag_id"),
                     source_key=int(row["lesson_tag_id"]),
                 )
             )

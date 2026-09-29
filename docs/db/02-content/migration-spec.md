@@ -124,7 +124,7 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 
 | 事項 | 決定 |
 |---|---|
-| ライブの旧 ID | **`live_lessons.legacy_id` に持つ**（A1）。`lessons.legacy_id` はオンデマンドが `unit.unit_id` で使用済みで、**同じ列に入れると衝突する**（ステージング実測 18件中11件）。**`uk_lessons_legacy` は外さない** |
+| ライブの旧 ID | **`live_lessons.live_lesson_id` に持つ**（A1）。`lessons.unit_id` はオンデマンドが `unit.unit_id` で使用済みで、**同じ列に入れると衝突する**（ステージング実測 18件中11件）。**`uk_lessons_legacy` は外さない** |
 | 削除と中止 | **別の軸として持つ。** `live_lesson_date.del_chk` → **`deleted_at`（追加）**、開催の中止 → `canceled_at`。**混ぜると受講者の履歴に「中止された」と見える** |
 | 予約の3フラグ | **`status` に畳むが、元の値は残す。** `cancel_chk` / `attendance_chk` / `stop_chk` を A7 の `live_reservations.settings` に保持する |
 | 開催中止で不成立になった予約 | **`live_reservation_statuses` に値を1つ足す**（A7）。既存4値（`reserved`/`canceled`/`attended`/`no_show`）では**受講者都合のキャンセルと区別できない** |
@@ -201,7 +201,7 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | `user_ticket.ticket_id` が NULL の件数 / `ticket_num <= 0` の件数 | `ticket_grants` の NOT NULL と `chk_tg_qty`（ステージング3件 / 2件） |
 | **cutover 時点で未来の開催回に残る予約の件数** | その予約は cutover 後にキャンセルされうる。**台帳行を作れないとチケットが戻らない** |
 | **チケットを要するライブの予約のうち、会員に対応する付与が無い／0枚のもの** | 台帳行を作れない。**ステージングでは11件中9件**（会員3181 が使い切って `ticket_num = 0`）。**残り0枚の付与を移すかの判断と連動する** |
-| `live_lesson_id` と `unit_id` が重なる件数 | `uk_lessons_legacy`。**`live_lessons.legacy_id`（A1）が要るかの判断**（ステージング 18件中11件） |
+| `live_lesson_id` と `unit_id` が重なる件数 | `uk_lessons_legacy`。**`live_lessons.live_lesson_id`（A1）が要るかの判断**（ステージング 18件中11件） |
 | `live_lesson_url` に1000文字超があるか | `live_lesson_occurrences.meeting_url` varchar(1000)。**切り捨てない**（ステージング最大77文字） |
 | `live_lesson_name` に255文字超があるか | `lessons.title` varchar(255)（ステージング最大15文字） |
 | `live_lesson_cate_name` に200文字超があるか | A2 の `live_lesson_categories.name`（ステージング実測は全件短い） |
@@ -259,7 +259,7 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | 事象 | 実測 | 対処 |
 |---|---:|---|
 | **同じテストの別の大問に同じ問題が入る** | 1組 | `quiz_questions` の ULID を `(test_id, question_id, 並び順)` から **`(test_sub_id, question_id, 並び順)`** に変えた。テスト単位だと衝突して両方とも移らなかった |
-| **同じアンケートを複数ユニットが参照する** | 7件 | **ユニットごとに複製**して移す。`uk_survey_pages` を `(tenant_id, legacy_id)` → **`(tenant_id, lesson_id, legacy_id)`** に変えた（変える前は89件中60件が落ちた） |
+| **同じアンケートを複数ユニットが参照する** | 7件 | **ユニットごとに複製**して移す。`uk_survey_pages` を `(tenant_id, legacy_id)` → **`(tenant_id, lesson_id, legacy_id)`** に変えた（その後、旧 ID の列は `enquete_page_id` に改名）（変える前は89件中60件が落ちた） |
 | **`survey_lessons` の主キーが `lesson_id`** | — | 投入済みの親を覚える列に `lesson_id` を足した（`TargetDatabase.REFERENCED_COLUMNS`）。無いと子が全部「親が無い」と判定された |
 | **添削者が記録されていない添削** | 37件中33件 | `submission_feedbacks.reviewer_id` は NOT NULL。**代理講師に倒して移す**（暫定対応）。倒さないと添削の本文と点数ごと落ちる |
 | 選択肢が0件の選択式問題 | 19件 | 選択肢を作らない（旧データの時点で選べない） |
@@ -684,7 +684,7 @@ python -m migrator verify
 | 検査 | 対象 | 判断 |
 |---|---|---|
 | 重複 | `live_lesson_reserve` の `(live_lesson_date_id, user_id)` | **0件でなければ、どれを残すかが決まっていること**（1-1 の #4）。決まっていなければ止める |
-| ID の衝突 | `live_lesson.live_lesson_id` ⇔ `unit.unit_id`（同一テナント） | **重なりがあれば A1（`live_lessons.legacy_id`）が必須。** `lessons.legacy_id` には入れない |
+| ID の衝突 | `live_lesson.live_lesson_id` ⇔ `unit.unit_id`（同一テナント） | **重なりがあれば A1（`live_lessons.live_lesson_id`）が必須。** `lessons.unit_id` には入れない |
 | NULL | `user_ticket.ticket_id`、`live_lesson_reserve.reserve_date` | 件数を出して `out/not-migrated.csv` の見込みを示す |
 | CHECK | `live_lesson_date.capacity = 0`、`live_lesson_date_to <= live_lesson_date_from`、`user_ticket.ticket_num <= 0`、`live_lesson.item_ticket_price < 0` | 0件なら続行。あれば件数を出す |
 | 桁溢れ | `live_lesson_url`(1000) / `live_lesson_name`(255) / `live_lesson_cate_name`(200) / `verification_key`(200) | **超過があれば列を広げる**（切り捨てない） |
@@ -719,7 +719,7 @@ python -m migrator verify
 #### 3.3 投入（load）
 
 - **冪等性**: 決定論 ULID と業務キーで担保する
-  - `lessons`(type=live) / `live_lessons` — `live_lesson.live_lesson_id`（**`lessons.legacy_id` には入れず、`live_lessons.legacy_id` に入れる**）
+  - `lessons`(type=live) / `live_lessons` — `live_lesson.live_lesson_id`（**`lessons.unit_id` には入れず、`live_lessons.live_lesson_id` に入れる**）
   - `live_lesson_occurrences` — `live_lesson_date.live_lesson_date_id`
   - `live_reservations` — **重複を畳んだあとの `(live_lesson_date_id, user_id)`**。残す行が変わると ID も変わるので、**畳み方を決めてから流す**
   - `ticket_grants` — `user_ticket` の `(user_id, ticket_id, authority_id)`（旧 UNIQUE）
@@ -754,7 +754,7 @@ python -m migrator verify
 |---|---|
 | 件数の照合 | 抽出時の件数と投入後の件数を突き合わせる。**`out/not-migrated.csv` の件数を足すと一致すること** |
 | 階層 | `lessons` のうち `type = 'live'` の行がすべて `live_lessons` に対応行を持つこと |
-| 旧 ID | **`lessons.legacy_id` にライブ由来の値が入っていないこと**（オンデマンドの `unit_id` と衝突するため） |
+| 旧 ID | **`lessons.unit_id` にライブ由来の値が入っていないこと**（オンデマンドの `unit_id` と衝突するため） |
 | 開催回 | `live_lesson_occurrences` の件数と、旧 `live_lesson_date`（削除済みを含む）の件数が一致すること |
 | 削除と中止 | **`deleted_at` が入った行と `canceled_at` が入った行が混ざっていないこと。** 旧 `del_chk = 1` の817件が `canceled_at` に入っていたら誤り |
 | 予約の状態 | `live_reservations.status` の分布を出し、**全部 `reserved` になっていないこと**（A7 が効いているか） |

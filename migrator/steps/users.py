@@ -142,7 +142,7 @@ class UsersStep(Step):
                         # **旧 ID を残す。** 外部のバッジシステムが lw2 の user_id で
                         # 付与実績を持っており（`BadgeApi` は /tenant/{id}/user/{id}/badges）、
                         # これが無いと新環境から「誰のバッジか」を引けない（A24）
-                        "legacy_id": int(row["user_id"]),
+                        "user_id": int(row["user_id"]),
                         "login_id": row.get("login_id"),
                         "email": email,
                         "mobile_email": row.get("mobile_mail_add"),

@@ -77,14 +77,21 @@ M5  既存テーブルの制約変更（UNIQUE / NOT NULL）
 | 文字コード | `ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci` |
 | 監査列 | `created_at` / `updated_at` は `TIMESTAMP` ＋ `DEFAULT CURRENT_TIMESTAMP` |
 
-### `legacy_id` を持たせる基準
+### 旧 ID を持たせる基準
 
-**子テーブルが旧 ID で親を指している場合は、親に `legacy_id` を持たせる。**
+**子テーブルが旧 ID で親を指している場合は、親に旧 ID の列を持たせる。**
 決定論 ULID でも引けるが、**cutover 後に人が突き合わせるときに要る**。
 
+- **列名は旧システムの列名をそのまま使う**（`group_id` / `unit_id` など）。全表で `legacy_id` にすると、
+  表をまたいで同じデータに見える・元の値が分からない・新システムで同じデータを入力するときに混乱する
+- **`legacy_` を付けるのは、旧と同じ名前の表が新にあって別物を指すときだけ**（例: 旧 `lesson` は新の `courses` なので
+  `courses.legacy_lesson_id`。新の `lessons` は旧 `unit`）
+- **NULL 可にする。** 旧 ID は移行した行にしか無く、NOT NULL だと新システムで行を作る機能ができた時点で INSERT が落ちる。
+  MySQL の UNIQUE は NULL を重複扱いしないので、再移行の重複防止はそのまま効く
+
 ```sql
-legacy_id INT NOT NULL,
-UNIQUE KEY uk_＜テーブル＞_legacy (tenant_id, legacy_id),
+＜旧列名＞ INT NULL COMMENT '旧 ＜旧テーブル＞.＜旧列名＞。移行した行のみ。新システムで作った行は NULL',
+UNIQUE KEY uk_＜テーブル＞_legacy (tenant_id, ＜旧列名＞),
 ```
 
 ### まだ移行していない区分を参照する列

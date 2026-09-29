@@ -44,7 +44,7 @@ FK の参照先を先に作る。**1本のファイルの中で、この順に�
 ```
 1  ルックアップへの値追加（INSERT のみ）   ← courses / lessons / quiz / survey の FK 先
 2  courses / course_categories への列追加
-3  courses / lessons の legacy_id          ← 子データが旧 ID で親を指すため
+3  courses / lessons の旧 ID              ← 子データが旧 ID で親を指すため
 4  course_tags                             ← courses を参照
 5  lessons / video_lessons への列追加、前提条件
 6  テスト定義（問題バンク・出題条件）      ← quizzes / lessons を参照
@@ -97,23 +97,25 @@ FK の参照先を先に作る。**1本のファイルの中で、この順に�
 
 ---
 
-## 3. `courses` / `lessons` の `legacy_id`（A27）
+## 3. `courses` / `lessons` の旧 ID（A27）
 
 **必須。** **これが無いと dry-run が途中で止まる** — 子データが旧 ID で親を指しているため。
 
 ```sql
 ALTER TABLE courses
-    ADD COLUMN legacy_id INT NULL,
-    ADD UNIQUE KEY uk_courses_legacy (tenant_id, legacy_id);
+    ADD COLUMN legacy_lesson_id INT NULL,   -- 旧 lesson.lesson_id
+    ADD UNIQUE KEY uk_courses_legacy (tenant_id, legacy_lesson_id);
 ALTER TABLE lessons
-    ADD COLUMN legacy_id INT NULL,
-    ADD UNIQUE KEY uk_lessons_legacy (tenant_id, legacy_id);
+    ADD COLUMN unit_id INT NULL,            -- 旧 unit.unit_id
+    ADD UNIQUE KEY uk_lessons_legacy (tenant_id, unit_id);
 ```
+
+> 列名は school-launcher `20260929102209` で `legacy_id` から改名した。`courses` だけ `legacy_` を付けるのは、旧 `lesson` が新の `courses` にあたり、新の `lessons`（旧 `unit`）と別物だから。
 
 NULL 可にしているのは、**移行で作られた行だけが旧 ID を持つ**ため。MySQL の UNIQUE は
 NULL を重複扱いしないので、NULL の行がいくつ並んでも問題ない。
 
-**ライブ由来の `lessons` は NULL のまま。** 旧 ID は `live_lessons.legacy_id`（A22）が持つ。
+**ライブ由来の `lessons` は NULL のまま。** 旧 ID は `live_lessons.live_lesson_id`（A22）が持つ。
 
 ---
 
@@ -122,7 +124,7 @@ NULL を重複扱いしないので、NULL の行がいくつ並んでも問題�
 **必須。** 旧 `lesson_tag`（19行）/ `lesson_lesson_tag`（39行、対象テナント分）。
 新環境にタグの概念が無く、`category`（1講座1件）では代用できない — タグは1講座に複数付く。
 
-`course_tags.legacy_id` は、旧 ID で親を指す割当を移行時に引くため。
+`course_tags.lesson_tag_id`（旧 ID）は、旧 ID で親を指す割当を移行時に引くため（school-launcher `20260929091539` で `legacy_id` から改名し、NULL 可にした）。
 `course_tag_links` は `(tag_id, course_id)` が UNIQUE。
 
 > **`course_tags` は `tenants` を NO ACTION で参照する。** デモデータの掃除
@@ -170,7 +172,7 @@ NULL を重複扱いしないので、NULL の行がいくつ並んでも問題�
 
 | 追加するもの | 旧の対応 |
 |---|---|
-| ~~`quiz_question_categories`~~ → **`quiz_question_labels.legacy_id`** | `question_cate`（124行）。**管理者が作るラベルと同じ表に統合した**（school-launcher `20260928082433`、2026-09-28 決定） |
+| ~~`quiz_question_categories`~~ → **`quiz_question_labels.question_cate_id`** | `question_cate`（124行）。**管理者が作るラベルと同じ表に統合した**（school-launcher `20260928082433`、2026-09-28 決定） |
 | `quiz_question_banks` | `question`（3,880行）。テストに属さない |
 | `quiz_question_rules` | `test_sub`（285行）。カテゴリ・難易度・出題数 |
 | `quiz_questions.bank_id`（＋FK）/ `image_url` / `name` / `hint` / `required` | **移した設問には `bank_id` が必ず入る**（旧の固定出題も問題バンクを指すため）。NULL になるのは新環境で作ったテストだけ |
@@ -189,7 +191,7 @@ NULL を重複扱いしないので、NULL の行がいくつ並んでも問題�
 > **labels は `(tenant_id, name)` が一意。** 同じテナントに自テナントと共有（旧 `tenant_id = 0`）の
 > 分類が入るので名前が重なる（ステージングで 28 組、共有内でも `ITパスポート` が 8 件）。
 > **そのまま入れるとカテゴリ 35 件・問題バンク 546 件・固定出題の設問 407 問が連鎖して移らない**ので、
-> 移行ツールが名前に「（共有）」「（2）」などを付けて区別する（2026-09-28 決定）。旧の ID は `legacy_id` に残る。
+> 移行ツールが名前に「（共有）」「（2）」などを付けて区別する（2026-09-28 決定）。旧の ID は `question_cate_id` に残る。
 
 ---
 
@@ -210,12 +212,12 @@ NULL を重複扱いしないので、NULL の行がいくつ並んでも問題�
 **必須。** ページ番号を設問側に持たせると「ページだけ並べ替える」ができないので `survey_pages` に切る。
 
 ```sql
-UNIQUE KEY uk_survey_pages (tenant_id, lesson_id, legacy_id)
+UNIQUE KEY uk_survey_pages (tenant_id, lesson_id, enquete_page_id)
 ```
 
 > **`lesson_id` を含めた理由。** 旧 `enquete` はユニットに属さず、**同じアンケートを複数のユニットが
 > 参照できる**（実測7件）。`survey_lessons` は `lesson_id` が主キーなのでユニットごとに複製するしかなく、
-> 同じ `legacy_id` がレッスンの数だけ現れる。**テナント単位の UNIQUE だと 89行中 60行が入らない。**
+> 同じ `enquete_page_id`（旧 ID）がレッスンの数だけ現れる（school-launcher `20260929091539` で `legacy_id` から改名し、NULL 可にした）。**テナント単位の UNIQUE だと 89行中 60行が入らない。**
 
 あわせて `survey_lessons.name`、`survey_questions.page_id`（＋FK）/ `image_url`、
 `survey_question_options.image_url` を足し、**`survey_questions.prompt` を VARCHAR(500) → TEXT** に広げる
@@ -234,15 +236,15 @@ UNIQUE KEY uk_survey_pages (tenant_id, lesson_id, legacy_id)
 
 | 追加するもの | 旧の対応 |
 |---|---|
-| `live_lessons.legacy_id` ＋ UNIQUE `uk_live_lessons_legacy` / `settings` JSON NULL | `live_lesson`（18件） |
+| `live_lessons.live_lesson_id` ＋ UNIQUE `uk_live_lessons_legacy` / `settings` JSON NULL | `live_lesson`（18件） |
 | `live_lesson_categories` / `live_lesson_category_links` | `live_lesson_cate`（5件）/ `live_lesson_lesson_cate`（6件） |
 | `live_lesson_group_targets` | `live_lesson_group`（実測0件） |
 | `live_lesson_occurrences.deleted_at` / `remind_enabled` / `settings` ＋ `idx_llo_deleted` | `live_lesson_date.del_chk` / `mail_send_chk` / `date_type` |
 | `live_lesson_recurrence_rules` / `_details` / `_exclusions` | `live_lesson_date_setting`（86件）/ `_detail`（93件）/ `live_lesson_exclusion_date`（18件） |
 
-> **`lessons.legacy_id` には入れない。** その列はオンデマンドが `unit.unit_id` で使っており
+> **`lessons.unit_id` には入れない。** その列はオンデマンドが `unit.unit_id` で使っており
 > （`uk_lessons_legacy`）、**ライブとユニットは別の採番系なので必ず衝突する**（実測18件中11件）。
-> ライブの行は `lessons.legacy_id` を NULL のままにする。
+> ライブの行は `lessons.unit_id` を NULL のままにする。
 
 > **`live_lesson_categories` は `tenants` を RESTRICT で参照する。**
 > `cleanupDemoData` に `lessons` より前で列挙が要る。

@@ -24,8 +24,8 @@
 
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
-| `ticket_type` int(11) | — | 性質 | 中 | **種別コードが落ちる。** `ticket_types` は `name` で区別する設計で、**種類を表す列を持たない**。**`user_ticket_log.ticket_type` はこの値を参照している**ので、落とすと履歴と残高を突き合わせられなくなる | A1 の `ticket_types.legacy_type` を追加して移す。ステージング実測では2件とも `1` |
-| `ticket_id` | `id` char(26) | 性質 | 中 | ID の読み替え | A1 の `ticket_types.legacy_id` ＋ `UNIQUE (tenant_id, legacy_id)` を追加し、決定論 ULID で採番する |
+| `ticket_type` int(11) | — | 性質 | 中 | **種別コードが落ちる。** `ticket_types` は `name` で区別する設計で、**種類を表す列を持たない**。**`user_ticket_log.ticket_type` はこの値を参照している**ので、落とすと履歴と残高を突き合わせられなくなる | A1 の `ticket_types.legacy_ticket_type` を追加して移す。ステージング実測では2件とも `1` |
+| `ticket_id` | `id` char(26) | 性質 | 中 | ID の読み替え | A1 の `ticket_types.ticket_id` ＋ `UNIQUE (tenant_id, ticket_id)` を追加し、決定論 ULID で採番する |
 | `ticket_name` varchar(200) | `name` varchar(200) | — | — | 対応あり | **ステージング実測では2件が同じ名前**（「3級マンツーマンレッスン専用チケット」）。`ticket_types.name` に UNIQUE は無いので投入は止まらないが、**運営画面で区別が付かない** |
 | `del_chk` | `active` / `deprecated_at` | 性質 | 低 | 削除フラグ → 有効フラグ | `del_chk = 1` なら `active = FALSE` + `deprecated_at`。ステージング実測は0件 |
 | — | `description` / `refund_deadline_days` | カラム | 低 | 旧に対応なし | NULL のまま。`chk_tt_refund_days` は NULL を許す |
@@ -93,7 +93,7 @@
 | 旧カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|:--:|---|---|
 | `target_month` / `max_ticket_count` / `ticket_count` / `limit_date` / `agreement_date` | テーブル | 中 | **月次のチケット配布（サブスク型）。** 「毎月◯枚まで」の契約と消化状況を持っている | `monthly_ticket_allowances` を追加して移す（→ A2。実装済み）。**配布を実行する機能は新環境に無い**ので、機能を作るかは別途決める |
-| `application_id` / `is_application` | カラム | 低 | 申込との紐付け。参照先の申込は決済（4-2）で `payments.legacy_id` に移る | A2 に `legacy_application_id` として保持する。**決済と結ぶのは未実装**（`payments.legacy_id` で引ける） |
+| `application_id` / `is_application` | カラム | 低 | 申込との紐付け。参照先の申込は決済（4-2）で `payments.application_id` に移る | A2 に `application_id`（旧列名のまま）として保持する。**決済と結ぶのは未実装**（`payments.application_id` で引ける） |
 | `is_trial` / `del_chk` | カラム | 低 | 初回無料・削除フラグ | A2 に移す |
 
 **まとめ**: 受け皿が無い列 — （A2 で受ける）/ 高 0 件
@@ -111,7 +111,7 @@
 | `action_type` varchar(50) | `kind` varchar(32) + FK → `ticket_ledger_kinds` | 性質 | 中 | **ステージング実測の値は `create` 4 / `update` 2 / `use` 19 / `lesson_cancel` 9。** **カラムコメントは `create,update,use,cancel` と書いてあり、実データと食い違う**（`lesson_cancel` がコメントに無い）。`update` に対応する新の値も無い | 履歴を再生しないので対応表は不要。**再生するなら `lesson_cancel` → `refunded`、`update` は新値の追加が要る** |
 | `live_lesson_reserve_id` | `reservation_id` char(26) + FK | 性質 | 中 | L03 の予約 ID。ステージング実測で34件中19件に入っている。**予約の重複を畳むと参照先が消える行が出る** | 同上 |
 | `ticket_item_id` / `payment_item_id` | — | カラム | 低 | チケット商品・支払い商品 | 同上（履歴を移さない） |
-| `ticket_type` tinyint(4) | — | 性質 | 中 | **`ticket.ticket_type` を指しており、`ticket_id` ではない。** ステージング実測では `ticket` 2件がどちらも `ticket_type = 1` なので、**種別から `ticket_types` の行を一意に決められない** | 同上。A1 の `ticket_types.legacy_type` を入れておけば、**後から人が突き合わせられる** |
+| `ticket_type` tinyint(4) | — | 性質 | 中 | **`ticket.ticket_type` を指しており、`ticket_id` ではない。** ステージング実測では `ticket` 2件がどちらも `ticket_type = 1` なので、**種別から `ticket_types` の行を一意に決められない** | 同上。A1 の `ticket_types.legacy_ticket_type` を入れておけば、**後から人が突き合わせられる** |
 
 **まとめ**: 受け皿が無い列 3 / **高 2 件**
 
@@ -175,7 +175,7 @@
 
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
-| 発行済み領収書 | `receipts` | 性質 | 中 | **決済に紐づく。** B3 が先に入っていないと 1 行も入らない。**旧はダウンロードのたびに1行**（再発行も1行）で、印字する番号は `receipt_log_id` | 決済の後に流す。`issue_no` は決済ごとに 1..n、旧の番号は `legacy_id`（A7）。取引日は入金日（P11） |
+| 発行済み領収書 | `receipts` | 性質 | 中 | **決済に紐づく。** B3 が先に入っていないと 1 行も入らない。**旧はダウンロードのたびに1行**（再発行も1行）で、印字する番号は `receipt_log_id` | 決済の後に流す。`issue_no` は決済ごとに 1..n、旧の番号は `receipt_log_id`（A7）。取引日は入金日（P11） |
 | 発行設定 | `receipt_settings` | 型 | 低 | 実測1件 | そのまま移す。インボイスの有無は `tenants.settings.lw2_payment` |
 
 **まとめ**: 受け皿が無い列 — / 高 0 件
@@ -209,13 +209,13 @@
 
 | # | 追加するもの | 旧環境の対応 | 変更が必要な機能 |
 |---|---|---|---|
-| **A1** | `ticket_types.legacy_id` / `legacy_type` ＋ UNIQUE `uk_tt_legacy`、`ticket_grants.starts_at` | `ticket.ticket_id` / `ticket_type` / `user_ticket.ticket_start_date` | ・**`user_ticket_log.ticket_type` が参照しているのは `legacy_type`**（`ticket_id` ではない）。履歴を移さなくても**あとで人が突き合わせられる**ようにする<br>・`starts_at` は実測全件 NULL |
-| **A2** | `monthly_ticket_allowances`（月次のチケット配布） | `month_user_ticket`（実測1件） | ・「毎月◯枚まで」の契約と消化の判定<br>・`target_month` は `'YYYYMM'` の**書式を変えずに移す**<br>・`legacy_application_id` を決済に結ぶのは未実装 |
-| **A3** | `tenant_plans.legacy_id` ＋ UNIQUE、`settings` JSON | `payment_item`（講座の商品） | ・**すべて `inactive`**。新で売るには Stripe の価格を作り直す<br>・試用・受講期間・自動解約・支払日は `settings` にあるだけで、**新の購入処理は読まない** |
-| **A4** | `payments.legacy_id` ＋ UNIQUE、`settings` JSON | `payment_application` | ・決済一覧・売上に移した決済が出る（`platform_fee = 0`）<br>・解約・分割回数・J-Payment の ID は `settings` にあるだけ |
+| **A1** | `ticket_types.ticket_id` / `legacy_ticket_type` ＋ UNIQUE `uk_tt_legacy`、`ticket_grants.starts_at` | `ticket.ticket_id` / `ticket_type` / `user_ticket.ticket_start_date` | ・**`user_ticket_log.ticket_type` が参照しているのは `legacy_ticket_type`**（`ticket_id` ではない）。履歴を移さなくても**あとで人が突き合わせられる**ようにする<br>・`starts_at` は実測全件 NULL |
+| **A2** | `monthly_ticket_allowances`（月次のチケット配布） | `month_user_ticket`（実測1件） | ・「毎月◯枚まで」の契約と消化の判定<br>・`target_month` は `'YYYYMM'` の**書式を変えずに移す**<br>・`application_id` を決済に結ぶのは未実装 |
+| **A3** | `tenant_plans.item_id` ＋ UNIQUE、`settings` JSON | `payment_item`（講座の商品） | ・**すべて `inactive`**。新で売るには Stripe の価格を作り直す<br>・試用・受講期間・自動解約・支払日は `settings` にあるだけで、**新の購入処理は読まない** |
+| **A4** | `payments.application_id` ＋ UNIQUE、`settings` JSON | `payment_application` | ・決済一覧・売上に移した決済が出る（`platform_fee = 0`）<br>・解約・分割回数・J-Payment の ID は `settings` にあるだけ |
 | **A5** | `payment_providers` に `legacy_jpayment` | J-Payment | ・**新の決済処理は扱わない。** 返金ボタンを押しても決済代行に届かない（運用で止める） |
 | **A6** | `payment_types` に `lw2_purchase` | 講座が1つに決まらない購入 | ・一覧では講座が空欄になる（`course_purchase_payments` が無い） |
-| **A7** | `receipts.legacy_id` ＋ UNIQUE | `receipt_log.receipt_log_id` | ・旧で印字していた番号。新は決済ごとの連番（`issue_no`）で番号の付け方が違う |
+| **A7** | `receipts.receipt_log_id` ＋ UNIQUE | `receipt_log.receipt_log_id` | ・旧で印字していた番号。新は決済ごとの連番（`issue_no`）で番号の付け方が違う |
 | **A8** | `tenant_legal_documents` | `agreement` / `cancel_policy` / `privacy_policy` / `tokusyo` | ・**アプリはまだ読まない。** テナントごとの規約を見せるなら画面の改修が要る（→ 確認事項 D6） |
 
 ### 移行の対象外（移行できないもの / 移行しないもの）

@@ -46,7 +46,7 @@ class MonthlyAllowancesStep(Step):
                     "id": ctx.ulid.for_row("month_user_ticket", row["month_user_ticket_id"]),
                     "tenant_id": tenant_id,
                     "user_id": ctx.ulid.for_row("user", row["user_id"]),
-                    "legacy_id": int(row["month_user_ticket_id"]),
+                    "month_user_ticket_id": int(row["month_user_ticket_id"]),
                     # 'YYYYMM' 等。**書式を変えずに移す**
                     "target_month": row.get("target_month") or "",
                     "agreed_on": row.get("agreement_date"),
@@ -54,7 +54,7 @@ class MonthlyAllowancesStep(Step):
                     "remaining_count": int(row.get("ticket_count") or 0),
                     "expires_on": row.get("limit_date"),
                     # 参照先は課金区分（未移行）。旧 ID を保持して待つ
-                    "legacy_application_id": row.get("application_id"),
+                    "application_id": row.get("application_id"),
                     "is_applied": bool(int(row.get("is_application") or 0)),
                     "is_trial": bool(int(row.get("is_trial") or 0)),
                     "deleted_at": (
@@ -64,7 +64,7 @@ class MonthlyAllowancesStep(Step):
                     ),
                     "created_at": convert(row.get("regist_date"), ColumnKind.DATETIME),
                 },
-                natural_key=("tenant_id", "legacy_id"),
+                natural_key=("tenant_id", "month_user_ticket_id"),
                 source_key=int(row["month_user_ticket_id"]),
             )
             for row in rows
@@ -97,7 +97,7 @@ class ReviewsStep(Step):
                     "tenant_id": tenant_id,
                     "lesson_id": ctx.ulid.for_row("live_lesson", row["live_lesson_id"]),
                     "user_id": ctx.ulid.for_row("user", row["user_id"]),
-                    "legacy_id": int(row["live_lesson_review_id"]),
+                    "live_lesson_review_id": int(row["live_lesson_review_id"]),
                     "title": row.get("review_title"),
                     "body": row.get("review_detail"),
                     "star_rating": row.get("star_rating"),
@@ -117,7 +117,7 @@ class ReviewsStep(Step):
                     ),
                     "created_at": convert(row.get("regist_date"), ColumnKind.DATETIME),
                 },
-                natural_key=("tenant_id", "legacy_id"),
+                natural_key=("tenant_id", "live_lesson_review_id"),
                 source_key=int(row["live_lesson_review_id"]),
             )
             for row in rows

@@ -63,7 +63,7 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | P8 | 手数料 | `platform_fee = 0` | lw2 に手数料の概念が無い。売上 = `amount - platform_fee` |
 | P9 | 継続課金・分割商品 | `learner_subscriptions` / `installment_plans` は作らない。初回の申込だけ決済にする | lw2 に毎月の課金の行が無く、新の必須 ID（Stripe）も無い。**J-Payment の継続課金の止め方は確認事項 D4** |
 | P10 | 受講との結びつき | `enrollments.provider_payment_id` に、畳んだ権限のうち**決済として移す最も新しい申込**の決済 ID | 返金で受講を取り消す処理と、修了証の金額印字がこの値で決済を引く |
-| P11 | 領収書 | `receipt_log` → `receipts`。決済ごとに `issue_no` 1..n（旧の番号は `legacy_id`）。取引日は入金日（lw2 の `real_payment_date`） | lw2 はダウンロードのたびに1行 |
+| P11 | 領収書 | `receipt_log` → `receipts`。決済ごとに `issue_no` 1..n（旧の番号は `receipt_log_id`）。取引日は入金日（lw2 の `real_payment_date`） | lw2 はダウンロードのたびに1行 |
 | P12 | 規約の本文 | `tenant_legal_documents`（A8）。空の本文は移さない。URL・表題の上書きも同じ表 | 受け皿を追加して受ける。**アプリはまだ読まない**（→ D6） |
 | P13 | 決済の設定（`payment_infomation`） | `tenants.settings.lw2_payment` | 既存の JSON 列で受けられる |
 | P14 | 消費税の一覧（`tax`） | 移さない | 設定画面の選択肢で、取引の税計算に使っていない |
@@ -99,7 +99,7 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 [前提]       区分1 基盤（users）
              区分2 コンテンツ（lessons — ライブぶん）
                 ↓
-[migration]  A1 ticket_types.legacy_id / legacy_type、ticket_grants.starts_at
+[migration]  A1 ticket_types.ticket_id / legacy_ticket_type、ticket_grants.starts_at
              A2 monthly_ticket_allowances
                 ↓
 billing.1    ticket_types → ticket_type_lessons → live_lesson_ticket_requirements
@@ -145,7 +145,7 @@ billing.3    receipt_settings → receipts（決済に紐づくので後）→ t
 
 **チケット（4-1）**
 
-- `ticket_types.legacy_type` は旧 `ticket.ticket_type`。**`user_ticket_log` が参照するのはこの値**
+- `ticket_types.legacy_ticket_type` は旧 `ticket.ticket_type`。**`user_ticket_log` が参照するのはこの値**
   （`ticket_id` ではない）。履歴を移さなくても後から突き合わせられるように残す
 - **必要枚数の種別は `ticket_limit_lesson` から逆引きする。** 旧はライブ側に種別を持たない。
   **引けないライブは行を作らず、チケット不要として移る**（警告ログを出す。#17）
@@ -159,7 +159,7 @@ billing.3    receipt_settings → receipts（決済に紐づくので後）→ t
 - **戻し先の付与が移らない予約は台帳行を作れない**（ステージングで9件。すべて #14 の種別が無い残高で予約したもの）。
   その予約はキャンセルしてもチケットが戻らない
 - **月次配布**（`month_user_ticket`）は `monthly_ticket_allowances` に移す。`target_month` は書式を変えない。
-  `application_id` は決済が未移行なので `legacy_application_id` に旧の値のまま置く
+  旧の `application_id` は同じ名前の列 `monthly_ticket_allowances.application_id` に旧の値のまま置く（`payments.application_id` と同じ値）
 
 **決済（4-2）**（1-3 の P1〜P10）
 
@@ -179,13 +179,13 @@ billing.3    receipt_settings → receipts（決済に紐づくので後）→ t
 
 | 表 | 自然キー |
 |---|---|
-| `ticket_types` | `(tenant_id, legacy_id)` |
+| `ticket_types` | `(tenant_id, ticket_id)` |
 | `ticket_type_lessons` | `(ticket_type_id, lesson_id)` |
 | `live_lesson_ticket_requirements` | `(lesson_id)` |
 | `ticket_grants` | `(id)`（旧 UNIQUE の `(user_id, ticket_id, authority_id)` から決定論 ULID） |
 | `ticket_ledger_entries` | `(id)`（予約 ID から決定論 ULID） |
-| `monthly_ticket_allowances` | `(tenant_id, legacy_id)` |
-| `tenant_plans` / `payments` / `receipts` | `(tenant_id, legacy_id)` |
+| `monthly_ticket_allowances` | `(tenant_id, month_user_ticket_id)` |
+| `tenant_plans` / `payments` / `receipts` | `(tenant_id, item_id)` / `(tenant_id, application_id)` / `(tenant_id, receipt_log_id)` |
 | `plan_courses` | `(tenant_id, plan_id, course_id)` |
 | `course_purchase_payments` / `subscription_payments` | `(payment_id)` |
 | `receipt_settings` | `(tenant_id)` |
@@ -220,4 +220,4 @@ billing.3    receipt_settings → receipts（決済に紐づくので後）→ t
 - **1-3 の暫定対応 P1〜P14。** 運営の回答（確認事項 D4〜D6）で差し替える
 - チケットの #14 / #15 / #17、会員が物理削除された申込（旧データの不整合 #11）（→ [制約に当たって移らない行](../constraint-violations.md)）
 - `certificates.product_id`（受講 A6）は未解決。**決済は移ったが、修了証が商品を指す規則は未実装**
-- `monthly_ticket_allowances.legacy_application_id` を決済に結ぶのも未実装（旧 ID のまま）
+- `monthly_ticket_allowances.application_id` を決済に結ぶのも未実装（旧 ID のまま。`payments.application_id` で引ける）

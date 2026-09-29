@@ -4,7 +4,7 @@
 
 - lw2 の `receipt_log` は **PDF をダウンロードするたびに1行**（再発行も1行）。新の `issue_no` は
   決済ごとの連番なので、申込ごとに `receipt_log_id` の順で 1, 2, … と振り直す。
-  **旧で印字していた番号は `receipt_log_id`** なので `legacy_id` に残す（P11）
+  **旧で印字していた番号は `receipt_log_id`** なので `receipts.receipt_log_id` に残す（P11）
 - 取引日は**申込の入金日**（lw2 の `real_payment_date` と同じ規則。→ `payments.paid_at`）
 - 規約の本文（`agreement` / `cancel_policy` / `privacy_policy` / `tokusyo`）は新に置き場が無いので
   `tenant_legal_documents` を足して受ける（P12）。**アプリはまだ読まない**。空の本文は移さない
@@ -120,7 +120,7 @@ class ReceiptsStep(Step):
                         "user_id": ctx.ulid.for_row("user", row["user_id"]),
                         "payment_id": ctx.ulid.for_row("payment_application", row["application_id"]),
                         "issue_no": row["_issue_no"],
-                        "legacy_id": int(row["receipt_log_id"]),
+                        "receipt_log_id": int(row["receipt_log_id"]),
                         "recipient_name": row.get("receipt_name") or "",
                         "note": row.get("receipt_provision") or "",
                         "amount": row.get("receipt_price") or 0,
@@ -136,7 +136,7 @@ class ReceiptsStep(Step):
                         "transaction_date": pay.as_date(paid) if paid else row.get("payment_date_from"),
                         "issued_at": convert(row.get("regist_date"), ColumnKind.DATETIME),
                     },
-                    natural_key=("tenant_id", "legacy_id"),
+                    natural_key=("tenant_id", "receipt_log_id"),
                     source_key=int(row["receipt_log_id"]),
                 )
             )

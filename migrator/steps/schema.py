@@ -32,8 +32,8 @@ REQUIRED_SCHEMA: tuple[tuple[str, str | None], ...] = (
     ("tenant_profile_item_labels", None),
     ("user_profile_values", None),
     # A12 会員の氏名・会員番号
-    ("users", "legacy_id"),
-    ("tenants", "legacy_id"),
+    ("users", "user_id"),
+    ("tenants", "tenant_id"),
     ("users", "name_last"),
     ("users", "name_first"),
     ("users", "name_kana_last"),
@@ -92,14 +92,14 @@ CONTENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
     ("course_categories", "image_url"),
     ("course_categories", "created_by"),
     # A1 講座
-    ("courses", "legacy_id"),
+    ("courses", "legacy_lesson_id"),
     ("courses", "allowed_ip_address"),
     ("courses", "is_used"),
     ("courses", "settings"),
     ("course_tags", None),
     ("course_tag_links", None),
     # A4 レッスン
-    ("lessons", "legacy_id"),
+    ("lessons", "unit_id"),
     ("lessons", "open_at"),
     ("lessons", "close_at"),
     ("lessons", "close_after_days"),
@@ -116,7 +116,7 @@ CONTENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
     ("lesson_preconditions", None),
     # A6 / A7 / A8 テスト定義（共有問題バンクと出題条件）
     # 分類は quiz_question_labels に統合した（school-launcher 20260928082433）
-    ("quiz_question_labels", "legacy_id"),
+    ("quiz_question_labels", "question_cate_id"),
     ("quiz_question_banks", None),
     ("quiz_question_rules", None),
     ("quiz_questions", "bank_id"),
@@ -140,7 +140,7 @@ CONTENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
     ("survey_questions", "image_url"),
     ("survey_question_options", "image_url"),
     # ライブ講座（2-4）
-    ("live_lessons", "legacy_id"),
+    ("live_lessons", "live_lesson_id"),
     ("live_lessons", "settings"),
     ("live_lesson_categories", None),
     ("live_lesson_category_links", None),
@@ -189,16 +189,16 @@ ENROLLMENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
 
 #: 課金（4）の追加。チケット
 BILLING_SCHEMA: tuple[tuple[str, str | None], ...] = (
-    ("ticket_types", "legacy_id"),
-    ("ticket_types", "legacy_type"),
+    ("ticket_types", "ticket_id"),
+    ("ticket_types", "legacy_ticket_type"),
     ("ticket_grants", "starts_at"),
     ("monthly_ticket_allowances", None),
     # 決済（A3 / A4）と帳票（A7 / A8）。school-launcher 20260928132756
-    ("tenant_plans", "legacy_id"),
+    ("tenant_plans", "item_id"),
     ("tenant_plans", "settings"),
-    ("payments", "legacy_id"),
+    ("payments", "application_id"),
     ("payments", "settings"),
-    ("receipts", "legacy_id"),
+    ("receipts", "receipt_log_id"),
     ("tenant_legal_documents", None),
 )
 
