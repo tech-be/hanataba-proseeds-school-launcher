@@ -237,6 +237,19 @@ BILLING_SCHEMA: tuple[tuple[str, str | None], ...] = (
 SUPPORT_SCHEMA: tuple[tuple[str, str | None], ...] = (
     ("library_folder_group_targets", None),
     ("library_material_lesson_targets", None),
+    # 添付資料ごとの公開グループ・属性（旧 *_attached_file_group / _attribute）
+    ("library_material_group_targets", None),
+    ("library_material_tag_targets", None),
+    # 2026-09-30 に「その他」から仕分けた受け皿（school-launcher 20260930052453）
+    ("scout_follows", "follow_id"),
+    ("community_categories", "community_cate_id"),
+    ("tenant_usage_settings", None),
+    ("tenant_usage_snapshots", None),
+    ("tenant_usage_snapshot_users", "legacy_user_id"),
+    # 助言メモの「最後に直した人」
+    ("admin_notes", "updated_by"),
+    # 削除済みも移す（2026-10-01。school-launcher 20261001085757）
+    ("admin_notes", "deleted_at"),
 )
 
 #: **キーは `Phase.key` の接頭辞と一致させること。** `SchemaCheckStep.run()` が

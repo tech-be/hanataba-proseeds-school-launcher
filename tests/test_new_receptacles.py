@@ -223,6 +223,75 @@ class FixedMisreadsTest(unittest.TestCase):
         self.assertEqual(tickets._reminded_at(row), tickets.convert(row["reserve_date"], tickets.ColumnKind.DATETIME))
 
 
+class AdviceNoteTest(unittest.TestCase):
+    def test_updated_by_is_kept(self) -> None:
+        """**書いた人と最後に直した人を分けて残す。** 旧の 0 は「直していない」。"""
+        from migrator.steps.support import career
+
+        ctx = make_ctx()
+        row = {"personal_record_advice_id": 1, "user_id": 3, "target_user_id": 9, "advice_memo": "m",
+               "update_user_id": 4, "regist_date": datetime(2024, 4, 10), "update_date": datetime(2024, 4, 11)}
+        [rec] = career.AdviceNotesStep().transform(ctx, [row])
+        self.assertEqual(rec.values["author_id"], ctx.ulid.for_row("user", 3))
+        self.assertEqual(rec.values["updated_by"], ctx.ulid.for_row("user", 4))
+        self.assertEqual(rec.values["user_id"], ctx.ulid.for_row("user", 9))
+        [untouched] = career.AdviceNotesStep().transform(ctx, [{**row, "update_user_id": 0}])
+        self.assertIsNone(untouched.values["updated_by"])
+
+
+class LibraryVisibilityTest(unittest.TestCase):
+    """**旧より広く見せない。** 2026-10-01 に、添付資料が全会員に見えていたのを直した。"""
+
+    def test_attachment_goes_to_its_course_folder(self) -> None:
+        from migrator.steps.support import library
+
+        ctx = make_ctx()
+        row = {"_source": "unit", "_file_id": 5, "_lesson_id": 100, "_unit_id": 7, "_hidden": None,
+               "disp_file_name": "資料.pdf", "save_file_name": "a.pdf", "sort_no": 1,
+               "regist_date": datetime(2020, 1, 1)}
+        [rec] = library.LibraryMaterialsStep().transform(ctx, [row])
+        self.assertEqual(rec.values["folder_id"], library.course_folder_id(ctx, 100))
+        self.assertTrue(rec.values["published"])
+        [hidden] = library.LibraryMaterialsStep().transform(ctx, [{**row, "_hidden": "ユニットが削除済み"}])
+        self.assertFalse(hidden.values["published"])
+
+    def test_course_folder_is_for_enrolled_learners(self) -> None:
+        from migrator.steps.support import library
+
+        ctx = make_ctx()
+        [rec] = library.LibraryFoldersStep().transform(
+            ctx, [{"_kind": "course", "lesson_id": 100, "name": "講座A", "regist_date": datetime(2020, 1, 1)}])
+        self.assertEqual(rec.values["audience_type"], "course_enrolled")
+        self.assertEqual(rec.values["name"], "講座A（lw2 の添付資料）")
+        [target] = library.LibraryFolderCourseTargetsStep().transform(ctx, [{"lesson_id": 100}])
+        self.assertEqual(target.values["course_id"], ctx.ulid.for_row("lesson", 100))
+
+    def test_group_restricted_drive_is_not_opened_to_everyone(self) -> None:
+        from migrator.steps.support import library
+
+        ctx = make_ctx()
+        base = {"_kind": "drive", "drive_id": 1, "drive_name": "d", "open_chk": 1, "del_chk": 0,
+                "sort_no": 0, "regist_date": datetime(2020, 1, 1)}
+        [open_, grouped, deleted] = library.LibraryFoldersStep().transform(ctx, [
+            {**base, "_has_groups": False}, {**base, "drive_id": 2, "_has_groups": True},
+            {**base, "drive_id": 3, "_has_groups": False, "del_chk": 1}])
+        self.assertEqual(open_.values["audience_type"], "all_users")
+        self.assertEqual(grouped.values["audience_type"], "specific_users")
+        self.assertTrue(grouped.values["published"])
+        self.assertFalse(deleted.values["published"])
+
+    def test_restricted_or_deleted_attachments_are_hidden(self) -> None:
+        from migrator.steps.support import library
+
+        restricted = {("unit", 5)}
+        row = {"_source": "unit", "_file_id": 5, "_lesson_id": 1, "_unit_deleted": False}
+        self.assertIn("公開グループ", library._hidden_reason(row, set(), restricted))
+        self.assertEqual(library._hidden_reason({**row, "_file_id": 6, "_unit_deleted": True}, set(), restricted),
+                         "ユニットが削除済み")
+        self.assertEqual(library._hidden_reason({**row, "_file_id": 6}, {1}, restricted), "講座が削除済み")
+        self.assertIsNone(library._hidden_reason({**row, "_file_id": 6}, set(), restricted))
+
+
 class KeepDeletedRowsTest(unittest.TestCase):
     """**移行対象外を除き、削除済みも含めてすべて移す**（2026-10-01 の方針）。"""
 
