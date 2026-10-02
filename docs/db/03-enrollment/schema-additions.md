@@ -3,7 +3,13 @@
 [突き合わせ](review.md#新環境に追加するテーブルカラム) の追加一覧を、**school-launcher に当てる migration の単位**に落としたもの。
 
 - **当てる先**: `school-launcher/btoc-backend/db/migrations/`（goose 形式。雛形は `make migrate-create`）
-- **実物**: `20260924054151_lw2_enrollment_additions.sql`（ブランチ `feat/lw2-enrollment-schema`）
+- **実物**（2026-10-02 時点）:
+
+  | migration | 中身 |
+  |---|---|
+  | `20260924054151_lw2_enrollment_additions.sql` | 0〜7（`feat/lw2-enrollment-schema` で作り、`hanataba_dev` に PR #139 でマージ済み） |
+  | `20260930052453_lw2_support_additions.sql`（`feat/lw2-support-schema` の上で未追跡） | 2 の `submission_feedback_files`（05 の migration に同居） |
+  | **`20261001085757_lw2_keep_deleted_rows.sql`**（2026-10-01。`feat/lw2-support-schema` の上で未追跡） | 8 `survey_responses.deleted_at` |
 - **当てる時期**: **移行直前**（[migration-spec](migration-spec.md) のフェーズ0）
 - **確認**: `python -m migrator doctor` — この区分が未適用なら `[TODO]` で出る
 
@@ -19,12 +25,13 @@
 | **必須** | Step が**実際に書き込む先** | `common.0` で止まる。移行できない |
 | **計画** | **移行では使わない**もの | 止まらない。`doctor` が `[TODO]` で出す |
 
-**この区分に「計画」はない。**
+**この区分の「計画」は 7 の `certificates.product_id` だけ**（移行ツールが書かず、`ENROLLMENT_SCHEMA` にも無い）。
 
 > **新環境の制約は緩めない**（2026-09-23 決定）。旧データが入らない箇所は、
 > **制約を外すのではなく、当たった行が移らないことを受け入れる**。
 
-ツール側の定義は `migrator/steps/schema.py` の `ENROLLMENT_SCHEMA`（20件）。**この表とコードは一致させること。**
+ツール側の定義は `migrator/steps/schema.py` の `ENROLLMENT_SCHEMA`（23件。新システムに元からある書き込み先
+`course_certificate_policies` / `survey_submission_log` も含む）。**この表とコードは一致させること。**
 
 ---
 
@@ -50,7 +57,7 @@
 ```sql
 -- 権限の取り消し (A10)。旧 payment_item_lesson_authority.del_chk = 1 を受ける。
 -- **既存の3値では表せない。** expired は期間の満了、refunded は返金で、
--- どちらも「運営が権限を取り下げた」とは別の軸。実測 828 行 (畳んで 273 組)。
+-- どちらも「運営が権限を取り下げた」とは別の軸。実測 828 行 (全行が削除済みの組は 362 組)。
 INSERT IGNORE INTO enrollment_statuses
     (code, name_ja, is_active, is_terminal, sort_order, is_system) VALUES
     ('revoked', '取り消し', FALSE, TRUE, 40, TRUE);
@@ -72,7 +79,8 @@ ALTER TABLE lesson_progress
 > **実質の取り消しは `del_chk`**（実測 828件）。
 
 > **無期限は `expires_at = NULL` で表す。** ただし「無期限」と「未設定」が区別できなくなるので、
-> 旧 `no_limit_chk` / `payment_no_limit_chk`（各 110件）は `settings` に残す。
+> `settings.unlimited`（畳んだ結果の真偽値）を残す。**旧 `no_limit_chk` / `payment_no_limit_chk`（各 110件）と
+> `payment_authority_end_date` の値そのものは現状は残していない**（実装が無い。2026-10-02 の確認）。
 
 > **`progress_status` はユニット種別ごとに意味が変わる。** `unit_learning_progress_master` が
 > `(progress_id, unit_type_id)` で引く作りで、同じ `2` がテストなら「受験中」、
@@ -82,14 +90,15 @@ ALTER TABLE lesson_progress
 > 意味が決まるまで畳まない（→ [確認事項](../open-questions.md)）。
 
 > **`suspend_data` を `last_position` にそのまま入れない。** 旧は SCORM の中断データ
-> （実測 3,147件）で、新の `last_position` は動画の再生位置を想定した列。形式が違う。
+> （実測 4,630件）で、新の `last_position` は動画の再生位置を想定した列。形式が違う。
+> **`last_position` は常に NULL で移し、`suspend_data` は `settings` に原文で残す。**
 
 > **`expires_at` は `TIMESTAMP`（上限 2038-01-19）。** 旧は無期限を100年後の日付で表しており
 > （実測 最大 2126-09-16、2038超が 151件）、**そのまま入れると実 INSERT で
 > `Incorrect datetime value` になる**。無期限（NULL）に寄せ、元の日付を `settings` に残す。
 > 事前検査にも `TIMESTAMP` の範囲チェックを足してある（`_datetime_range`）。
 
-> **母集合は購入による受講権限**（2,246組、2026-09-24 決定）。学習実績（23,956組）との差は
+> **母集合は購入による受講権限**（ステージング 4,289組、2026-09-24 決定）。学習実績（33,912組）との差は
 > 93% が無料講座で、旧環境でも権限行を持たないのが正常。
 
 ---
@@ -126,9 +135,29 @@ ALTER TABLE quiz_answers
 
 ## 2. 課題提出の新テーブルと列追加
 
-**必須。** 旧は提出ファイルを5本まで列で持っていた（`eval_disp_file_name1-5`）。行に展開する。
+**必須。** 旧は添削に付けるファイルを5本まで列で持っていた（`eval_disp_file_name1-5`）。行に展開する。
+
+> **2026-09-30 に移し先を直した。** `eval_*` は列名どおり**添削者が付けたファイル**だった
+> （`admin-lesson/ReportController::evaluationAction` で書き、受講者の画面では添削のコメントの下に出す）。
+> 以前は受講者の提出ファイルと読んで `submission_files` に入れていた。いまは添削にぶら下げる
+> `submission_feedback_files` を新設して移す（school-launcher `20260930052453_lw2_support_additions.sql`）。
+> **`submission_files` は移行では使わない**（新のアプリが受講者の提出に使う表として残す）。
 
 ```sql
+CREATE TABLE submission_feedback_files (
+    id          CHAR(26) NOT NULL PRIMARY KEY,
+    tenant_id   CHAR(26) NOT NULL,
+    feedback_id CHAR(26) NOT NULL,
+    sort_order  INT NOT NULL DEFAULT 0,          -- 旧 1..5 を詰めた順
+    file_name   VARCHAR(300) NOT NULL,           -- 旧 eval_disp_file_nameN
+    object_key  VARCHAR(512) NOT NULL,           -- 旧 eval_save_file_nameN（L9 の移送後にキーへ）
+    created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_submission_feedback_files (feedback_id, sort_order),
+    CONSTRAINT fk_sff_tenant   FOREIGN KEY (tenant_id)   REFERENCES tenants(id),
+    CONSTRAINT fk_sff_feedback FOREIGN KEY (feedback_id) REFERENCES submission_feedbacks(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 以前の案（受講者の提出ファイルとして移す。使わない）
 CREATE TABLE submission_files (
     id            CHAR(26) NOT NULL PRIMARY KEY,
     tenant_id     CHAR(26) NOT NULL,
@@ -150,8 +179,8 @@ ALTER TABLE submission_feedbacks
     ADD COLUMN question_comments JSON NULL;   -- 設問ごとの添削（旧 report_question_comment）
 ```
 
-> **`submissions.object_key` は残す。** 1本目を既存列に入れたまま `submission_files` にも
-> 同じ行を作るか、`submission_files` に一本化するかは実装時に決める（**二重管理にしない**）。
+> **`submission_feedbacks.object_key`（1本）には入れない。** 同じファイルを2か所に持たない。
+> 添削されていない提出にファイルがあれば、添削の行が無いので付けられず「移さない行」の一覧に出す。
 > 実測で2本目以降を使う提出は 4,963件中 2件。
 
 > **`submissions.submitted_at` の NOT NULL は外さない**（緩めない方針）。
@@ -194,13 +223,13 @@ NOT NULL ＋ FK `survey_lessons`）。`entity_type` / `entity_id` を足して�
 ```sql
 ALTER TABLE live_reservations
     ADD COLUMN verification_key VARCHAR(200) NULL,   -- 旧 live_lesson_reserve.verification_key
-    ADD COLUMN settings         JSON         NULL;   -- 旧 3フラグ・recent_access_date
+    ADD COLUMN settings         JSON         NULL;   -- 旧 3フラグ・recent_access_date・振替予約の ID
 ```
 
 | 列 | 旧の対応 | 備考 |
 |---|---|---|
 | `verification_key` | `verification_key` varchar(200) NOT NULL | **出席確認に使う照合値**（QR・コード入力）。実測は全件32文字。**パスワードや認証コードの平文ではないので読んでよい** |
-| `settings` | `cancel_chk` / `attendance_chk` / `stop_chk` / `recent_access_date` | **`status` に畳んだ元の値を残す。** 3フラグの組み合わせは `status` の4〜5値では表しきれない |
+| `settings` | `cancel_chk` / `attendance_chk` / `stop_chk` / `recent_access_date` / `change_reserve_id` / `base_reserve_id` | **`status` に畳んだ元の値を残す。** 3フラグの組み合わせは `status` の4〜5値では表しきれない |
 
 あわせて `live_reservation_statuses` に **`host_canceled`** を足す（主催側の中止。`status` の FK 先）。
 
@@ -208,7 +237,7 @@ ALTER TABLE live_reservations
 > **どれを残すかを運営が決める**（[migration-spec](migration-spec.md) の確認事項）。
 >
 > **`change_reserve_id` / `base_reserve_id`（振替予約）の列は足していない。** 実測0件。
-> **本番で出たらここに足す。**
+> 値は `settings` に残している。**本番で多ければ列を足すかを決める。**
 
 ---
 
@@ -258,7 +287,8 @@ CREATE TABLE live_lesson_reviews (
 
 ## 7. 修了証への列追加
 
-**必須。**
+**計画。** 移行ツールは `certificates.product_id` を書かない（`ENROLLMENT_SCHEMA` にも無いので、無くても止まらない）。
+migration には入っている（`20260924054151_lw2_enrollment_additions.sql`）。
 
 ```sql
 -- **NOT NULL は外さない**（緩めない方針）。商品単位の修了証は移らない。
@@ -273,6 +303,20 @@ ALTER TABLE certificates
 > テナント設定側の `certificate_settings.issuer_name` は NULL 可。
 > **同じ列名で NULL 可と NOT NULL が混在しているので取り違えないこと。**
 
+## 8. 削除済みの回答も移すための列（2026-10-01）
+
+**必須。** `20261001085757_lw2_keep_deleted_rows.sql`。
+
+```sql
+ALTER TABLE survey_responses
+    ADD COLUMN deleted_at DATETIME(3) NULL AFTER suspended;   -- 旧 enquete_answer.del_chk = 1
+```
+
+> **削除済みの回答は回答済みの記録（`survey_submission_log`）に入れない**（旧は回答し直せた）。
+> 新のアプリは `deleted_at` をまだ読まない。
+
+---
+
 ## 計画（移行では使わない）
 
-**なし。**
+- `certificates.product_id`（7）。課金（4-2）の移行後に埋める
