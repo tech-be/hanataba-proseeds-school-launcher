@@ -23,6 +23,16 @@ class ForbiddenColumnTest(unittest.TestCase):
             "SELECT facebook_consumer_sercret_key FROM sns_setting WHERE tenant_id = 12"
         )
 
+    def test_tenant_config_secrets_are_blocked(self) -> None:
+        """**平文のパスワードと旧の DB 名は読まない。** 列の一覧から外すだけでなく、仕組みで止める。"""
+        for column in ("special_pass_word", "kanri_db_name"):
+            with self.assertRaises(ForbiddenColumnError):
+                guards.check_forbidden_columns(
+                    f"SELECT tenant_id, {column} FROM application_config WHERE tenant_id = 12")
+        # LINE の秘密の値は移す（tenant_secrets）
+        guards.check_forbidden_columns(
+            "SELECT line_channel_sercret FROM application_config WHERE tenant_id = 12")
+
     def test_input_password_is_blocked(self) -> None:
         with self.assertRaises(ForbiddenColumnError):
             guards.check_forbidden_columns("SELECT input_password FROM user_login_log")

@@ -71,9 +71,11 @@ REQUIRED_SCHEMA: tuple[tuple[str, str | None], ...] = (
     # A10 / A11 グループ・属性
     ("tenant_groups", None),
     ("tenant_group_members", None),
-    ("tenant_attributes", None),
-    ("user_attribute_values", None),
-    ("attribute_required_courses", None),
+    # 属性はタグに一本化した（school-launcher 20260927105511 / 20260930044959）
+    ("user_tags", "attribute_id"),
+    # 削除済みも移す（2026-10-01。school-launcher 20261001085757）
+    ("user_tags", "deleted_at"),
+    ("user_tag_assignments", None),
     # A13 / A18 会員に紐づく残り
     ("user_field_visibility", None),
     ("instructor_assignments", None),

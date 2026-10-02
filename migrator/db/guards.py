@@ -19,6 +19,9 @@ FORBIDDEN_COLUMNS: dict[str, tuple[str, ...]] = {
     # 認証コードの平文
     "twostepverification_log": ("input_code", "correct_code"),
     "twostepverification": ("verification_code",),
+    # 平文のパスワードと、lw2 自身の DB 名（2026-09-30 にテナントの設定を仕分けたときに確認）。
+    # LINE の秘密の値（line_channel_sercret / send_line_chanel_token）は新でも使うので読む
+    "application_config": ("special_pass_word", "kanri_db_name"),
 }
 
 #: 移行対象外のテーブル（純ログ）。受け皿があっても移さない。
