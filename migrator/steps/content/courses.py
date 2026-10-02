@@ -186,6 +186,11 @@ class CoursesStep(Step):
                     cate,
                 )
                 row["lesson_cate_id"] = None
+        # **利用中の講座**（旧 `lesson_is_used`）。旧は受講登録・購入のたびに1行作り、管理画面の
+        # 「利用中の講座だけ」の絞り込みに使っていた（02 review A1）。販売状態（`sales_status`）とは別物
+        used = {int(r["lesson_id"]) for r in source.fetch_for_tenant("lesson_is_used", ("lesson_id",))}
+        for row in rows:
+            row["_is_used"] = int(row["lesson_id"]) in used
         return rows
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
@@ -219,7 +224,7 @@ class CoursesStep(Step):
                         "remote_pc_enabled": False,
                         "final_quiz_id": None,  # テスト移行後に埋める
                         "allowed_ip_address": row.get("allowed_ip_address"),
-                        "is_used": int(row.get("sales_status") or 0) == 1,
+                        "is_used": bool(row.get("_is_used")),
                         "settings": _settings(row),
                         "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
                     },

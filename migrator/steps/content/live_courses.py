@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 from ...context import RunContext
+from ...core.datetimes import ColumnKind, convert
 from ...core.records import Record
 from ..base import Step
 
@@ -86,6 +87,16 @@ def resolve_placement(ctx: RunContext) -> dict[int, int | None]:
     return out
 
 
+def unplaced_lives(ctx: RunContext) -> list[dict]:
+    """置き場所が決まっていないライブ（受け皿講座に入るもの）。**無ければ受け皿講座は作らない。**
+
+    修了証の発行方針（`enrollment.course_certificate_policies`）も同じ判定で受け皿講座の行を作る。
+    """
+    placement = resolve_placement(ctx)
+    lives = ctx.require_source().fetch_for_tenant("live_lesson", LIVE_LESSON_COLUMNS)
+    return [r for r in lives if int(r["live_lesson_id"]) not in placement]
+
+
 class HostCourseStep(Step):
     """制限の無いライブを入れる受け皿講座を1本作る。
 
@@ -101,11 +112,8 @@ class HostCourseStep(Step):
     depends_on = ("tenant",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        source = ctx.require_source()
-        placement = resolve_placement(ctx)
-        lives = source.fetch_for_tenant("live_lesson", LIVE_LESSON_COLUMNS)
         # 受け皿に入るのは、置き場所が決まっていないライブだけ
-        return [r for r in lives if int(r["live_lesson_id"]) not in placement]
+        return unplaced_lives(ctx)
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         if not rows:
@@ -212,9 +220,78 @@ class HostCourseEnrollmentsStep(Step):
         return records
 
 
+class LimitItemHistoryStep(Step):
+    """`live_lesson_limit_item` の**全行**を旧の形のまま移す（削除済み・積まれた行を含む）。
+
+    新は「商品で制限したライブ」を講座の配下に置くことで表す（`resolve_placement`）ので、
+    制限そのものの行を持つ表が無い。旧は保存のたびに旧行を `del_chk = 1` にして積む
+    （ステージング実測 50行のうち45行が削除済み）。**講座の商品なら `plan_id` も入れる**ので、
+    商品（`tenant_plans`）が入る課金の2で流す。
+    """
+
+    name = "billing.live_limit_item_history"
+    description = "ライブを予約できる商品の全行を旧の形のまま移す"
+    source_table = "live_lesson_limit_item"
+    target_table = "live_lesson_limit_item_history"
+    depends_on = ("content.live_lessons", "billing.plans")
+
+    def extract(self, ctx: RunContext) -> list[dict]:
+        from ..billing.payments import COURSE_ITEM, items
+
+        catalog = items(ctx)
+        rows = ctx.require_source().fetch_joined(
+            "live_lesson_limit_item",
+            ("live_lesson_id", "item_id", "del_chk", "regist_date", "update_date"),
+            parent="live_lesson",
+            on="c.live_lesson_id = p.live_lesson_id",
+        )
+        # **旧に主キーが無い。** 同じ内容の行があり得るので、並べた順の通し番号で区別する
+        # 並べ方は全列で決める（削除の印だけが違う行があっても、実行ごとに ID が入れ替わらない）
+        rows.sort(key=lambda r: (int(r["live_lesson_id"]), int(r["item_id"]),
+                                 str(r.get("regist_date")), str(r.get("update_date")),
+                                 int(r.get("del_chk") or 0)))
+        seen: dict[tuple, int] = {}
+        for row in rows:
+            base = (int(row["live_lesson_id"]), int(row["item_id"]), str(row.get("regist_date")))
+            seen[base] = seen.get(base, 0) + 1
+            row["_key"] = f"{base[0]}:{base[1]}:{base[2]}:{seen[base]}"
+            item = catalog.get(int(row["item_id"]))
+            row["_course_plan"] = item is not None and int(item.get("item_type") or 0) == COURSE_ITEM
+        return rows
+
+    def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
+        tenant_id = ctx.tenant_id.value
+        return [
+            Record(
+                table="live_lesson_limit_item_history",
+                values={
+                    "id": ctx.ulid.for_row("live_lesson_limit_item_history", row["_key"]),
+                    "tenant_id": tenant_id,
+                    "lesson_id": ctx.ulid.for_row("live_lesson", int(row["live_lesson_id"])),
+                    "live_lesson_id": int(row["live_lesson_id"]),
+                    "item_id": int(row["item_id"]),
+                    "plan_id": (
+                        ctx.ulid.for_row("payment_item", int(row["item_id"])) if row["_course_plan"] else None
+                    ),
+                    "del_chk": int(row.get("del_chk") or 0) == 1,
+                    "regist_date": convert(row.get("regist_date"), ColumnKind.DATETIME),
+                    "update_date": convert(row.get("update_date"), ColumnKind.DATETIME),
+                },
+                natural_key=("id",),
+                source_key=row["_key"],
+            )
+            for row in rows
+        ]
+
+
 def host_course() -> list[Step]:
     """2-4 ライブ講座。受け皿の講座そのもの。"""
     return [HostCourseStep()]
+
+
+def limit_item_history() -> list[Step]:
+    """課金の2で流す（`plan_id` が `tenant_plans` を指すため）。"""
+    return [LimitItemHistoryStep()]
 
 
 def enrollments() -> list[Step]:

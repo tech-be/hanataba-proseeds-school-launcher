@@ -210,7 +210,9 @@ class SurveyQuestionsStep(Step):
         for question in questions:
             page = pages.get(int(question["enquete_page_id"]))
             if page is None:
-                continue  # 孤児。ページが物理削除されている
+                # 通らない: 設問は enquete_page → enquete で絞って読むので、ページの無い設問は読めない
+                # （テナントで絞れないので、このテナントの行かも分からない）
+                continue
             by_enquete.setdefault(int(page["enquete_id"]), []).append(question)
         rows: list[dict] = []
         for unit in _survey_units(ctx):
