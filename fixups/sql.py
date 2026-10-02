@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from .plan import Task
+from .plan import Task, user_of
 
 HEADER = """-- 暫定対応: 移行元 (lw2) を直す SQL
 -- 作成: python -m fixups sql
@@ -83,8 +83,10 @@ ORPHAN_TABLES: dict[str, tuple[str, str, str]] = {
 def _orphan_rows(task: Task, tenant_id: int) -> str:
     by_step: dict[str, list[str]] = {}
     for key in task.keys:
-        step, _, user_id = key.partition(":")
-        by_step.setdefault(step, []).append(user_id)
+        step, _, rest = key.partition(":")
+        user_id = user_of(step, rest)
+        if user_id is not None:
+            by_step.setdefault(step, []).append(user_id)
 
     lines = ["-- 移行元に会員が存在しない行を消す"]
     for step, user_ids in sorted(by_step.items()):

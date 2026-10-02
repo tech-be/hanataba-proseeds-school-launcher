@@ -14,6 +14,52 @@ from dataclasses import dataclass, field
 
 from .exclusions import Exclusion
 
+
+#: 一覧のキーが「会員 ID」だけでない Step。キーを ":" で区切ったときの会員 ID の位置。
+#: **Step の `source_key` と合わせること。** 会員1人に複数行ある表は、会員 ID と別の ID を組にしている
+USER_KEY_POSITION: dict[str, int] = {
+    "user_attribute_values": 1,  # 属性 ID:会員 ID
+    "enrollment.survey_submission_log": 1,  # ユニット ID:会員 ID
+    "billing.ticket_grants": 0,  # 会員 ID:チケット ID
+    "enrollment.certificates": 0,  # 会員 ID:対象 ID
+    "enrollment.certificate_events": 0,
+    "enrollment.lesson_progress": 0,  # 会員 ID:ユニット ID
+    "enrollment.rights": 0,  # 会員 ID:講座 ID
+}
+
+#: 会員を参照するが、**一覧のキーが会員ではない旧 ID** の Step（申込・予約・記録などの ID）。
+#: キーを会員 ID とみなすと、たまたま同じ番号の会員の有無で分類が変わってしまう
+NON_USER_KEY_STEPS: frozenset[str] = frozenset({
+    "billing.assign_logs",
+    "billing.monthly_allowances",
+    "billing.payments",
+    "billing.receipts",
+    "billing.ticket_ledger",
+    "enrollment.live_reservations",
+    "enrollment.live_reviews",
+    "enrollment.quiz_attempts",
+    "enrollment.survey_responses",
+    "enrollment.submissions",
+    "support.advice_notes",
+    "support.scout_follows",
+    "support.usage_snapshot_users",
+})
+
+
+def user_of(step: str, key: str) -> str | None:
+    """一覧のキーから会員の旧 ID を取り出す。キーから会員が分からなければ None。"""
+    if step in NON_USER_KEY_STEPS:
+        return None
+    parts = key.split(":")
+    position = USER_KEY_POSITION.get(step)
+    if position is not None and len(parts) > position:
+        candidate = parts[position]
+    elif len(parts) == 1:
+        candidate = key
+    else:
+        return None
+    return candidate if candidate.isdigit() else None
+
 #: 直し方
 SQL = "sql"  # 旧 DB を直す（機械的に決まる）
 OVERRIDE = "override"  # 運営が値を決める（補正データ）
@@ -103,7 +149,8 @@ def classify(exclusions: list[Exclusion], live_users: set[str]) -> list[Task]:
                 f"{item.step}:{item.key}",
             )
         elif item.kind == "外部キー":
-            if item.key.isdigit() and item.key not in live_users:
+            user = user_of(item.step, item.key)
+            if user is not None and user not in live_users:
                 add(
                     "orphan-row",
                     "移行元に会員が存在しない行",
@@ -111,7 +158,7 @@ def classify(exclusions: list[Exclusion], live_users: set[str]) -> list[Task]:
                     "会員が消えているので、割当だけ残っても参照できない。削除を提案する",
                     f"{item.step}:{item.key}",
                 )
-            elif item.key.isdigit():
+            elif user is not None:
                 add(
                     "cascade",
                     "会員が移らないための巻き添え",
@@ -120,11 +167,12 @@ def classify(exclusions: list[Exclusion], live_users: set[str]) -> list[Task]:
                     f"{item.step}:{item.key}",
                 )
             else:
+                # 参照先は会員だが、一覧のキーから会員が分からない（申込 ID などで並ぶ Step）
                 add(
-                    "fk-other",
-                    "参照先が無い行（会員以外）",
+                    "user-unknown",
+                    "会員を参照できない行（キーが会員 ID ではない）",
                     REVIEW,
-                    "親を先に移すか、対象外にするかを決める",
+                    "旧 DB で、その行の会員が残っているかを確かめる",
                     f"{item.step}:{item.key}",
                 )
         else:

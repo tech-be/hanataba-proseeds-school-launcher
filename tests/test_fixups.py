@@ -51,6 +51,28 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(tasks[0].how, SQL)
         self.assertEqual(tasks[0].keys, ["user_attribute_values:13"])
 
+    def test_attribute_rows_are_keyed_by_attribute_and_member(self):
+        """**会員の属性の一覧のキーは「属性 ID:会員 ID」。** 会員 ID を取り出して判定する。"""
+        from fixups.sql import _orphan_rows
+
+        items = [exclusion("user_attribute_values", "外部キー `user_id`", "3:13")]
+        tasks = classify(items, live_users={"2"})
+        self.assertEqual(tasks[0].kind, "orphan-row")
+        self.assertIn("c.user_id IN (13)", _orphan_rows(tasks[0], 10))
+        self.assertEqual(classify(items, live_users={"13"})[0].kind, "cascade")
+
+    def test_rows_keyed_by_other_ids_are_not_read_as_members(self):
+        """**申込 ID などで並ぶ Step のキーを会員 ID とみなさない。** 同じ番号の会員の有無で分類が変わる。"""
+        items = [exclusion("billing.assign_logs", "外部キー `user_id`", "13")]
+        self.assertEqual(classify(items, live_users={"13"})[0].kind, "user-unknown")
+        self.assertEqual(classify(items, live_users=set())[0].kind, "user-unknown")
+
+    def test_member_first_keys_are_read(self):
+        """「会員 ID:講座 ID」のように会員が先頭のキーも、会員で判定する。"""
+        items = [exclusion("enrollment.rights", "外部キー `user_id`", "13:2001")]
+        self.assertEqual(classify(items, live_users={"13"})[0].kind, "cascade")
+        self.assertEqual(classify(items, live_users=set())[0].kind, "orphan-row")
+
     def test_non_user_foreign_key_is_not_called_a_cascade(self):
         """**数値の旧 ID でも会員とは限らない。**
 
