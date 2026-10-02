@@ -170,6 +170,23 @@ def foundation_checks(env: Env) -> list[CheckResult]:
         JOIN tenant_groups g ON g.id = m.group_id JOIN users u ON u.id = m.user_id
         WHERE g.tenant_id = %s""", d)}
     c.coverage("グループの所属", lm, nm, env.skipped("tenant_group_members"))
+
+    # 属性 → タグ（削除済みも移す。2026-10-01）
+    la = {r["attribute_id"]: r for r in env.src("attribute",
+        "SELECT attribute_id, attribute_name, del_chk FROM attribute WHERE tenant_id = %s", t)}
+    ntd = {r["attribute_id"]: r["deleted"] for r in env.dst(
+        "SELECT attribute_id, deleted_at IS NOT NULL deleted FROM user_tags WHERE tenant_id = %s AND attribute_id IS NOT NULL", d)}
+    c.coverage("タグ（旧の属性。削除済みを含む）", {k: k for k in la}, set(ntd), env.skipped("user_tags"))
+    # same() は真偽値を比べられないので 0 / 1 で渡す
+    c.values("タグの削除済み", [(k, int(int(la[k]["del_chk"] or 0) == 1), int(ntd[k])) for k in la if k in ntd])
+    lav = {(r["attribute_id"], r["user_id"]): f"{r['attribute_id']}:{r['user_id']}" for r in env.src("user_attribute", """
+        SELECT ua.attribute_id, ua.user_id FROM user_attribute ua JOIN attribute a ON a.attribute_id = ua.attribute_id
+        WHERE a.tenant_id = %s""", t)}
+    nav = {(r["aid"], r["uid"]) for r in env.dst("""
+        SELECT g.attribute_id aid, u.user_id uid FROM user_tag_assignments m
+        JOIN user_tags g ON g.id = m.tag_id JOIN users u ON u.id = m.user_id
+        WHERE m.tenant_id = %s""", d)}
+    c.coverage("タグの割当（旧の会員の属性）", lav, nav, env.skipped("user_tag_assignments"))
     return c.results
 
 

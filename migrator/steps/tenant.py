@@ -88,7 +88,166 @@ def _payment_settings(info: dict | None, receipt: dict | None) -> dict:
     return out
 
 
-def _settings(ctx: RunContext, site: dict | None, payment: dict | None = None) -> str:
+#: テナントの設定（2026-09-30 に 01 へ仕分け）。どれもテナントに1行で、**新に対応する列が無い**ので
+#: `tenants.settings` にキーごとに入れる。**秘密の値は読まない**（下の除外を参照）
+#:
+#: `application_config` から**読まない列**:
+#: - `special_pass_word` … 平文の認証情報（**移行できないもの**。01 review「移行の対象外 A」）
+#: - `kanri_db_name` … 旧の接続先 DB 名（**移行できないもの**。`site` の接続情報と同じ扱い）
+#: - `line_channel_sercret` / `send_line_chanel_token` … LINE の秘密の値。`tenant_secrets` に移す
+#:   （`tenant_config.TenantSecretsStep`）
+APP_CONFIG_COLUMNS = (
+    "group_row_max_no",
+    "disp_no_per_page",
+    "is_userbbs_regist",
+    "is_profile_group_open",
+    "rank_flg",
+    "all_rank_flg",
+    "enable_friendship",
+    "enable_attendance",
+    "is_locked_user_is_open_diary",
+    "is_locked_user_is_open_lesson",
+    "enable_live",
+    "enable_staff",
+    "enable_adminbbs",
+    "viewable_pass_word",
+    "enablesso",
+    "enablesso_password",
+    "mobile_link_visible",
+    "kaisha_menu_label",
+    "enable_credit",
+    "multh_login",
+    "is_instructor_regist_chk",
+    "is_use_big_alphabet_password",
+    "is_use_small_alphabet_password",
+    "is_use_num_password",
+    "is_use_mark_password",
+    "min_password_num",
+    "inspect_name_share_type",
+    "inspect_profile_share_type",
+    "logo_file_name",
+    "favicon_file_name",
+    "ios_icon_file_name",
+    "from_mail_name",
+    "from_mail_address",
+    "shop_code",
+    "volume_type",
+    "lang_chk",
+    "ssl_chk",
+    "ssl_lesson_chk",
+    "disp_max_page",
+    "twostep_chk",
+    "twostep_role_chk",
+    "twostep_date_span",
+    "twostep_message",
+    "bg_image_chk_login",
+    "bg_image_path_login",
+    "bg_img_file_name_login",
+    "blur_bg_chk_login",
+    "bg_image_chk",
+    "bg_image_path",
+    "bg_img_file_name",
+    "blur_bg_chk",
+    "authority_bg_color",
+    "no_authority_bg_color",
+    "base_color",
+    "alert_color",
+    "alert_bg_color",
+    "header_bg_color",
+    "footer_bg_color",
+    "new_image_chk",
+    "new_image",
+    "free_image_chk",
+    "free_image",
+    "login_footer_link",
+    "login_limit_count",
+    "name_view_setting",
+    "enable_support",
+    "enable_mail_setting_edit",
+    "news_mail_send",
+    "allowed_ip",
+    "allowed_ip_admin",
+    "enable_lesson_banner",
+    "badge_chk",
+    "another_inquire_url",
+    "cashback_chk",
+    "tutorial_chk",
+    "footprint_chk",
+    "coupon_chk",
+    "free_login_term",
+    "portfolio_open_chk",
+    "payment_update_chk",
+    "unit_mail_day",
+    "unit_mail_hour",
+    "third_secure_chk",
+    "line_chk",
+    "line_id",
+    "line_channel_id",
+    "interview_chk",
+    "remote_lesson_chk",
+)
+ACCOUNT_SETTING_COLUMNS = (
+    "password_has_lower", "password_has_upper", "password_has_number", "password_has_symbol",
+    "min_password_length", "password_is_not_same_as_id", "password_validity_period",
+    "password_update_use_reminder", "password_update_first_login", "enable_after_update",
+    "viewable_password", "enable_lockout", "lockout_period", "lockout_limit",
+)
+LOGIN_SETTING_COLUMNS = (
+    "data_type", "message1", "message2", "message3", "message4", "message5",
+    "site_environment_chk", "account_register_chk", "login_keep_chk", "passwd_reminder_chk",
+    "image1", "image2", "image3", "image4", "image5", "password_reminder_chk",
+    "login_dialog_valid_chk", "login_dialog_title", "title_bg_color", "message_bg_color",
+    "login_dialog_message", "login_dialog_next", "login_dialog_close_label",
+    "pass_change_limit_chk", "pass_change_limit_date_num", "pass_change_later_chk",
+    "first_login_chk", "first_login_message",
+)
+REGISTRATION_SETTING_COLUMNS = ("message", "image1", "image2", "image3", "regist_date", "update_date")
+TOP_PARTS_COLUMNS = (
+    "top_parts_setting_id", "top_parts_code", "data_type", "col", "row", "title_chk",
+    "data_num", "param1", "param2", "del_chk", "regist_date",
+)
+FUNCTION_DEFAULT_COLUMNS = (
+    "function_default_id", "sort_no", "valid_chk", "disp_title", "unified_menu_chk",
+    "menu_bg_color", "left_menu_file_name", "head_menu_file_name_on", "head_menu_file_name_off",
+)
+FUNCTION_ADMIN_TENANT_COLUMNS = ("function_admin_id", "valid_chk")
+FUNCTION_ADMIN_ROLE_COLUMNS = ("function_admin_id", "role_id", "valid_chk")
+
+
+def _tenant_settings(ctx: RunContext) -> dict:
+    """テナントの設定6種を `tenants.settings` のキーにする。**行が無いものはキーを作らない。**"""
+    source = ctx.require_source()
+
+    def one(table: str, columns: tuple[str, ...]) -> dict | None:
+        """主キーが `tenant_id` だけの表（テナントに1行）。"""
+        rows = source.fetch_for_tenant(table, columns)
+        return dict(rows[0]) if rows else None
+
+    def many(table: str, columns: tuple[str, ...]) -> list[dict]:
+        return [dict(r) for r in source.fetch_for_tenant(table, columns)]
+
+    out = {
+        "lw2_config": one("application_config", APP_CONFIG_COLUMNS),
+        "lw2_account": one("account_setting", ACCOUNT_SETTING_COLUMNS),
+        # **主キーが (tenant_id, data_type)。** 種別ごとに複数行あり得るので全行を種別の順に持つ
+        "lw2_login": sorted(many("login_setting", LOGIN_SETTING_COLUMNS),
+                            key=lambda r: int(r.get("data_type") or 0)) or None,
+        "lw2_registration": one("registration_setting", REGISTRATION_SETTING_COLUMNS),
+        "lw2_top_parts": many("top_parts_setting", TOP_PARTS_COLUMNS) or None,
+        "lw2_functions": {
+            "menu": many("function_default_tenant", FUNCTION_DEFAULT_COLUMNS),
+            "admin_tenant": many("function_admin_tenant", FUNCTION_ADMIN_TENANT_COLUMNS),
+            "admin_role": many("function_admin_role", FUNCTION_ADMIN_ROLE_COLUMNS),
+        },
+    }
+    if not any(out["lw2_functions"].values()):
+        out["lw2_functions"] = None
+    return {k: v for k, v in out.items() if v is not None}
+
+
+def _settings(
+    ctx: RunContext, site: dict | None, payment: dict | None = None, extra: dict | None = None
+) -> str:
     """旧 `site` の運用値を `tenants.settings` に入れる（A3）。
 
     **新環境に対応する機能が無くても移す**（[移行の原則](../../docs/00-template/review.md)の1）。
@@ -96,9 +255,13 @@ def _settings(ctx: RunContext, site: dict | None, payment: dict | None = None) -
 
     - `service`  … サービス名・説明・提供期間・サイト URL
     - `features` … 旧のバッチ・機能フラグ（`lw_type` / テスト分析 / ランキング / 日次メール）
+    - `lw2_*`    … テナントの設定（`_tenant_settings`）。秘密の値は含まない
     """
+    extra = extra or {}
     if not site:
-        return json.dumps({"lw2_payment": payment}, ensure_ascii=False) if payment else "{}"
+        base = {"lw2_payment": payment} if payment else {}
+        base.update(extra)
+        return json.dumps(base, ensure_ascii=False, default=str) if base else "{}"
 
     def clean(key: str):
         value = site.get(key)
@@ -135,8 +298,9 @@ def _settings(ctx: RunContext, site: dict | None, payment: dict | None = None) -
     if service:
         settings["service"] = service
     settings["features"] = features
-    ctx.logger.info("site の運用値を tenants.settings に入れる: %s", sorted(settings))
-    return json.dumps(settings, ensure_ascii=False)
+    settings.update(extra)
+    ctx.logger.info("site の運用値とテナントの設定を tenants.settings に入れる: %s", sorted(settings))
+    return json.dumps(settings, ensure_ascii=False, default=str)
 
 
 def _date(value) -> str | None:
@@ -161,6 +325,8 @@ class TenantStep(Step):
         info = source.fetch_for_tenant("payment_infomation", PAYMENT_INFO_COLUMNS)
         receipt = source.fetch_for_tenant("receipt_setting", ("invoice_chk",))
         rows[0]["_payment"] = _payment_settings(info[0] if info else None, receipt[0] if receipt else None)
+        # テナントの設定6種（秘密の値は読まない）
+        rows[0]["_tenant_settings"] = _tenant_settings(ctx)
         return rows
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
@@ -202,7 +368,9 @@ class TenantStep(Step):
                     "db_type": "shared",
                     "plan_id": None,
                     "custom_domain": None,
-                    "settings": _settings(ctx, row.get("_site"), row.get("_payment")),
+                    "settings": _settings(
+                        ctx, row.get("_site"), row.get("_payment"), row.get("_tenant_settings")
+                    ),
                     "status": "active",
                     "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
                 },

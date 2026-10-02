@@ -54,6 +54,12 @@ SNS_SECRET_SOURCES: tuple[tuple[str, str], ...] = (
     ("instagram_consumer_sercret_key", "instagram_client_secret"),
 )
 
+#: `application_config` の LINE の秘密の値 → `tenant_secret_kinds.code`（2026-09-30 追加）
+LINE_SECRET_SOURCES: tuple[tuple[str, str], ...] = (
+    ("line_channel_sercret", "line_channel_secret"),   # 列名の綴り誤りは旧のまま
+    ("send_line_chanel_token", "line_channel_access_token"),
+)
+
 
 class TenantLimitsStep(Step):
     """`tenant_limit_value` の上限5種を `tenant_limits` に移す。"""
@@ -129,6 +135,7 @@ class TenantSecretsStep(Step):
 
     - `site.linkpreview_api_key` … 第三者サービスの API キー
     - `sns_setting` の6列 … SNS ログインのアプリ認証情報（Facebook / X / Instagram）
+    - `application_config` の LINE の2列 … 公式アカウントのチャネルシークレット・アクセストークン
 
     **どちらも新環境でそのまま使える。** 移行できないのは lw2 自身の DB 接続情報だけで、
     SNS の鍵は「移せない」のではない（[移行の原則](../../docs/00-template/review.md)の1）。
@@ -163,6 +170,17 @@ class TenantSecretsStep(Step):
                 if value:
                     rows.append({"kind": kind, "value": value})
                     ctx.logger.info("sns_setting.%s を移す（%d 文字）", column, len(value))
+
+        # LINE の公式アカウントの秘密の値（テナント単位）。**settings には入れない**
+        line = source.fetch_for_tenant(
+            "application_config", ("tenant_id",) + tuple(c for c, _ in LINE_SECRET_SOURCES)
+        )
+        for row in line:
+            for column, kind in LINE_SECRET_SOURCES:
+                value = (row.get(column) or "").strip()
+                if value:
+                    rows.append({"kind": kind, "value": value})
+                    ctx.logger.info("application_config.%s を移す（%d 文字）", column, len(value))
         return rows
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
