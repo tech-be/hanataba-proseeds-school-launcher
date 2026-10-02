@@ -16,7 +16,7 @@ foundation.2   ユーザ
 content.1-4    オンデマンド講座 / テスト定義・課題定義 / アンケート定義 / ライブ講座
 enrollment.1-7 受講権限 / 学習履歴 / テスト結果 / 課題提出 / アンケート回答 / ライブ予約 / 修了証
 billing.1-4    チケット / 決済 / 帳票 / 自動割当
-support.1-7    LINE / クーポン / お知らせ / 問い合わせ / ファイル / 就業支援 / コミュニティ
+support.1-8    LINE / クーポン / お知らせ / 問い合わせ / ファイル / 就業支援 / コミュニティ / 利用料の集計
 ```
 
 `login_history` は純ログのため移行しない。フェーズ表に現れない。
@@ -46,6 +46,9 @@ from ..steps.enrollment import progress as en_progress
 from ..steps.enrollment import results as en_results
 from ..steps.enrollment import rights as en_rights
 from ..steps.schema import SchemaCheckStep
+from ..steps.support import accounting as sp_accounting
+from ..steps.support import career as sp_career
+from ..steps.support import community as sp_community
 from ..steps.support import library as sp_library
 from ..steps.tenant import TenantStep
 from ..validation import postcheck
@@ -163,8 +166,12 @@ def build_sections() -> list[Section]:
                 Phase(3, "お知らせ", "お知らせ・配信設定（未実装）", steps=[]),
                 Phase(4, "問い合わせ", "問い合わせと個別メッセージ（未実装）", steps=[]),
                 Phase(5, "ファイル", "教材・ライブラリを移す", steps=sp_library.build()),
-                Phase(6, "就業支援", "求人・面談・スキルチェック（未実装）", steps=[]),
-                Phase(7, "コミュニティ", "掲示板・SNS 共有・足あと（未実装）", steps=[]),
+                Phase(6, "就業支援", "助言メモ・スカウトのフォロー（求人・面談・スキルチェックは未実装）",
+                      steps=sp_career.build()),
+                Phase(7, "コミュニティ", "分類（掲示板・SNS 共有・足あとは未実装）",
+                      steps=sp_community.build()),
+                Phase(8, "利用料の集計", "締め日・月次の会員数の集計・集計時点の会員の写しを移す",
+                      steps=sp_accounting.build()),
             ],
         ),
     ]
