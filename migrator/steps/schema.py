@@ -169,6 +169,8 @@ CONTENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
 #: **対応する migration はまだ無い。** `doctor` が TODO で出すのが正しい状態
 #: （区分3 を作り直す回で `*_lw2_enrollment_additions.sql` を書く）。
 ENROLLMENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
+    # 講座ごとの修了証の発行方針（既存の表。設定の無い講座は issue = FALSE で入れる）
+    ("course_certificate_policies", None),
     # 受講権限（A8）
     ("enrollments", "settings"),
     # 学習履歴（A9）
@@ -185,7 +187,11 @@ ENROLLMENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
     # 課題提出
     ("submissions", "score"),
     ("submissions", "settings"),
-    ("submission_files", None),
+    # 添削に付けたファイル（旧 eval_*。受講者の提出ファイルではない。school-launcher 20260930052453）
+    ("submission_feedback_files", None),
+    ("survey_submission_log", None),
+    # 削除済みも移す（2026-10-01。school-launcher 20261001085757）
+    ("survey_responses", "deleted_at"),
     ("submission_feedbacks", "question_comments"),
     # アンケート回答
     ("survey_responses", "entity_type"),

@@ -66,6 +66,7 @@ ENQUETE_ANSWER_COLUMNS = (
     "suspended_chk",
     "del_chk",
     "regist_date",
+    "update_date",
 )
 
 USER_LEARNING_REPORT_COLUMNS = (
@@ -434,7 +435,10 @@ def _responses(ctx: RunContext, drop=None) -> list[dict]:
 
 
 class SurveyResponsesStep(Step):
-    """`enquete_answer` を `survey_responses` に移す。"""
+    """`enquete_answer` を `survey_responses` に移す。
+
+    **削除済みの回答も移す**（`deleted_at`。2026-10-01 の方針。新のアプリはまだ読まない）。
+    """
 
     name = "enrollment.survey_responses"
     description = "アンケート回答の見出しを移す"
@@ -462,7 +466,10 @@ class SurveyResponsesStep(Step):
                         row.get("enquete_reply_time") or row.get("regist_date"),
                         ColumnKind.TIMESTAMP,
                     ),
-                    "suspended": bool(str(row.get("suspended_chk") or "").strip() not in ("", "0")),
+                    "suspended": _suspended(row),
+                    "deleted_at": (
+                        convert(row.get("update_date"), ColumnKind.DATETIME) if _deleted(row) else None
+                    ),
                     "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
                 },
                 natural_key=("id",),
@@ -653,9 +660,11 @@ class SubmissionsStep(Step):
                         "tenant_id": tenant_id,
                         "assignment_id": ctx.ulid.for_row("report", row["report_id"]),
                         "user_id": ctx.ulid.for_row("user", row["_user_id"]),
-                        # ファイルは submission_files 側に5本とも持つ（1本に畳まない）
+                        # **旧の提出物は課題用のアンケートの回答**（`enquete_answer`、種別3）にあり、
+                        # 移すかは確認事項 C4 の回答待ち。`eval_*` のファイルは添削者のもので、
+                        # 添削に付ける（FeedbackFilesStep）
                         "object_key": None,
-                        "body_text": None,  # 旧に本文の欄が無い（提出はファイルのみ）
+                        "body_text": None,
                         "status": "reviewed" if reviewed else "submitted",
                         "reviewer_id": _reviewer(ctx, row),
                         # **NOT NULL。** NULL の行はここで弾かれて一覧に出る
@@ -676,22 +685,36 @@ class SubmissionsStep(Step):
         return records
 
 
-class SubmissionFilesStep(Step):
-    """提出ファイル5本を `submission_files` に展開する。
+class FeedbackFilesStep(Step):
+    """添削に付けたファイル（最大5本）を `submission_feedback_files` に展開する。
 
-    **列名は `eval_*` だが、これは受講者が提出した添付。**
-    `ReportController::175` が受講者自身の回答に対して `hasAttachedFile` を立てている。
-    添削側の内容は `user_report_evaltext` / `score` / `evaluate_user_id`。
+    **列名は `eval_*` で、中身は添削者が付けたファイル。** 管理画面の評価
+    （`admin-lesson/ReportController::evaluationAction`）で書き込み、受講者の画面では添削の
+    コメントの下に出す（評価の公開待ちの間は見せない）。受講者の提出物は課題用のアンケートの
+    回答にある（確認事項 C4）。**以前は受講者の提出ファイル（`submission_files`）に入れていた**
+    （2026-09-30 に直した。旧 DB を読み直して判明）。
+
+    `submission_feedbacks.object_key`（1本）には入れない — 同じファイルを2か所に持たない。
+    添削されていない提出にファイルがあれば一覧に出す（添削の行が無いので付けられない）。
     """
 
-    name = "enrollment.submission_files"
-    description = "提出ファイル（最大5本）を移す"
+    name = "enrollment.submission_feedback_files"
+    description = "添削に付けたファイル（最大5本）を移す"
     source_table = "user_learning_report"
-    target_table = "submission_files"
-    depends_on = ("enrollment.submissions",)
+    target_table = "submission_feedback_files"
+    depends_on = ("enrollment.submission_feedbacks",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        return _submissions(ctx)
+        rows = []
+        for row in _submissions(ctx):
+            has_file = any(_text(row.get(f"eval_save_file_name{s}")) for s in MATERIAL_SLOTS)
+            if has_file and row.get("evaluate_date") is None:
+                self.drop("submission_feedback_files", row["user_learning_report_id"], "旧データの不整合",
+                          "添削されていない提出に添削のファイルがある（添削の行が無いので付けられない）")
+                continue
+            if has_file:
+                rows.append(row)
+        return rows
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         tenant_id = ctx.tenant_id.value
@@ -700,6 +723,7 @@ class SubmissionFilesStep(Step):
             submission_id = ctx.ulid.for_row(
                 "user_learning_report", row["user_learning_report_id"]
             )
+            feedback_id = ctx.ulid.for_row("user_report_feedback", submission_id)
             order = 0
             for slot in MATERIAL_SLOTS:
                 saved = _text(row.get(f"eval_save_file_name{slot}"))
@@ -708,18 +732,16 @@ class SubmissionFilesStep(Step):
                 order += 1
                 records.append(
                     Record(
-                        table="submission_files",
+                        table="submission_feedback_files",
                         values={
-                            "id": ctx.ulid.for_row(
-                                "user_report_file", f"{submission_id}:{slot}"
-                            ),
+                            "id": ctx.ulid.for_row("user_report_eval_file", f"{submission_id}:{slot}"),
                             "tenant_id": tenant_id,
-                            "submission_id": submission_id,
+                            "feedback_id": feedback_id,
                             "sort_order": order,
                             "file_name": _text(row.get(f"eval_disp_file_name{slot}")) or saved,
                             "object_key": saved,  # L9 の移送後にキーへ置き換える
                         },
-                        natural_key=("submission_id", "sort_order"),
+                        natural_key=("feedback_id", "sort_order"),
                         source_key=int(row["user_learning_report_id"]),
                     )
                 )
@@ -733,7 +755,7 @@ class SubmissionFeedbacksStep(Step):
     description = "課題の添削を移す"
     source_table = "user_learning_report"
     target_table = "submission_feedbacks"
-    depends_on = ("enrollment.submission_files", "content.proxy_instructor")
+    depends_on = ("enrollment.submissions", "content.proxy_instructor")
 
     def extract(self, ctx: RunContext) -> list[dict]:
         return [r for r in _submissions(ctx) if r.get("evaluate_date") is not None]
@@ -859,9 +881,69 @@ def quizzes() -> list[Step]:
 
 def submissions() -> list[Step]:
     """3-4 課題提出。"""
-    return [SubmissionsStep(), SubmissionFilesStep(), SubmissionFeedbacksStep()]
+    return [SubmissionsStep(), SubmissionFeedbacksStep(), FeedbackFilesStep()]
+
+
+def _suspended(row: dict) -> bool:
+    return str(row.get("suspended_chk") or "").strip() not in ("", "0")
+
+
+def _deleted(row: dict) -> bool:
+    return int(row.get("del_chk") or 0) == 1
+
+
+def _answered_at(row: dict):
+    return row.get("enquete_reply_time") or row.get("regist_date")
+
+
+class SurveySubmissionLogStep(Step):
+    """回答済みの記録（`survey_submission_log`）を作る。
+
+    **新は「回答済みか」をこの表だけで判断する**（`response_repo.HasSubmitted`）。作らないと、
+    旧で回答した会員が新でもう一度回答できてしまう。**途中保存の回答は回答済みにしない**
+    （旧でも回答し直せた）。**削除済みの回答も回答済みにしない**（旧の `findEnqueteAnswer` は
+    `del_chk = 0` だけを見るので、回答し直せた）。1人が同じユニットに何度か回答していれば、最初の回答日時を入れる。
+    """
+
+    name = "enrollment.survey_submission_log"
+    description = "アンケートの回答済みの記録を作る（途中保存は除く）"
+    source_table = "enquete_answer"
+    target_table = "survey_submission_log"
+    depends_on = ("enrollment.survey_responses",)
+
+    def extract(self, ctx: RunContext) -> list[dict]:
+        # 落とす行は回答の見出し（SurveyResponsesStep）が一覧に出すので、ここでは出さない
+        return [r for r in _responses(ctx) if not _suspended(r) and not _deleted(r)]
+
+    def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
+        tenant_id = ctx.tenant_id.value
+        first: dict[tuple[int, int], dict] = {}
+        for row in rows:
+            key = (int(row["_unit_id"]), int(row["_user_id"]))
+            when = _answered_at(row)
+            held = _answered_at(first[key]) if key in first else None
+            # 日時の無い行は、日時のある行より後ろに回す（比べられないので）
+            if key not in first or (when is not None and (held is None or when < held)):
+                first[key] = row
+        return [
+            Record(
+                table="survey_submission_log",
+                values={
+                    "tenant_id": tenant_id,
+                    "lesson_id": ctx.ulid.for_row("unit", unit_id),
+                    "user_id": ctx.ulid.for_row("user", user_id),
+                    "submitted_at": convert(
+                        row.get("enquete_reply_time") or row.get("regist_date"), ColumnKind.TIMESTAMP
+                    ),
+                },
+                natural_key=("tenant_id", "lesson_id", "user_id"),
+                source_key=f"{unit_id}:{user_id}",
+            )
+            for (unit_id, user_id), row in first.items()
+        ]
 
 
 def surveys() -> list[Step]:
     """3-5 アンケート回答。"""
-    return [SurveyResponsesStep(), SurveyAnswersStep(), SurveyAnswerSelectedOptionsStep()]
+    return [SurveyResponsesStep(), SurveyAnswersStep(), SurveyAnswerSelectedOptionsStep(),
+            SurveySubmissionLogStep()]

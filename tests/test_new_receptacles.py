@@ -21,6 +21,7 @@ from migrator.context import build_context
 from migrator.db.target import TargetDatabase
 from migrator.steps import org, tenant
 from migrator.steps.content import lessons, live_lessons
+from migrator.steps.enrollment import certificates
 from tests.fakes import FakeSource
 
 CONFIG = Config(
@@ -105,6 +106,29 @@ class TagTest(unittest.TestCase):
         self.assertEqual(rec.natural_key, ("user_id", "tag_id"))
 
 
+class CoursePolicyTest(unittest.TestCase):
+    def test_every_course_gets_a_policy(self) -> None:
+        """**行が無い = 発行する** なので、設定の無い講座にも「発行しない」の行を入れる。"""
+        ctx = make_ctx()
+        rows = [{"lesson_id": 1, "certificate_id": 5}, {"lesson_id": 2, "certificate_id": None},
+                {"lesson_id": 3, "certificate_id": 0}]
+        recs = certificates.CoursePoliciesStep().transform(ctx, rows + [{"_host_course": True}])
+        issue = {r.values["course_id"]: r.values["issue"] for r in recs}
+        self.assertEqual(issue[ctx.ulid.for_row("lesson", 1)], True)
+        self.assertEqual(issue[ctx.ulid.for_row("lesson", 2)], False)
+        self.assertEqual(issue[ctx.ulid.for_row("lesson", 3)], False)
+        self.assertEqual(len(recs), 4)  # 受け皿講座（ライブ）の分
+        self.assertFalse(recs[-1].values["issue"])
+        # どの行も同じ列を書く（そろっていないと、投入がエラーで止まる）
+        self.assertEqual(len({tuple(sorted(r.values)) for r in recs}), 1)
+
+    def test_no_host_course_row_without_unrestricted_lives(self) -> None:
+        """**受け皿講座を作らないテナントでは、その行も作らない**（外部キーに当たるため）。"""
+        ctx = make_ctx()
+        recs = certificates.CoursePoliciesStep().transform(ctx, [{"lesson_id": 1, "certificate_id": 5}])
+        self.assertEqual(len(recs), 1)
+
+
 class TenantSettingsTest(unittest.TestCase):
     def test_secrets_are_not_read(self) -> None:
         for column in ("special_pass_word", "kanri_db_name", "line_channel_sercret", "send_line_chanel_token"):
@@ -121,6 +145,39 @@ class FacilityTest(unittest.TestCase):
         row = {"facility_id": 1, "facility_name": "本社", "address": "", "tel": None, "facility_access": "駅前"}
         self.assertEqual(live_lessons._facility(row), {"facility_name": "本社", "facility_access": "駅前"})
         self.assertIsNone(live_lessons._facility(None))
+
+
+class FixedMisreadsTest(unittest.TestCase):
+    """2026-09-30 に直した移行ツールの誤り3つ。"""
+
+    def test_eval_files_go_to_the_feedback(self) -> None:
+        """**`eval_*` は添削者のファイル。** 受講者の提出ファイルではなく、添削に付ける。"""
+        from migrator.steps.enrollment import results
+
+        ctx = make_ctx()
+        row = {"user_learning_report_id": 5, "evaluate_date": datetime(2020, 1, 2),
+               "eval_save_file_name1": "a.pdf", "eval_disp_file_name1": "講評.pdf",
+               "eval_save_file_name3": "b.pdf"}
+        recs = results.FeedbackFilesStep().transform(ctx, [row])
+        submission = ctx.ulid.for_row("user_learning_report", 5)
+        self.assertEqual({r.table for r in recs}, {"submission_feedback_files"})
+        self.assertEqual({r.values["feedback_id"] for r in recs},
+                         {ctx.ulid.for_row("user_report_feedback", submission)})
+        self.assertEqual([(r.values["sort_order"], r.values["file_name"]) for r in recs],
+                         [(1, "講評.pdf"), (2, "b.pdf")])
+
+    def test_submission_log_keeps_the_first_answer(self) -> None:
+        """**新は回答済みかをこの表だけで見る。** 同じユニットの回答は1行（最初の回答日時）。"""
+        from migrator.steps.enrollment import results
+
+        ctx = make_ctx()
+        rows = [{"_unit_id": 1, "_user_id": 9, "enquete_reply_time": datetime(2021, 6, 1, 12)},
+                {"_unit_id": 1, "_user_id": 9, "enquete_reply_time": datetime(2020, 6, 1, 12)}]
+        [rec] = results.SurveySubmissionLogStep().transform(ctx, rows)
+        self.assertEqual(rec.table, "survey_submission_log")
+        self.assertEqual(rec.values["submitted_at"].year, 2020)
+        self.assertTrue(results._suspended({"suspended_chk": 1}))
+        self.assertFalse(results._suspended({"suspended_chk": 0}))
 
 
 class KeepDeletedRowsTest(unittest.TestCase):
@@ -144,6 +201,17 @@ class KeepDeletedRowsTest(unittest.TestCase):
         out = {r["exclusion_date"]: r for r in ld._collapse(rows, ("live_lesson_id", "exclusion_date"))}
         self.assertIsNone(out["2023-01-13"]["_deleted_at"])
         self.assertIsNotNone(out["2023-02-01"]["_deleted_at"])
+
+    def test_deleted_survey_answer_is_not_answered(self) -> None:
+        """**削除済みの回答は回答済みにしない**（旧は回答し直せた）。回答そのものは移す。"""
+        from migrator.steps.enrollment import results
+
+        self.assertTrue(results._deleted({"del_chk": 1}))
+        ctx = make_ctx()
+        rows = [{"_unit_id": 1, "_user_id": 9, "enquete_reply_time": None, "regist_date": None},
+                {"_unit_id": 1, "_user_id": 9, "enquete_reply_time": datetime(2020, 6, 1, 12)}]
+        [rec] = results.SurveySubmissionLogStep().transform(ctx, rows)  # 日時の無い行があっても落ちない
+        self.assertEqual(rec.values["submitted_at"].year, 2020)
 
 
 if __name__ == "__main__":

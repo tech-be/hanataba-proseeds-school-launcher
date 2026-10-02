@@ -217,5 +217,73 @@ def _certificate_ulid(ctx: RunContext, row: dict) -> str:
     return ctx.ulid.for_row("user_certificate", f"{int(row['user_id'])}:{int(row['entity_id'])}")
 
 
+class CoursePoliciesStep(Step):
+    """講座ごとの修了証の発行方針（`course_certificate_policies`）を**移した全講座に**入れる。
+
+    **新は「行が無い = 発行する」。** 旧は講座に修了証のひな形（`lesson.certificate_id`）を
+    設定したときだけ修了証を出していた。行を作らないと、旧で修了証が無かった講座でも
+    新では修了した時点で発行されてしまう。
+
+    - `issue` = 旧 `lesson.certificate_id` があるか（0 / NULL は無し）
+    - `layout_code` = NULL。旧のひな形は HTML で、新の2種（simple / detailed）と対応しない
+    - 受け皿講座（ライブ）は発行しない。旧のライブに修了証は無い。**受け皿講座を作らないテナント
+      （制限の無いライブが無い）では行を作らない**（講座が無いので外部キーに当たる）
+    """
+
+    name = "enrollment.course_certificate_policies"
+    description = "講座ごとの修了証の発行方針を移す（設定の無い講座は発行しない）"
+    source_table = "lesson"
+    target_table = "course_certificate_policies"
+    depends_on = ("content.courses", "content.live_host_course")
+
+    def extract(self, ctx: RunContext) -> list[dict]:
+        from ..content.live_courses import unplaced_lives
+
+        # 共有講座（tenant_id=0）も入る。講座を移すのと同じ範囲
+        rows = ctx.require_source().fetch_for_tenant("lesson", ("lesson_id", "certificate_id"))
+        # 受け皿講座を作るかは、講座側（HostCourseStep）と同じ判定
+        return rows + ([{"_host_course": True}] if unplaced_lives(ctx) else [])
+
+    def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
+        from ..content.live_courses import HOST_COURSE_KEY, host_course_id
+
+        tenant_id = ctx.tenant_id.value
+        has_host = any(r.get("_host_course") for r in rows)
+        rows = [r for r in rows if not r.get("_host_course")]
+        records = [
+            Record(
+                table="course_certificate_policies",
+                values={
+                    "course_id": ctx.ulid.for_row("lesson", row["lesson_id"]),
+                    "tenant_id": tenant_id,
+                    "issue": int(row.get("certificate_id") or 0) != 0,
+                    "layout_code": None,
+                    "subject_name": None,
+                    # created_at は書かない（表の既定値）。講座の登録日時は発行方針の作成日時ではない
+                },
+                natural_key=("course_id",),
+                source_key=int(row["lesson_id"]),
+            )
+            for row in rows
+        ]
+        if not has_host:
+            return records
+        records.append(
+            Record(
+                table="course_certificate_policies",
+                values={
+                    "course_id": host_course_id(ctx),
+                    "tenant_id": tenant_id,
+                    "issue": False,
+                    "layout_code": None,
+                    "subject_name": None,
+                },
+                natural_key=("course_id",),
+                source_key=HOST_COURSE_KEY,
+            )
+        )
+        return records
+
+
 def build() -> list[Step]:
-    return [CertificateSettingsStep(), CertificatesStep(), CertificateEventsStep()]
+    return [CoursePoliciesStep(), CertificateSettingsStep(), CertificatesStep(), CertificateEventsStep()]
