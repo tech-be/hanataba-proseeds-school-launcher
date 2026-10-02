@@ -1,4 +1,4 @@
-"""フェーズ5 — 会員に紐づくもの。
+"""foundation.2 — 会員に紐づくもの。
 
 `users` の行が揃ってから流す。どの Step も `users` の ULID を
 `ctx.ulid.for_row("user", 旧user_id)` で引く（対応表を引き直さない）。
@@ -173,7 +173,7 @@ def _foreign_address(
 class UserProfileValuesStep(Step):
     """自由記述（`user_profile1`〜`20`）の値を移す。
 
-    **`item_type=0` の値は `users` の対応列**（フェーズ4）で受けており、ここに入るのは
+    **`item_type=0` の値は `users` の対応列**（`users` Step）で受けており、ここに入るのは
     `item_type=1` の自由記述だけ。項目との対応は `profile_item.item_no` で取る。
     """
 
@@ -300,8 +300,8 @@ class LineLinksStep(Step):
             )
         return records
 
-#: 公開制限。**旧の8列をそのまま `field_code` にする**（決定2）。
-#: `user` の6列と、`user_attached_info` の1列。
+#: 公開制限。`user` の `*_open_chk` 6列を、それぞれ短いコード（列名から `_open_chk` を
+#: 除いたもの）の `field_code` にする（決定2）。他の表からは読まない。
 VISIBILITY_SOURCES = (
     ("profile_open_chk", "profile"),
     ("name_open_chk", "name"),
@@ -314,7 +314,7 @@ VISIBILITY_COLUMNS = ("user_id",) + tuple(c for c, _ in VISIBILITY_SOURCES)
 
 
 class UserFieldVisibilityStep(Step):
-    """会員ごとの公開制限を移す。**旧の列名をそのまま `field_code` にする。**"""
+    """会員ごとの公開制限を移す。**旧の列名から `_open_chk` を除いた名前を `field_code` にする。**"""
 
     name = "user_field_visibility"
     description = "プロフィールの公開制限を移す"

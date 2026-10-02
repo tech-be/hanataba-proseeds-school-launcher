@@ -1,4 +1,4 @@
-"""ondemand.4 — テスト定義（旧 `test` / `test_sub` / `test_sub_question` / `question`）。
+"""content.2 — テスト定義（旧 `test` / `test_sub` / `test_sub_question` / `question`）。
 
 **lw2 と新環境で、テストの組み立て方が根本的に違う。**
 
@@ -6,7 +6,7 @@ lw2 は `question`（テナント直下の**共有問題バンク**）から、`
 **出題条件**（カテゴリ × レベルから N 問）で問題を引く。**受験者ごとに出る問題が変わる。**
 新環境は `quiz_questions` の固定リストが基本。
 
-**条件を固定リストに展開しない**（[review.md](../../../docs/db/02-ondemand/review.md) の A6）。
+**条件を固定リストに展開しない**（[review.md](../../../docs/db/02-content/review.md) の A6）。
 展開すると「受験者ごとに違う問題が出ていた」という事実が再現できなくなる。代わりに
 
 - `question`      → `quiz_question_banks`（問題の本体）
@@ -400,7 +400,7 @@ class QuizQuestionsStep(Step):
     """`test_sub_question` を `quiz_questions` に移す（**固定出題ぶんだけ**）。
 
     **旧 ID を引き継がない。** `test_sub_question_id` は採番が枯渇していて履歴も
-    断裂しているため（`lw2-migration-tables.md`）、`(test_id, question_id, 並び順)` から
+    断裂しているため（`lw2-migration-tables.md`）、`(test_sub_id, question_id, 並び順)` から
     決定論 ULID を採番する。
 
     `body` / `type` はバンク（`question`）から写す。`quiz_questions.body` が
@@ -586,9 +586,9 @@ def _question_ulid(ctx: RunContext, sub_id: object, question_id: object, sort_no
     """**旧 `test_sub_question_id` は使わない。** 採番が枯渇・履歴断裂しているため、
     業務的な組み合わせから採番する（A6 / review.md）。
 
-    **大問（`test_sub`）まで含める。** review.md は `(test_id, question_id, 並び順)` と
-    書いているが、**同じテストの別の大問に同じ問題が入る**ことがあり（ステージングで1組）、
-    テスト単位だと ULID が衝突して両方とも移らなくなる。lw2 の画面でも2問として出るので、
+    **大問（`test_sub`）まで含める。** 当初は `(test_id, question_id, 並び順)` だったが、
+    **同じテストの別の大問に同じ問題が入る**ことがあり（ステージングで1組）、
+    テスト単位だと ULID が衝突して両方とも移らなくなる（migration-spec の記録も変更済み）。lw2 の画面でも2問として出るので、
     **大問を含めるほうが元の構造に忠実**。
     """
     return ctx.ulid.for_row("test_sub_question", f"{int(sub_id)}:{int(question_id)}:{sort_no}")
@@ -702,7 +702,7 @@ def _display_settings(row: dict) -> str:
 
 
 def build() -> list[Step]:
-    """フェーズ4の Step 一式。**この順でないと FK が揃わない。**"""
+    """content.2 のテスト定義の Step 一式。**この順でないと FK が揃わない。**"""
     return [
         QuizQuestionCategoriesStep(),
         QuizQuestionBanksStep(),

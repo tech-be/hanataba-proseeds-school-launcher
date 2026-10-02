@@ -7,7 +7,8 @@
   **旧で印字していた番号は `receipt_log_id`** なので `receipts.receipt_log_id` に残す（P11）
 - 取引日は**申込の入金日**（lw2 の `real_payment_date` と同じ規則。→ `payments.paid_at`）
 - 規約の本文（`agreement` / `cancel_policy` / `privacy_policy` / `tokusyo`）は新に置き場が無いので
-  `tenant_legal_documents` を足して受ける（P12）。**アプリはまだ読まない**。空の本文は移さない
+  `tenant_legal_documents` を足して受ける（P12）。**アプリはまだ読まない**。本文が空でも、
+  外部 URL の上書き（`payment_infomation`）があれば移す。本文も URL も無いものだけ移さない
 - 消費税の一覧（`tax`）は移さない（P14）。設定画面の選択肢で、取引の税計算に使っていない
 """
 
@@ -144,7 +145,7 @@ class ReceiptsStep(Step):
 
 
 class LegalDocumentsStep(Step):
-    """規約の本文を `tenant_legal_documents` に移す（P12）。**空の本文は移さない。**"""
+    """規約の本文を `tenant_legal_documents` に移す（P12）。**本文も外部 URL も無いものだけ移さない。**"""
 
     name = "billing.legal_documents"
     description = "規約・プライバシーポリシー・特商法表記の本文を移す"

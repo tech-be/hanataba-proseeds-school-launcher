@@ -81,7 +81,7 @@ class RunContext:
         return (self.config.provisional or {}).get(key)
 
     def exclusions(self):
-        """制約に当たって移さなかった行の一覧（`work_dir/移行しない行.csv`）。"""
+        """制約に当たって移さなかった行の一覧（`work_dir/not-migrated.csv`）。"""
         if self._exclusions is None:
             from .validation.exclusions import ExclusionLog
 

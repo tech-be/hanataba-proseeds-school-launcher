@@ -6,7 +6,7 @@
 移行では毎回ランダムに振らず **決定論 ULID** を使う。旧テーブル名 + 旧主キーから
 同じ値を再現できるため、途中で失敗して流し直しても二重登録にならない。
 
-**テナントだけは例外。** `tenants.id` はフェーズ1で採番した1値を設定値として配り、
+**テナントだけは例外。** `tenants.id` は foundation.1 で採番した1値を設定値として配り、
 どこでも再計算しない（採番が散ると別テナントの ID が生まれ、データが2つに割れる）。
 """
 
@@ -75,7 +75,7 @@ class UlidFactory:
 class TenantId:
     """テナントの ULID を1か所に閉じるための入れ物。
 
-    フェーズ1が `resolve()` で確定させ、以降の Step は `value` を読むだけ。
+    foundation.1（または bootstrap）が `resolve()` で確定させ、以降の Step は `value` を読むだけ。
     **Step が自分で採番することを禁じる**（テナントが二重にできる）。
     """
 
@@ -85,7 +85,7 @@ class TenantId:
     @property
     def value(self) -> str:
         if self._value is None:
-            raise RuntimeError("tenants の行を作る前に tenant_id を参照した（フェーズ1が先）")
+            raise RuntimeError("tenants の行を作る前に tenant_id を参照した（foundation.1 が先）")
         return self._value
 
     @property

@@ -1,4 +1,4 @@
-"""ondemand.1 — マスタの追加値。
+"""content.1（先頭）— マスタの追加値。
 
 新環境のシードは lw2 の種別を覆っていない。**足りない値を先に入れる**
 （FK の参照先なので、これらが無いとレッスンもテストも入らない）。
@@ -26,7 +26,7 @@ def lesson_types() -> LookupValueStep:
     return LookupValueStep(
         name="master.lesson_types",
         table="lesson_types",
-        description="lesson_types に quiz / assignment / document を追加する",
+        description="lesson_types に quiz / assignment / document / discussion / skill_check を追加する",
         values=[
             {
                 "code": code,

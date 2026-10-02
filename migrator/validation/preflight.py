@@ -110,8 +110,9 @@ def _password_key(ctx: RunContext) -> CheckResult:
 
 
 #: 新環境の UNIQUE に効く、旧側の一意性。**投入してから気づくと、やり直しになる**
-#: **残す行の決め方が無いものだけ**を挙げる。`line_id` の重複は
-#: `LineLinksStep` が「削除されていない会員に寄せる」と決めてあるので入れない
+#: ここで止めるのは `login_id` だけ。`line_id` の重複は会員の投入を止めず、
+#: `line_links` の投入前の制約チェック（`validation/constraints.py` の UNIQUE）で
+#: **重なった行が全部移らない**（どれを残すかはツールが決めない）
 UNIQUE_SOURCES: tuple[tuple[str, str, str], ...] = (
     ("login_id", "users.login_id", "uk_users_login_id"),
 )

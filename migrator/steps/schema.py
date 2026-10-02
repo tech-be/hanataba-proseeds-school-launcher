@@ -1,9 +1,9 @@
 """フェーズ common.0 — 新環境のスキーマ追加が入っているかを確認する。
 
-追加（A1〜A21）は school-launcher 側の migration で入れる。**移行直前に実施する**
+追加（基盤は A1〜A24、ほかは各区分の追加一覧）は school-launcher 側の migration で入れる。**移行直前に実施する**
 という決定のため、ここでは「入っていること」を確かめ、入っていなければ止める。
 
-一覧と DDL は [基盤のマイグレーション対象](../../docs/db/01-foundation/schema-additions.md)。
+一覧と DDL は各区分の `schema-additions.md`（基盤は [基盤のマイグレーション対象](../../docs/db/01-foundation/schema-additions.md)）。
 
 2種類に分けてある。
 
@@ -31,9 +31,10 @@ REQUIRED_SCHEMA: tuple[tuple[str, str | None], ...] = (
     ("tenant_profile_items", None),
     ("tenant_profile_item_labels", None),
     ("user_profile_values", None),
-    # A12 会員の氏名・会員番号
+    # A24 会員・テナントの旧 ID
     ("users", "user_id"),
     ("tenants", "tenant_id"),
+    # A12 会員の氏名・会員番号
     ("users", "name_last"),
     ("users", "name_first"),
     ("users", "name_kana_last"),
@@ -164,10 +165,10 @@ CONTENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
 )
 
 #: 区分ごとの必須スキーマ。**その区分を流すときだけ確認する**
-#: （基盤だけを流し直すのに、オンデマンドの追加を待つ必要は無い）
+#: （基盤だけを流し直すのに、コンテンツの追加を待つ必要は無い）
 #: 受講（3）の追加。テスト結果・課題提出・アンケート回答・ライブ予約・修了証。
-#: **対応する migration はまだ無い。** `doctor` が TODO で出すのが正しい状態
-#: （区分3 を作り直す回で `*_lw2_enrollment_additions.sql` を書く）。
+#: migration は school-launcher の `20260924054151_lw2_enrollment_additions.sql` と、
+#: その後に足した分（下の各行に日付・migration 名を書いた）。
 ENROLLMENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
     # 講座ごとの修了証の発行方針（既存の表。設定の無い講座は issue = FALSE で入れる）
     ("course_certificate_policies", None),
@@ -232,7 +233,8 @@ BILLING_SCHEMA: tuple[tuple[str, str | None], ...] = (
 )
 
 #: サポート機能（5）の追加。教材・ライブラリの公開対象。
-#: **対応する migration はまだ無い**（区分5 を作り直す回で書く）。
+#: migration は school-launcher の `20260930052453_lw2_support_additions.sql` が主で、
+#: 削除済みの列などその後に足した分は下の各行に migration 名を書いた。
 #: 属性単位の公開（`library_folder_attribute_targets`）は**旧に対応データが無い**ので作らない。
 SUPPORT_SCHEMA: tuple[tuple[str, str | None], ...] = (
     ("library_folder_group_targets", None),
@@ -305,13 +307,13 @@ class SchemaCheckStep(SchemaStep):
     """追加スキーマの存在確認。**必須が1つでも欠けたら移行を始めない。**"""
 
     name = "schema.check"
-    description = "追加スキーマ（A1〜A21）が新環境に入っているかを確認する"
+    description = "追加スキーマ（各区分の追加一覧）が新環境に入っているかを確認する"
     required = REQUIRED_SCHEMA
 
     def run(self, ctx: RunContext) -> StepResult:
         result = StepResult(step=self.name)
         # **これから流す区分の分だけ確認する。** 基盤を流し直すのに、
-        # オンデマンドの追加が当たっているかは関係ない
+        # コンテンツの追加が当たっているかは関係ない
         sections = {key.split(".")[0] for key in ctx.selected} or set(SCHEMA_BY_SECTION)
         entries: list[tuple[str, str | None]] = []
         for section in sorted(sections & set(SCHEMA_BY_SECTION)):

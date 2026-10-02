@@ -2,7 +2,7 @@
 
 **移行データはほぼ無いが、受け皿は移行と同時に作る**と決めた。
 
-- `sso_config` は1行（IdP 設定）
+- `sso_config` は IdP 設定。SSO を使っていなければ**0行**で、そのときは何も入らない
 - `login_limit` は **0行**（recademy は未使用）。テーブルだけ作って cutover 後に運営が設定する
 - 2FA（`user_two_factor_secrets`）は**テーブルを作るだけ**。旧 `twostepverification` が持つのは
   発行中の認証コード（平文）で設定ではないため、移す行が無い → Step も無い

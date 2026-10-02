@@ -104,7 +104,7 @@ class LessonProgressStep(Step):
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         tenant_id = ctx.tenant_id.value
-        # **(会員, ユニット) が UNIQUE。** 実測で 76件の重複があるので、
+        # **(会員, ユニット) が UNIQUE。** 実測で 153組 495行の重複がある（342行を落とす）ので、
         # `update_date` の新しい順で1件に絞る（制約は緩めない）
         latest: dict[tuple[int, int], dict] = {}
         for row in rows:

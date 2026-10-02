@@ -1,4 +1,4 @@
-"""ondemand.7 — 修了証（旧 `config_certificate` / `user_certificate`）。
+"""enrollment.7 — 修了証（旧 `config_certificate` / `user_certificate`）。
 
 **同じ列名で意味が違う2つがある。取り違えない。**
 

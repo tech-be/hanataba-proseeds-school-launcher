@@ -1,4 +1,4 @@
-"""ondemand.5（前半）— アンケート定義（旧 `enquete` / `enquete_page` / `enquete_question`）。
+"""content.3 — アンケート定義（旧 `enquete` / `enquete_page` / `enquete_question`）。
 
 **lw2 のアンケートはユニットに属さない。** `unit.enquete_id` が指す独立した定義で、
 **同じアンケートを複数のユニットが参照できる**（ステージング実測で 7件）。
@@ -7,7 +7,7 @@
 複製するため、ページ・設問・選択肢の ULID は**レッスンごとに別**になる。
 `survey_pages.enquete_page_id`（旧 ID）も同じ値がレッスンの数だけ現れるので、
 **UNIQUE は `(tenant_id, lesson_id, enquete_page_id)` でなければならない**
-（[schema-additions](../../../docs/db/02-ondemand/schema-additions.md) の M6 を参照）。
+（[schema-additions](../../../docs/db/02-content/schema-additions.md) の 8 を参照）。
 """
 
 from __future__ import annotations

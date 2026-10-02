@@ -2,12 +2,12 @@
 
 **2つの軸がある。**
 
-- **区分をまたぐ順序**（docs/migration-spec.md 1章）: 共通 → 基盤 → オンデマンド / 運営 → …
-- **区分の中の順序**（docs/db/NN-*/migration-spec.md 2章）: テナント → マスタ → 定義 → 会員 → …
+- **区分をまたぐ順序**（docs/migration-spec.md 1章）: 共通 → 基盤 → コンテンツ → 受講 → 課金 → サポート機能
+- **区分の中の順序**（docs/db/NN-*/migration-spec.md 2章）: マスタ → テナント → 定義 → 会員 → …
 
 識別子は `foundation.1` のように**区分.フェーズ番号**。区分が増えても番号がずれない。
 
-**区分とフェーズは移行計画の5グループ / 20項目に対応する。**
+**区分とフェーズは移行計画の区分・項目に対応する**（共通を除き5区分 / 25フェーズ）。
 
 ```
 common.0       スキーマ確認（追加は移行直前に migration で実施）
@@ -127,7 +127,8 @@ def build_sections() -> list[Section]:
                       steps=en_results.submissions()),
                 Phase(5, "アンケート回答", "回答の見出し・設問別回答・回答済みの記録を移す",
                       steps=en_results.surveys()),
-                # 予約はチケット定義（billing.1）のあと。台帳が予約を参照する
+                # 予約は開催回（content.4）のあと。消費の台帳（billing.1）が予約を参照するので、
+                # 課金より先の受講区分で入れる
                 Phase(6, "ライブ予約", "予約とライブレビューを移す",
                       steps=bl_tickets.reservations_steps() + bl_extras.reviews()),
                 Phase(7, "修了証", "修了証の設定と発行済みの証書を移す",
@@ -277,11 +278,11 @@ def resolve_tenant_id(ctx) -> str:
     if not legacy:
         raise DependencyError(
             "tenant_id を決められない。新環境に tenants の行が無く、旧 tenant も読めない。"
-            "tenants の行を作るフェーズ（foundation.2）から流すこと"
+            "tenants の行を作るフェーズ（foundation.1）から流すこと"
         )
     ctx.logger.warning(
         "新環境に tenants の行が無いので、旧 tenant から決定論 ULID を組み立てて使う"
-        "（dry-run 用。実投入は foundation.2 から流すこと）"
+        "（dry-run 用。実投入は foundation.1 から流すこと）"
     )
     row = legacy[0]
     return ctx.ulid.for_row("tenant", row["tenant_id"], created_at_ms(row.get("regist_date")))

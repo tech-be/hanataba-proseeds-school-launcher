@@ -1,4 +1,7 @@
-"""live.5 / live.6 / live.7 — チケットと予約。
+"""billing.1 / enrollment.6 — チケットと予約。
+
+チケット（種別・必要枚数・付与・消費の台帳）は billing.1、予約は enrollment.6 で流す。
+受講区分が課金より先に流れるので、**予約が先に入り、そのあと台帳が予約を参照する**。
 
 **残高1行 = 付与1行。** lw2 の `user_ticket.ticket_num` は**すでに引かれたあとの残高**で、
 「何枚配って何枚使ったか」を持たない。`quantity` と `remaining_quantity` に同じ値を入れる。
@@ -412,7 +415,7 @@ class TicketGrantsStep(Step):
                             row.get("ticket_start_date"), ColumnKind.DATETIME, DateBoundary.START
                         ),
                         "source": "manual",
-                        # 有料受講権限。参照先は課金区分（未移行）なので、いまは入れない
+                        # 有料受講権限。旧 `authority_id` との対応付けをまだ実装していないので、いまは入れない
                         "source_ref": None,
                         "note": "lw2 移行時点の残高",
                         "granted_at": convert(row.get("regist_date"), ColumnKind.DATETIME),
@@ -512,12 +515,12 @@ class TicketLedgerStep(Step):
 
 
 def definitions() -> list[Step]:
-    """4-1 チケット（種別と必要枚数）。**予約より先**に入れる。"""
+    """4-1 チケット（種別と必要枚数）。予約（enrollment.6）より後、付与より先に入れる。"""
     return [TicketTypesStep(), TicketTypeLessonsStep(), TicketRequirementsStep()]
 
 
 def reservations_steps() -> list[Step]:
-    """3-6 ライブ予約。**チケット定義のあと、付与の前。**"""
+    """3-6 ライブ予約。**開催回（content.4）のあと、課金の台帳の前**（台帳が予約を参照する）。"""
     return [ReservationsStep()]
 
 

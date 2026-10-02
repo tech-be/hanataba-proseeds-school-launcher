@@ -1,4 +1,4 @@
-"""ondemand.3 — レッスン（旧 `unit`）と動画。
+"""content.1 — レッスン（旧 `unit`）と動画。
 
 **見出しブロック（`unit_type_id=0`）は `lessons` に入れず、`course_chapters`（講座の章）に入れる。**
 レッスンではなく表示上の区切りなので、レッスンの種別にはしない（進捗・修了の数え方が狂う）。
@@ -73,9 +73,9 @@ UNIT_TYPES: dict[int, str | None] = {
 }
 
 #: **ユニットは移すが、中身はこの区分では移さない種別。**
-#: 投稿（`discussion` / `discussion_board` / `discussion_board_comment`）は**区分が未分類**、
-#: 診断結果（`public_learning_skill_unit*`）は**就職支援（07）**にある。
-#: どちらもオンデマンドの範囲外で、その区分を移すまで中身は空のまま
+#: 投稿（`discussion` / `discussion_board` / `discussion_board_comment`）は**サポート機能（05）の S7**、
+#: 診断結果（`public_learning_skill_unit*`）は**サポート機能（05）の S6**（就業支援）にある。
+#: どちらもコンテンツ区分の範囲外で、その区分で移すまで中身は空のまま
 CONTENT_NOT_YET_MIGRATED = {"discussion", "skill_check"}
 
 
@@ -97,7 +97,7 @@ def chapter_of(rows: list[dict]) -> dict[int, int | None]:
     **旧の講座ページと同じ規則。** 講座ごとに `sort_no` 順（同じなら unit_id 順）に並べ、
     （旧 `UnitModel::_buildSql` の `lessonId` の既定の並び `U.sort_no ASC, U.unit_id ASC`。
     受講者の講座ページ `LessonController` → `findUnitByLessonId` が使う。ReCADemy では見出しと
-    並び順が重なる組が 77 ある。2026-10-01 に旧のソースで確かめた）
+    並び順が重なる組が 50 ある（自前の講座 21 + 参照している共有講座 29）。2026-10-01 に旧のソースで確かめた）
     直前にある**削除されていない**見出しにまとめる。削除済みの見出しは画面に出ないので、
     区切りにもならない。最初の見出しより前のユニットは章に属さない（None）。
     """
@@ -238,8 +238,8 @@ class LessonsStep(Step):
         if content_pending:
             ctx.logger.warning(
                 "ディスカッション・スキル診断のユニットを %d 件移した。"
-                "**中身（投稿・診断結果）はオンデマンドの範囲外**で移していない"
-                "（投稿は区分が未分類、診断結果は就職支援 07）",
+                "**中身（投稿・診断結果）はコンテンツ区分の範囲外**で移していない"
+                "（投稿はサポート機能 05 の S7、診断結果は S6）",
                 content_pending,
             )
         if skipped:
@@ -266,7 +266,7 @@ class VideoLessonsStep(Step):
 
     **配信先は2か所に分かれている。**
 
-    - `pmovie_chk` が立っている … p-movie 配信。`pmovie_token` から URL を組み立てる
+    - `pmovie_chk` が立っている … p-movie 配信。**`pmovie_token` をそのまま `video_url` に入れる**（URL は組み立てない）
     - 立っていない … 自前配信。**`lecture_path.pc_path`** が配信先
 
     `lecture_path` は1ユニットに複数行を持てる（`sort_no` つき）が、新環境は

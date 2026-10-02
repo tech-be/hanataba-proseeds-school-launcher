@@ -4,8 +4,8 @@
     python -m migrator doctor                接続と前提を確認する（書き込みなし）
     python -m migrator preflight             事前検査だけ通す
     python -m migrator run --dry-run                    全フェーズを流す（書き込みなし）
-    python -m migrator run --dry-run --phase foundation.4   基盤の会員だけ dry-run する
-    python -m migrator run --phase foundation.1-3           基盤のフェーズ1〜3を流す
+    python -m migrator run --dry-run --phase foundation.2   基盤の会員だけ dry-run する
+    python -m migrator run --phase content.1-3              コンテンツのフェーズ1〜3を流す
     python -m migrator run --section foundation             基盤まるごと
     python -m migrator verify                投入後の検証（移行元から作り直して移行先と照合する）
     python -m migrator verify --section enrollment      受講だけ照合する
@@ -124,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "verify":
             return _verify(ctx, sections, selected)
 
-        # 事前検査は抽出の前に通す。フェーズ2以降だけを流すときは、
+        # 事前検査は抽出の前に通す。どのフェーズを流すときも、
         # 旧データを読む Step が含まれるときだけ通す（マスタ追加だけなら不要）
         needs_source = any(step.source_table for phase in selected for step in phase.steps)
         if not args.skip_preflight and needs_source:

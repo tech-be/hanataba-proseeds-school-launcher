@@ -1,8 +1,10 @@
-"""ondemand.5（後半）— 課題定義（旧 `report` / `report_path`）。
+"""content.2（後半）— 課題定義（旧 `report`）。
+
+提出後の解説ページ（旧 `report_path`）は受け皿が無く、読まない（移していない）。
 
 **配布ファイルは5本を5行に展開する。** 旧は `report_disp_file_name1..5` と
 `report_save_file_name1..5` の横持ちで、新は `assignment_materials` の縦持ち。
-**1本に畳まない**（[review.md](../../../docs/db/02-ondemand/review.md) の A13）。
+**1本に畳まない**（[review.md](../../../docs/db/02-content/review.md) の A13）。
 
 **提出期限が2種類ある。** `limit_Date`（絶対日時）と `limit_Date_Num`（受講開始からの日数）。
 新環境は `due_at` と `due_after_days` の両方を持つので、どちらも移せる。
@@ -121,8 +123,8 @@ class AssignmentsStep(Step):
                         "status": "deleted" if int(row.get("del_chk") or 0) == 1 else "published",
                         "video_url": _video_url(row),
                         "settings": _settings(row),
-                        # **ゼロ日付が 113件中6件ある。** `created_at` は NOT NULL なので
-                        # `update_date` で代替する。両方ゼロの行（1件）は移らない
+                        # **ゼロ日付がステージングで 250件中23件ある。** `created_at` は NOT NULL なので
+                        # `update_date` で代替する。両方ゼロの行（17件）は移らない
                         "created_at": convert(
                             row.get("regist_date") or row.get("update_date"), ColumnKind.TIMESTAMP
                         ),

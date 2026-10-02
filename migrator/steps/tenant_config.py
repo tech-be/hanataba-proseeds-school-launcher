@@ -1,4 +1,4 @@
-"""フェーズ3 — テナントの設定・定義系。
+"""foundation.1 — テナントの設定・定義系。
 
 **会員より先に入れる。** 会員の属性割当やプロフィール値は、ここで作る定義を指す。
 """
@@ -33,7 +33,7 @@ PROFILE_ITEM_COLUMNS = (
 PROFILE_LABEL_COLUMNS = ("tenant_id", "language", "item_type", "item_no", "title", "memo", "memo_free")
 #: プロフィール項目の分類（`profile_cate`）。**全テナント共通のマスタ**
 PROFILE_CATE_COLUMNS = ("profile_cate_id", "profile_cate_name", "del_chk")
-#: 項目の既定値（`user_item_default`）。**`item_name` は `profile_item.field_name` を指す**
+#: 会員列の既定値（`user_item_default`）。**`item_name` は `user` の列名を指す**（`profile_item` ではない）
 ITEM_DEFAULT_COLUMNS = ("tenant_id", "item_name", "value")
 
 #: 外部サービスの API キー（A3）。**接続情報・SNS シークレットとは扱いが違う** —
@@ -131,21 +131,21 @@ class FieldDefaultsStep(Step):
 class TenantSecretsStep(Step):
     """外部サービスの認証情報を `tenant_secrets` に移す（A3 / A7）。
 
-    扱うのは2種類。
+    扱うのは3種類。
 
     - `site.linkpreview_api_key` … 第三者サービスの API キー
     - `sns_setting` の6列 … SNS ログインのアプリ認証情報（Facebook / X / Instagram）
     - `application_config` の LINE の2列 … 公式アカウントのチャネルシークレット・アクセストークン
 
-    **どちらも新環境でそのまま使える。** 移行できないのは lw2 自身の DB 接続情報だけで、
-    SNS の鍵は「移せない」のではない（[移行の原則](../../docs/00-template/review.md)の1）。
+    **いずれも新環境でそのまま使える。** 移行できないのは lw2 自身の DB 接続情報だけで、
+    SNS の鍵は「移せない」のではない（[移行の原則](../../docs/db/00-template/review.md)の1）。
     ただし**認証を動かすには、SNS 側でコールバック URL の追加が別途要る**。
 
     値そのものはログに出さない（長さだけ記録する）。
     """
 
     name = "config.secrets"
-    description = "外部サービスの API キーを移す"
+    description = "外部サービスの API キー・SNS / LINE の認証情報を移す"
     source_table = "site"
     target_table = "tenant_secrets"
     depends_on = ("tenant",)
@@ -248,8 +248,8 @@ class ProfileItemsStep(Step):
 
     **`profile_item` は値ではなく「画面制御の定義」**で、`field_name` が値の在処
     （`user` の列名）を指す。値そのものは
-    - `item_type=0` → `users` の対応列（フェーズ4・5で移す）
-    - `item_type=1` → `user_profile_values`（フェーズ5）
+    - `item_type=0` → `users` の対応列（foundation.2 で移す）
+    - `item_type=1` → `user_profile_values`（foundation.2）
     """
 
     name = "config.profile_items"

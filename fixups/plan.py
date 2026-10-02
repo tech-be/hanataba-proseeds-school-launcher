@@ -4,7 +4,7 @@
 直す必要があるのは**大本だけ**で、そこを直せば巻き添えは消える。ここではそれを分けて出す。
 
 **「巻き添え」と呼べるのは、参照先が会員のときだけ。** 外部キー違反の旧 ID が数値でも
-会員とは限らない（`ondemand.quizzes` の `lesson_id` は見出しユニットを指す）。
+会員とは限らない（`content.quizzes` の `lesson_id` は見出しユニットを指す）。
 **理由に載っている列名で判定する。**
 """
 
@@ -140,7 +140,7 @@ def classify(exclusions: list[Exclusion], live_users: set[str]) -> list[Task]:
             )
         elif item.kind == "外部キー" and item.column != "user_id":
             # **会員以外の参照先。** 旧 ID が数値でも会員とは限らない
-            # （`ondemand.quizzes` の `lesson_id` は見出しユニットを指す、など）
+            # （`content.quizzes` の `lesson_id` は見出しユニットを指す、など）
             add(
                 "fk-other",
                 "参照先が無い行（会員以外）",

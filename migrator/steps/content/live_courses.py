@@ -1,20 +1,26 @@
-"""live.2 — ライブの置き場所（受け皿講座と受講登録）。
+"""ライブの置き場所（受け皿講座・受講登録・商品制限の履歴）。
+
+この1ファイルの Step は3つの区分に分かれて流れる。
+
+- `content.live_host_course` … content.4（ライブ講座）
+- `enrollment.live_host_enrollments` … enrollment.1（受講権限）
+- `billing.live_limit_item_history` … billing.2（決済。`plan_id` が `tenant_plans` を指すため）
 
 **lw2 のライブは講座に属さない。** 新環境は `courses` → `lessons`(type=live) の階層で、
 `lessons.course_id` が NOT NULL なので、**どの講座に置くかを決めないと1行も入らない。**
 
-**置き場所は2通りある**（2026-09-24 決定。[migration-spec 1-2](../../../docs/db/03-live/migration-spec.md)）。
+**置き場所は2通りある**（2026-09-24 決定。[migration-spec 1-3](../../../docs/db/02-content/migration-spec.md)）。
 
 - **商品で制限しているライブ** … `live_lesson_limit_item` → `payment_item` →
   `payment_item_lesson` で**実在の講座に1対1でたどれる**。その講座の配下に置く。
-  旧のアクセス制御（`payment_item_lesson_authority`）は受講（04）で `enrollments` になり、
+  旧のアクセス制御（`payment_item_lesson_authority`）は受講（03）で `enrollments` になり、
   新環境の `verifyEnrolled` がそのまま効く
 - **制限していないライブ** … lw2 では**全員が予約できた**。新環境に「講座に属さないレッスン」は
   無いので、**受け皿の講座を1本作り、全会員を受講登録する**（決定 ①）
 
-**受講登録はライブ区分で作る。** 書き込み先は受講区分（04）の `enrollments` だが、
-**lw2 に元データが無く、ライブの決定から生まれる行**なので、ここで作る。
-04 が `payment_item_lesson_authority` から作る行とは**受け皿講座（`course_id`）で区別する**。
+**受講登録は受講区分の enrollment.1 で作る**（受け皿講座と会員の両方が入ったあと）。
+**lw2 に元データが無く、ライブの決定から生まれる行**なので、Step はこのファイルに置いてある。
+`payment_item_lesson_authority` から作る行（`enrollment.rights`）とは**受け皿講座（`course_id`）で区別する**。
 """
 
 from __future__ import annotations

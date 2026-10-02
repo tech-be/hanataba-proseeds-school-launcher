@@ -1,4 +1,4 @@
-"""フェーズ2 — マスタの追加値。
+"""foundation.1（先頭）— マスタの追加値。
 
 新環境のシードだけでは lw2 の値を受けきれない。**足りない値を先に入れる**
 （FK の参照先なので、これらが無いと会員も設定も入らない）。
@@ -168,5 +168,5 @@ def _now_if(flag: bool):
 
 
 def build() -> list[Step]:
-    """フェーズ2の Step 一式。"""
+    """foundation.1 のマスタ分の Step 一式。"""
     return [UserRolesStep(), tenant_status_deleted(), auth_methods(), email_kinds()]

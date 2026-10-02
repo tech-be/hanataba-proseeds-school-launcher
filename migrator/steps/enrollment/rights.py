@@ -12,7 +12,8 @@
 
 **`cancel_chk` は使わない。** 名前に反してキャンセルフラグではなく、
 `PaymentAuthorityModel` の INSERT 5か所すべてが**作成時に定数を書き込むだけで、
-UPDATE する箇所が存在しない**。実測 1=3,064 / 0=620 は購入経路の違いを表す。
+UPDATE する箇所が存在しない**。実測（全行）1=3,116 / 0=3,850 で、`item_id` のある行に限ると
+1=3,064 / 0=620。購入経路の違いを表す。
 **実質の取り消しは `del_chk`**（実測 828件）。
 
 **無料講座は移らない。** lw2 の受講可否は「権限がある **OR** その講座が有料ユニットを
@@ -161,7 +162,7 @@ class EnrollmentRightsStep(Step):
             # 自動継続の商品なのに全部解約済み。期限ではなく解約で終わっている
             status = "revoked"
         elif expires_at is not None and expires_at < _now():
-            # 期限切れ。実測で 1,874組中 1,603組（86%）が該当する
+            # 期限切れ。実測で 4,289組中 3,381組が該当する（active 534 / revoked 374）
             status = "expired"
         else:
             status = "active"

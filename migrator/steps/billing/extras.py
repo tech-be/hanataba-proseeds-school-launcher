@@ -1,7 +1,8 @@
-"""live.8 — 月次チケット配布とライブレビュー。
+"""月次チケット配布（billing.1）とライブレビュー（enrollment.6）。
 
-どちらも**新環境に受け皿が無かったもの**（A9 で追加）。`lessons` と `users` にしか
-依存しないので、区分の最後に置く。
+どちらも**新環境に受け皿が無かったもの**。月次配布は課金の A2、
+ライブレビューは受講の A7 で追加した。流れる区分は別々で、月次配布は
+チケットの付与のあと、レビューはライブ（`content.live_lessons`）のあと。
 """
 
 from __future__ import annotations
@@ -53,7 +54,7 @@ class MonthlyAllowancesStep(Step):
                     "max_ticket_count": int(row.get("max_ticket_count") or 0),
                     "remaining_count": int(row.get("ticket_count") or 0),
                     "expires_on": row.get("limit_date"),
-                    # 参照先は課金区分（未移行）。旧 ID を保持して待つ
+                    # 決済（billing.2 の `payments`）に結ぶのは未実装。旧 ID を保持して待つ
                     "application_id": row.get("application_id"),
                     "is_applied": bool(int(row.get("is_application") or 0)),
                     "is_trial": bool(int(row.get("is_trial") or 0)),

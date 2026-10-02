@@ -1,4 +1,4 @@
-"""ondemand.2 — 代理講師（A21）。
+"""content.1 — 代理講師（A21）。
 
 **暫定対応。** `courses.instructor_id` は NOT NULL だが、lw2 には講座単位の講師が無い
 （`instructor_set_lesson` は担当範囲であって、講座の講師ではない）。

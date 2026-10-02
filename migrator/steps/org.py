@@ -256,8 +256,8 @@ class UserAttributeValuesStep(Step):
 class InstructorAssignmentsStep(Step):
     """講師の担当範囲3種を1つの表に移す。
 
-    **`scope='course'` の `target_id` は NULL で始まる**（講座が未移行のため）。
-    `legacy_target_id` を持っておき、オンデマンド移行後に埋める。
+    **`scope='course'` の `target_id` は NULL で入る**（この Step は講座（content.1）より前に流れるため）。
+    `legacy_target_id`（旧 `lesson_id`）を持っておく。講座の移行後に埋める処理は、移行ツールにはまだ無い。
     """
 
     name = "instructor_assignments"
@@ -307,12 +307,12 @@ class InstructorAssignmentsStep(Step):
 
 
 def definitions() -> list[Step]:
-    """フェーズ3（定義系）。"""
+    """foundation.1（定義系）。"""
     # 属性の必須講座（旧 attribute_lesson）は移さない。旧でも講座を結んでおらず
     # （作成時に attribute_id だけの行を作る）、属性はタグに一本化した（01 review A11）
     return [GroupsStep(), AttributesStep()]
 
 
 def assignments() -> list[Step]:
-    """フェーズ5（会員に紐づく割当）。"""
+    """foundation.2（会員に紐づく割当）。"""
     return [GroupMembersStep(), UserAttributeValuesStep(), InstructorAssignmentsStep()]
