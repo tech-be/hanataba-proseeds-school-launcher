@@ -8,9 +8,9 @@
   | migration | 中身 |
   |---|---|
   | `20260928132756_lw2_billing_additions.sql` | 1〜4（A1〜A8。`feat/lw2-billing-schema` で作り、`hanataba_dev` に PR #139 でマージ済み） |
-  | `20260927105511_user_tags_and_auto_assign_rules.sql` | 5 自動割当の表（新システムの機能。移行で書き込む先） |
-  | `20260930044959_rename_lw2_legacy_id_on_chapters_and_tags.sql` | 5 `tag_auto_assign_rules.assign_id`（`legacy_id` から改名） |
-  | **`20261001085757_lw2_keep_deleted_rows.sql`**（2026-10-01。`feat/lw2-support-schema` の上で未追跡） | 5・6 自動割当の列とグループの条件、削除済みの対応、予約できる商品の全行 |
+  | `20260927105511_user_tags_and_auto_assign_rules.sql` | 5 自動割当の表（新システムの機能。移行で書き込む先。`hanataba_dev` に PR #134 でマージ済み） |
+  | `20260930044959_rename_lw2_legacy_id_on_chapters_and_tags.sql` | 5 `tag_auto_assign_rules.assign_id`（`legacy_id` から改名。`hanataba_dev` に PR #139 でマージ済み） |
+  | **`20261001085757_lw2_keep_deleted_rows.sql`**（2026-10-01。`feat/lw2-support-schema` にコミット・push 済み、`hanataba_dev` には未マージ） | 5・6 自動割当の列とグループの条件、削除済みの対応、予約できる商品の全行 |
 - **当てる時期**: **移行直前**（[migration-spec](migration-spec.md) のフェーズ0）
 - **確認**: `python -m migrator doctor` — この区分が未適用なら `[TODO]` で出る
 
@@ -136,10 +136,10 @@ ALTER TABLE payments
     ADD COLUMN settings       JSON NULL,   -- J-Payment の ID、解約、分割回数、クーポン、税の情報
     ADD UNIQUE KEY uk_payments_legacy (tenant_id, application_id);
 
-INSERT INTO payment_providers (code, name_ja, supports_marketplace, supports_subscription, sort_order, is_system)
+INSERT IGNORE INTO payment_providers (code, name_ja, supports_marketplace, supports_subscription, sort_order, is_system)
     VALUES ('legacy_jpayment', 'J-Payment (lw2 から移行)', FALSE, FALSE, 90, TRUE);
 
-INSERT INTO payment_types (code, name_ja, requires_course, is_revenue, sort_order, is_system)
+INSERT IGNORE INTO payment_types (code, name_ja, requires_course, is_revenue, sort_order, is_system)
     VALUES ('lw2_purchase', '購入 (lw2 から移行)', FALSE, TRUE, 90, TRUE);
 ```
 

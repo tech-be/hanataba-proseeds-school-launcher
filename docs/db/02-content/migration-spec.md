@@ -110,7 +110,7 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 
 | 事項 | 決定 |
 |---|---|
-| 削除済みのライブ・開催回 | **移す。** ライブは `lessons.status = 'deleted'`、開催回は **`deleted_at` を追加**して表す（A5）。ステージング実測でライブ3件 / 開催回817件（29%） |
+| 削除済みのライブ・開催回 | **移す。** ライブは `lessons.status = 'deleted'`、開催回は **`deleted_at` を追加**して表す（A25）。ステージング実測でライブ3件 / 開催回817件（29%） |
 | プレビュー2表（`live_lesson_preview` / `live_lesson_date_preview`） | **移行しない。** **UI の一時状態**で、保存すると本体に反映される。基盤で `edit_form_data` を移行しないと決めたのと同じ |
 | `live_lesson.live_lesson_cate_id` | **移さない。** ステージング実測で全件が NULL か `0` で使われていない。実際の紐付けは `live_lesson_lesson_cate`。**本番ダンプで値が入っていれば移す** |
 | `live_lesson_date.live_lesson_time` | **移さない。** `starts_at` / `ends_at` からの導出値。**旧の値と導出値が食い違う行がないかは抽出時に検査する** |
@@ -123,14 +123,14 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 
 | 事項 | 決定 |
 |---|---|
-| ライブの旧 ID | **`live_lessons.live_lesson_id` に持つ**（A1）。`lessons.unit_id` はオンデマンドが `unit.unit_id` で使用済みで、**同じ列に入れると衝突する**（ステージング実測 18件中11件）。**`uk_lessons_legacy` は外さない** |
+| ライブの旧 ID | **`live_lessons.live_lesson_id` に持つ**（A22）。`lessons.unit_id` はオンデマンドが `unit.unit_id` で使用済みで、**同じ列に入れると衝突する**（ステージング実測 18件中11件）。**`uk_lessons_legacy` は外さない** |
 | 削除と中止 | **別の軸として持つ。** `live_lesson_date.del_chk` → **`deleted_at`（追加）**、開催の中止 → `canceled_at`。**混ぜると受講者の履歴に「中止された」と見える** |
-| 予約の3フラグ | **`status` に畳むが、元の値は残す。** `cancel_chk` / `attendance_chk` / `stop_chk` を A7 の `live_reservations.settings` に保持する |
-| 開催中止で不成立になった予約 | **`live_reservation_statuses` に値を1つ足す**（A7）。既存4値（`reserved`/`canceled`/`attended`/`no_show`）では**受講者都合のキャンセルと区別できない** |
-| リマインドの送信済み | **旧 `mail_send_chk` は「送信済み」の印。** その回の予約の `live_reservations.reminded_at` に移す。`remind_enabled`（A5）は全回 TRUE（2026-09-30 訂正。以前は `mail_send_chk` を `remind_enabled` に写していた） |
+| 予約の3フラグ | **`status` に畳むが、元の値は残す。** `cancel_chk` / `attendance_chk` / `stop_chk` を受講 A5 の `live_reservations.settings` に保持する |
+| 開催中止で不成立になった予約 | **`live_reservation_statuses` に値を1つ足す**（受講 A5 の `host_canceled`）。既存4値（`reserved`/`canceled`/`attended`/`no_show`）では**受講者都合のキャンセルと区別できない** |
+| リマインドの送信済み | **旧 `mail_send_chk` は「送信済み」の印。** その回の予約の `live_reservations.reminded_at` に移す。`remind_enabled`（A25）は全回 TRUE（2026-09-30 訂正。以前は `mail_send_chk` を `remind_enabled` に写していた） |
 | 連日設定・除外日 | **3表をセットで移す**（A26。実測 86 / 93件、除外日は 128行 / (ライブ, 日付) 22組。除外日の全行は `live_lesson_exclusion_date_history` にも入れる）。**片方だけ移すとルールの意味が変わる**（除外日だけ残ると、何を除外しているのか分からない）。**開催回を自動生成する機能を作るかは移行とは別の判断** |
 | チケット種別の名前が重複 | **そのまま移す。** ステージングの2件は同名（「3級マンツーマンレッスン専用チケット」）。`ticket_types.name` に UNIQUE は無いので投入は止まらない。**運営画面で区別が付かないことは cutover 前に伝える** |
-| ライブのカテゴリ | **多対多のまま移す**（A2）。`live_lesson.live_lesson_cate_id` ではなく `live_lesson_lesson_cate` が正 |
+| ライブのカテゴリ | **多対多のまま移す**（A23）。`live_lesson.live_lesson_cate_id` ではなく `live_lesson_lesson_cate` が正 |
 | チケット残高 | **残高1行 = 付与1行。** `quantity = remaining_quantity = ticket_num` とし、`note` に「lw2 移行時点の残高」と書く（ETL設計 §5-6）。**「何枚付与されて何枚使ったか」は旧が持たないので表現しない** |
 | チケットの出どころ | **すべて `manual`。** `ticket_grant_sources` の既存3値から選ぶ |
 | **消費の台帳行（2026-09-24 決定）** | **移行する予約に対して `consumed` の台帳行を作る。** lw2 の `user_ticket_log` は再生しないが、**台帳行が無いとキャンセルしてもチケットが戻らない**（`RefundForReservation` が `ticket_ledger_entries` から「その予約で何枚引いたか」を読む）。会員と枚数だけでは足りない理由は2つ — **①予約後に `cost` が変わっている可能性がある**（実装が現在の `cost` を見ないのはこのため）**②消費は複数の付与にまたがりうる**（`AllocateForConsumption` が期限の近い順に割り振る） |
@@ -141,7 +141,7 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | 事項 | 決定 |
 |---|---|
 | **新環境の制約を緩めない** | **2026-09-23 決定（オンデマンドと同じ）。** 旧データが入らない箇所でも `NOT NULL` / `UNIQUE` / `CHECK` を外さない。**例外を作る場合は 1-1 で意図を確認してから** |
-| 当たった行の処理 | **移さず `out/not-migrated.csv` に出し、暫定対応で直してから再実行する。** **どこが当たるか**は [確認事項](../open-questions.md) に挙げた12件 |
+| 当たった行の処理 | **移さず `out/not-migrated.csv` に出し、暫定対応で直してから再実行する。** **どこが当たるか**は [確認事項](../open-questions.md) と [制約による不整合](../constraint-violations.md) にまとめてある（1-1 には置いていない） |
 | migration の実装 | **school-launcher 側で行う。** [schema-additions.md](schema-additions.md) は当てる内容と順序を示すもので、ファイルの作成・適用は school-launcher のリポジトリの作業 |
 | 巻き添えの扱い | **大本を直せば消えるので、子を個別に直さない。** 削除済みのライブにぶら下がる開催回44件、削除済みの開催回にぶら下がる予約3件がこれに当たる（いずれも親を移すので巻き添えにはならない） |
 
@@ -165,17 +165,18 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 
 ### 1-4. 本番ダンプ受領後に確認すること
 
-> **制約を緩めないと決めたため、下の3件は「何件が移らないか」を数える項目**になる。
+> **制約を緩めないと決めたため、下の2件は「何件が移らないか」を数える項目**になる。
 > 判断は済んでいるが、**規模は運営に伝える必要がある**。
 
 | 確認 | 効く先 |
 |---|---|
-| 1ユニットに複数のテストを持つ件数（`test.unit_id` の重複） | 2件目以降のテストは移らない |
+| 1ユニットに複数のテストを持つ件数（`test.unit_id` の重複） | `quizzes` の UNIQUE (tenant_id, lesson_id)。UNIQUE は外さず、2件目以降のテストは移らない |
 | `report_answer.submit_date` が NULL の件数 | その未提出データは移らない |
+
+**そのほかの確認**
 
 | 確認 | 効く先 |
 |---|---|
-| 1ユニットに複数の `test` があるか | `quizzes` の UNIQUE (tenant_id, lesson_id)。UNIQUE は外さず、2件目以降は移らない |
 | 1ユニットに複数の `lecture` があるか | `video_lessons.lesson_id` が PK。実測では最大1 |
 | 同じ `enquete` を複数ユニットが参照しているか | `survey_lessons.lesson_id` が PK。**ユニットごとに複製して移す**ので、件数は複製の規模 |
 | `lesson_cate_name` に50文字超・128文字超があるか | `course_categories.code` / `name_ja` |
@@ -199,15 +200,15 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | `user_ticket.ticket_id` が NULL の件数 / `ticket_num <= 0` の件数 | `ticket_grants` の NOT NULL と `chk_tg_qty`（ステージング3件 / 2件） |
 | **cutover 時点で未来の開催回に残る予約の件数** | その予約は cutover 後にキャンセルされうる。**台帳行を作れないとチケットが戻らない** |
 | **チケットを要するライブの予約のうち、会員に対応する付与が無い／0枚のもの** | 台帳行を作れない。**ステージングでは11件中9件**（会員3181 が使い切って `ticket_num = 0`）。**残り0枚の付与を移すかの判断と連動する** |
-| `live_lesson_id` と `unit_id` が重なる件数 | `uk_lessons_legacy`。**`live_lessons.live_lesson_id`（A1）が要るかの判断**（ステージング 18件中11件） |
+| `live_lesson_id` と `unit_id` が重なる件数 | `uk_lessons_legacy`。**`live_lessons.live_lesson_id`（A22）が要るかの判断**（ステージング 18件中11件） |
 | `live_lesson_url` に1000文字超があるか | `live_lesson_occurrences.meeting_url` varchar(1000)。**切り捨てない**（ステージング最大77文字） |
 | `live_lesson_name` に255文字超があるか | `lessons.title` varchar(255)（ステージング最大15文字） |
-| `live_lesson_cate_name` に200文字超があるか | A2 の `live_lesson_categories.name`（ステージング実測は全件短い） |
+| `live_lesson_cate_name` に200文字超があるか | A23 の `live_lesson_categories.name`（ステージング実測は全件短い） |
 | `live_lesson.live_lesson_cate_id` に値が入っているか | 入っていれば移す（ステージングは全件 NULL か `0`） |
 | **本番の `facility` に住所・TEL・URL が入っているか** | ステージングは施設1件（「ご自身のパソコン」）で**すべて空**。**住所や地図が要る施設があれば、`settings` の文字列では足りず別表の追加が要る** |
 | `live_lesson_type = 1`（教室レッスン）の件数 | ステージング3件。**本番で対面の教室が多ければ、会場の持ち方を決め直す** |
 | `live_lesson_group` / `coupon_live_lesson` の件数 | **ステージングは両方0件**で、実装の検証になっていない |
-| `live_lesson_reserve.change_reserve_id` / `base_reserve_id` の件数 | 振替予約の有無（ステージング0件）。あれば A7 に列を足す |
+| `live_lesson_reserve.change_reserve_id` / `base_reserve_id` の件数 | 振替予約の有無（ステージング0件）。あれば受講 A5 の `live_reservations.settings` に残す（実装済み） |
 | `config_live_lesson` の `ticket_cancel_day` / `ticket_cancel_time` の実値 | `cancel_closes_at` の計算。**ステージングは 1日 0時間**で、ETL設計 §5-6 の「14日前」と食い違う |
 | `user_ticket_log.action_type` の値の分布 | **カラムコメント（`create,update,use,cancel`）と実データが食い違う**（ステージングに `lesson_cancel` がある）。履歴を再生しない判断の再確認 |
 | 予約のある開催回のうち、cutover 時点で未来のものの件数 | `reminded_at` の埋め方（1-1 の #5。ステージングは32件すべて過去） |
@@ -228,9 +229,9 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 **件数（投入 27,834 行 / 移行しない 314 行）。dry-run と予行で一致する。**
 
 > **この表は区分を組み替える前（旧 `ondemand.1`〜`8`）の記録。** 受講（3）の Step が
-> 混ざっており、いまの区分2の実測とは一致しない。**現在の値は
-> [1-5 実測](#1-5-検証データでの実測2026-09-24-実施)と[受講の移行仕様](../03-enrollment/migration-spec.md)を見る**
-> （2026-09-26 の通し実行で 基盤 35,580 / コンテンツ 47,118 / 受講 28,806 行）。
+> 混ざっており、いまの区分2の実測とは一致しない。**区分ごとの現在の合計は
+> 2026-09-26 の通し実行で 基盤 35,580 / コンテンツ 47,118 / 受講 28,806 行**。
+> 受講の Step の値は [受講の移行仕様](../03-enrollment/migration-spec.md) を見る。
 
 | フェーズ | Step | 抽出 | 投入 | 移行しない |
 |---|---|---:|---:|---:|
@@ -474,7 +475,7 @@ python -m migrator verify
 
 > **取り違え注意**
 > - **`open_period` の単位**（月→日）。受講期間が 1/30 になる
-> > > - **`limit_Date` は大文字混じり**。`limit_date` と書くと取りこぼす
+> - **`limit_Date` は大文字混じり**。`limit_date` と書くと取りこぼす
 
 ### 3.3 投入（load）
 
@@ -512,7 +513,7 @@ python -m migrator verify
 | `unit.enquete_suspended_chk` | 読んでいない |
 | `unit_precondition.precondition_type_id` | 読むが書いていない（ステージングは全件 `100`） |
 | `lesson_cate.regist_user_id` → `created_by`、`del_chk` の日時 → `deprecated_at` | どちらも NULL（`del_chk = 1` は `active = FALSE` だけ） |
-| `lesson_tag.del_chk` / `icon_file_name` | 読んでいない（ステージングは削除済み0件） |
+| `lesson_tag.del_chk` / `icon_file_name` | `del_chk` は読むが使っていない（削除済みも生きているタグと同じ形で入る）。`icon_file_name` は読んでいない（ステージングは削除済み0件） |
 | `lecture.pmovie_token` の URL 化 | トークンをそのまま `video_url` に入れている |
 
 ### 3.5 検証
@@ -702,7 +703,7 @@ python -m migrator verify
 | 検査 | 対象 | 判断 |
 |---|---|---|
 | 重複 | `live_lesson_reserve` の `(live_lesson_date_id, user_id)` | **0件でなければ、どれを残すかが決まっていること**（1-1 の #4）。決まっていなければ止める |
-| ID の衝突 | `live_lesson.live_lesson_id` ⇔ `unit.unit_id`（同一テナント） | **重なりがあれば A1（`live_lessons.live_lesson_id`）が必須。** `lessons.unit_id` には入れない |
+| ID の衝突 | `live_lesson.live_lesson_id` ⇔ `unit.unit_id`（同一テナント） | **重なりがあれば A22（`live_lessons.live_lesson_id`）が必須。** `lessons.unit_id` には入れない |
 | NULL | `user_ticket.ticket_id`、`live_lesson_reserve.reserve_date` | 件数を出して `out/not-migrated.csv` の見込みを示す |
 | CHECK | `live_lesson_date.capacity = 0`、`live_lesson_date_to <= live_lesson_date_from`、`user_ticket.ticket_num <= 0`、`live_lesson.item_ticket_price < 0` | 0件なら続行。あれば件数を出す |
 | 桁溢れ | `live_lesson_url`(1000) / `live_lesson_name`(255) / `live_lesson_cate_name`(200) / `verification_key`(200) | **超過があれば列を広げる**（切り捨てない） |
@@ -719,9 +720,9 @@ python -m migrator verify
 | `config_live_lesson` → `occurrences.cancel_closes_at` | `starts_at − ticket_cancel_day 日 − ticket_cancel_time 時間`。**テナント設定を開催回ごとの絶対時刻に焼き付ける**。キャンセル不可（`ticket_cancel_chk = 0`）なら `starts_at` |
 | `live_lesson_date.reserve_start_day`（**date**）→ `reserve_opens_at` | **JST の 00:00:00 として UTC に変換する。** 素で入れると**前日15:00**になり予約開始が1日早まる |
 | `user_ticket.ticket_end_date`（**date**）→ `expires_at` | **JST の 23:59:59 として変換する**（終了日なので日の終わりを補う） |
-| `live_lesson_reserve` の3フラグ → `live_reservations.status` | `stop_chk=1` → **A7 の新値**、`cancel_chk=1` → `canceled`、`attendance_chk=1` → `attended`、いずれでもなく**開催回が過去** → `no_show`、**未来** → `reserved`。**元の3フラグは `settings` に残す** |
+| `live_lesson_reserve` の3フラグ → `live_reservations.status` | `stop_chk=1` → **受講 A5 の新値 `host_canceled`**、`cancel_chk=1` → `canceled`、`attendance_chk=1` → `attended`、いずれでもなく**開催回が過去** → `no_show`、**未来** → `reserved`。**元の3フラグは `settings` に残す** |
 | `live_lesson_reserve.stop_chk` → `occurrences.canceled_at` | **予約から開催回へ持ち上げる。** `stop_chk = 1` の予約がある開催回に中止時刻を入れる |
-| `live_lesson_date.del_chk` → `occurrences.deleted_at` | **`canceled_at` ではない**（A5） |
+| `live_lesson_date.del_chk` → `occurrences.deleted_at` | **`canceled_at` ではない**（A25） |
 | `live_lesson.valid_chk` / `del_chk` → `lessons.status` | **`del_chk` を優先。** `del_chk=1` → `deleted`、`valid_chk=1` → `published`、それ以外 → `draft` |
 | `live_lesson.item_ticket_price` → `live_lesson_ticket_requirements` | **`0` なら行を作らない**（`chk_lltr_cost` に当たる）。種別は `ticket_limit_lesson` から逆引きする |
 | `user_ticket.ticket_num` → `quantity` / `remaining_quantity` | **両方に同じ値**。`source = 'manual'`、`note = 'lw2 移行時点の残高'` |
@@ -741,7 +742,7 @@ python -m migrator verify
   - `live_lesson_occurrences` — `live_lesson_date.live_lesson_date_id`
   - `live_reservations` — **重複を畳んだあとの `(live_lesson_date_id, user_id)`**。残す行が変わると ID も変わるので、**畳み方を決めてから流す**
   - `ticket_grants` — `user_ticket` の `(user_id, ticket_id, authority_id)`（旧 UNIQUE）
-- **受け皿 course の ULID を後から変えない。** 案A / 案B を切り替えると**全ライブの `course_id` が変わる**ので、**決まってから実装する**
+- **受け皿 course の ULID を後から変えない。** 固定のキー `HOST_COURSE_KEY = "lw2-live-host"`（`live_courses.py`）から採番して実装してある（lw2 に対応する行が無いため）。キーを変えると**受け皿に置いた全ライブの `course_id` が変わる**
 - **エラー時**: フェーズ単位でやり直す。**開催回だけ入って予約が入っていない状態で次に進まない**
 
 #### 3.4 移行の対象外
@@ -775,7 +776,7 @@ python -m migrator verify
 | 旧 ID | **`lessons.unit_id` にライブ由来の値が入っていないこと**（オンデマンドの `unit_id` と衝突するため） |
 | 開催回 | `live_lesson_occurrences` の件数と、旧 `live_lesson_date`（削除済みを含む）の件数が一致すること |
 | 削除と中止 | **`deleted_at` が入った行と `canceled_at` が入った行が混ざっていないこと。** 旧 `del_chk = 1` の817件が `canceled_at` に入っていたら誤り |
-| 予約の状態 | `live_reservations.status` の分布を出し、**全部 `reserved` になっていないこと**（A7 が効いているか） |
+| 予約の状態 | `live_reservations.status` の分布を出し、**全部 `reserved` になっていないこと**（受講 A5 が効いているか） |
 | 日時 | `live_lessons.scheduled_at`（timestamp）と `live_lesson_occurrences.starts_at`（datetime(3)）を数件抽出し、**JST に戻して旧の値と一致すること**（変換の流儀が2つあるため） |
 | リマインド | **過去の開催回の予約で `reminded_at` が NULL の行が0件であること**（cutover 後の再送防止） |
 | チケット残高 | 会員ごとの `SUM(ticket_grants.remaining_quantity)` が、旧 `SUM(user_ticket.ticket_num)` と一致すること（**移らなかった行の分を差し引いて**） |
@@ -789,7 +790,7 @@ python -m migrator verify
 
 | 項目 | 状態 |
 |---|---|
-| 未決13件 | 1-1 の確認事項。**4・5・6（点数・単位・回答形式）は lw2 の実装を読めば閉じる** |
+| 運営への確認事項 | **1-1 には未決を置いていない。** この区分の分も [open-questions.md](../open-questions.md) にまとめてある |
 | バッジ（定義・付与実績とも） | **移行対象外**（2026-09-28 決定。→ [対象外](../06-out-of-scope/breakdown.md#決定で対象外にしたもの)） |
 | `cmd/import-certificates` との役割分担 | 修了証を二重投入しないための切り分け |
 

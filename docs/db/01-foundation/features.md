@@ -205,7 +205,7 @@
 | 住所 | `user` の住所2組・海外住所 | `user_addresses` | ◯ | ◯ | 新も読む |
 | 生年月日・電話 | `user.birth_date` / `tel` | `users.birth_*` / `phone` | ◯ | ◯ | — |
 | その他の項目 | `user.nick_name` / `sex_type` / `blood_type` / `self_introduction` / `mobile_tel` | `users.nickname` / `gender` / `blood_type` / `self_introduction` / `mobile_phone` | ◯ | — | 新は読まない |
-| 項目の定義 | `profile_item` / `profile_item_label` / `profile_cate` | `tenant_profile_items` など | ◯ | — | 新は読まない（新は `settings.profile_fields` の3項目だけ） |
+| 項目の定義 | `profile_item` / `profile_item_label` / `profile_cate` | `tenant_profile_items` など | ◯ | — | 新は読まない（新は `settings.profile_fields` の3項目だけ）。管理者が変えられない項目の印（`*_static_chk`）は**現状は移していない**（受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた） |
 | 自由記述の項目 | `user.user_profile1〜20` | `user_profile_values` | ◯ | — | 新は読まない |
 | 公開設定 | `user.*_open_chk`、`user_attached_info.personal_record_chk` | `user_field_visibility` | ◯ | — | 新は読まない。**`personal_record_chk` は現状は移していない**（実装が無い。2026-10-02 の確認） |
 | 言語 | `user_nationality_info.language_code`、`tenant.language_code` | `users.language_code`、`tenants.language_code` | ◯ | — | 新は cookie だけで決める |
@@ -309,6 +309,7 @@
 | 略称 | `tenant.tenent_name_short` | `tenants.short_name` | — | — | 旧でも読んでいない |
 | 言語 | `tenant.language_code` | `tenants.language_code` | ◯ | — | F07 |
 | サービス名・提供期間・機能フラグ | `site` | `tenants.settings` の `service` / `features` | — | — | 旧でも読んでいない。新の設定画面では JSON のまま見える |
+| ライブの機能の有効・無効 | `config_live_lesson.valid_chk` | `tenants.settings` の `lw2_live`（2026-10-02） | ◯ | — | 新は読まない。キャンセルの締切は開催回の `cancel_closes_at` に焼き付けてある（03 受講） |
 | 状態 | `tenant.del_chk` | `tenants.status` | ◯ | ◯ | 新のコードは `deleted` を知らない |
 
 #### 差分

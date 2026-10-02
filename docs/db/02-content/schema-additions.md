@@ -3,14 +3,14 @@
 [突き合わせ](review.md#新環境に追加するテーブルカラム) の追加一覧（A1〜A27）を、**school-launcher に当てる migration の単位**に落としたもの。
 
 - **当てる先**: `school-launcher/btoc-backend/db/migrations/`（goose 形式。雛形は `make migrate-create`）
-- **実物**（2026-10-02 時点。`20260930044959` までは `hanataba_dev` に PR #139 でマージ済み）:
+- **実物**（2026-10-02 時点。`20260930044959` までは `hanataba_dev` にマージ済み — `022810` は PR #127、`190305` は PR #137、`20260928072918` / `20260929091539` / `20260929102209` は PR #135、`044959` は PR #139）:
 
   | migration | 中身 |
   |---|---|
   | `20260924022810_lw2_content_additions.sql` | 1〜9（この区分の追加の本体） |
   | `20260926190305_create_course_chapters.sql` | 10 講座の章（`course_chapters`、`lessons.chapter_id`） |
   | `20260930044959_rename_lw2_legacy_id_on_chapters_and_tags.sql` | 10 `course_chapters.unit_id`（`legacy_id` から改名） |
-  | **`20261001085757_lw2_keep_deleted_rows.sql`**（2026-10-01。`feat/lw2-support-schema` の上で未追跡） | 11 削除済みも移すための列と、除外日の全行の表 |
+  | **`20261001085757_lw2_keep_deleted_rows.sql`**（2026-10-01。`feat/lw2-support-schema` にコミット・push 済み。`hanataba_dev` には未マージ） | 11 削除済みも移すための列と、除外日の全行の表 |
 - **当てる時期**: **移行直前**（[migration-spec](migration-spec.md) のフェーズ0）
 - **確認**: `python -m migrator doctor` / `python -m migrator run --phase common.0`
 
@@ -128,7 +128,8 @@ NULL を重複扱いしないので、NULL の行がいくつ並んでも問題�
 
 ## 4. `course_tags` / `course_tag_links`（A2）
 
-**必須。** 旧 `lesson_tag`（19行）/ `lesson_lesson_tag`（39行、対象テナント分）。
+**必須。** 旧 `lesson_tag`（19行。ほかに割当が指す共有のタグ（`tenant_id = 0`）3行）/ `lesson_lesson_tag`（52行。ReCADemy の講座39行＋共有講座13行）。
+**共有のタグも移す**（2026-10-02）。移す講座の割当が指していれば、このテナントのタグとして入れる。以前は拾っておらず、共有のタグを指す割当9行が外部キーで落ちていた。
 新環境にタグの概念が無く、`category`（1講座1件）では代用できない — タグは1講座に複数付く。
 
 `course_tags.lesson_tag_id`（旧 ID）は、旧 ID で親を指す割当を移行時に引くため（school-launcher `20260929091539` で `legacy_id` から改名し、NULL 可にした）。
@@ -319,4 +320,4 @@ CREATE TABLE live_lesson_exclusion_date_history (
 | 追加案 | 取り下げた理由 |
 |---|---|
 | `lesson_exemptions` | 旧 `unit_exemption` は**規則**（`exemption_unit_id` ＋ `exemption_score`）で、会員ごとの免除表では**何行入れればよいかが決まらない**。前提条件（A15）側の拡張として設計し直す |
-| ライブ専用のアクセス制御表 | 旧 `live_lesson_limit_item` の役割は、受講（3）で `payment_item_lesson_authority` → `enrollments` に写る。**受け皿を作らず、ライブをその商品が売っている講座の配下に置く** |
+| ライブ専用のアクセス制御表 | 旧 `live_lesson_limit_item` の役割は、受講（3）で `payment_item_lesson_authority` → `enrollments` に写る。**受け皿を作らず、ライブをその商品が売っている講座の配下に置く**。なお `20261001085757` が作る `live_lesson_limit_item_history` は**旧の行を旧の形のまま残す表**で、アクセス制御には使わない（新のアプリは読まない。課金の `billing.2` で入れる） |

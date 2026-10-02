@@ -32,8 +32,8 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 |---|---|
 | LINE 公式アカウント | **継続する。** `user.line_id` → `line_links` を移行対象にする |
 | プロフィール画像 | **データは移行しない。** `avatar_url` の列は使うが空で始め、会員が登録し直す |
-| プロフィール項目 | **非表示のものも含めて全項目を移す**（固定34・自由記述15）。`show_flag` などの制御はそのまま移し、**新環境の画面に出ないことは移行の問題としない**。ステージング実測では非表示7項目に値は0件だったが、あれば値も移す |
-| `site` の運用値 | **`tenants.settings` に移す**（A3）。`legacy_site_id`、`service`（名称・説明・提供期間・URL・`application_path`）と `features`（`lw_type` / テスト分析 / ランキング / 日次メール）。`linkpreview_api_key` は `tenant_secrets` へ。テナントの設定6表（`lw2_config` など）と決済の設定（`lw2_payment`）も同じ `settings` に入る（[review.md のテナントの設定](review.md#テナントの設定2026-09-30-に仕分け)）。**新環境に対応する機能が無くても移す** — 参照されないことは移行しない理由にならない |
+| プロフィール項目 | **非表示のものも含めて全項目を移す**（固定34・自由記述15）。`show_flag` などの制御はそのまま移し（固定の印 `*_static_chk` は現状は移していない。受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた）、**新環境の画面に出ないことは移行の問題としない**。ステージング実測では非表示7項目に値は0件だったが、あれば値も移す |
+| `site` の運用値 | **`tenants.settings` に移す**（A3）。`legacy_site_id`、`service`（名称・説明・提供期間・URL・`application_path`）と `features`（`lw_type` / テスト分析 / ランキング / 日次メール）。`linkpreview_api_key` は `tenant_secrets` へ。テナントの設定9表（`lw2_config` など7キー。ライブの設定 `config_live_lesson` → `lw2_live` を含む）と決済の設定（`lw2_payment`）も同じ `settings` に入る（[review.md のテナントの設定](review.md#テナントの設定2026-09-30-に仕分け)）。**新環境に対応する機能が無くても移す** — 参照されないことは移行しない理由にならない |
 | 純ログ | **移行しない。** `user_login_log` / `user_login_log_monthly` / `twostepverification_log` の3件。cutover 後の認証から記録を始める |
 | グループ階層 | **`group.parent_group_id` が正本。** `group_structure` は `GroupModel::makeGroupStructure()` が作り直す閉包テーブルなので移行しない（[対象外 B](#34-移行の対象外)）。`tenant_groups` は `parent_id` と `depth` で持つ |
 | SNS ログインの認証情報 | **移行する。** 旧 `sns_setting` の6列を `tenant_secrets` へ（種別は `facebook_client_id` など6種を追加。A7）。**新環境でもそのまま使えるため、移行できない理由が無い**（[移行の原則](../00-template/review.md#移行の原則)の1）。**移行後、SNS ログインを動かすには SNS 側の管理画面でコールバック URL を新環境のものに修正する作業が要る** — データの移行だけでは動作しない（移行の可否には影響しない） |
@@ -48,7 +48,7 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | 固定電話と携帯電話 | **別の列で持つ**（`phone` / `mobile_phone`）。1列に畳まない |
 | 住所 | **郵便番号 / 都道府県 / 市区町村 / 番地・建物名の4項目 × 2組**で移す |
 | 国籍・海外住所 | **`user_addresses` の `kind='foreign'` で移す**（A12）。`nationality` / `country` は**コードなので `country_master` で国名に展開**する（`AR` → アルゼンチン）。選択肢に無い値は `*_another` の自由入力をそのまま使う |
-| パスワード | **3DES 復号 → bcrypt 再ハッシュを移行ツールで行う。** 新環境と同じ `$2a$` / コスト10。**会員にパスワード再設定を求めない。** 旧の秘密鍵は**環境変数 `LW2_CRYPT_KEY`**（設定ファイルに書かない）。平文はログにも例外にも出さない。復号できないもの・旧が空のものは**空のハッシュ（`''`）で入れ、件数と会員 ID を警告に出す**（その会員はログインできない状態で移る。ステージングは旧が空の1名） |
+| パスワード | **3DES 復号 → bcrypt 再ハッシュを移行ツールで行う。** 新環境と同じ `$2a$` / コスト10。**会員にパスワード再設定を求めない。** 旧の秘密鍵は**環境変数 `LW2_CRYPT_KEY`**（設定ファイルに書かない）。平文はログにも例外にも出さない。復号できないもの・旧が空のものは**空のハッシュ（`''`）で入れ、件数と会員 ID を警告に出す**（その会員はログインできない状態で移る）。ステージングで旧が空なのは `user_id=911` の1名だけで、この会員は `role_id` が NULL のため**そもそも移らない**（下の「`role_id` が NULL の会員」）。移った会員にパスワードが空の者はいない |
 | ロールの対応表 | **実データで確定。** 1=`system_admin` / 2=`tenant_admin` / 3=`facility_manager`（削除済み）/ 4=`company_manager` / 5=`instructor` / 6=`group_manager` / 7=`learner` / 8=`supporter`（削除済み）。**表示名は `translate_master` から、並び順は `role_index` から**（`role_id` と食い違う） |
 | 追加ロールの権限 | **移行としては問題なし。** 移したロール文字列（`system_admin` 17名 / `company_manager` 56名 / `group_manager` 20名）に新環境のコードが対応していないことは**把握済み**。権限をどう実装するかは移行とは別の判断で、[追加一覧の「変更が必要な機能」](review.md#新環境に追加するテーブルカラム)に置く |
 | プロフィール項目の分類 | **`profile_cate` を `tenant_profile_item_categories` に移す**（項目より先）。`profile_cate_id=0` は「分類なし」で NULL |
@@ -72,7 +72,7 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 
 | 事項 | 決定 |
 |---|---|
-| 新環境へのスキーマ追加（A1〜A23） | **移行直前に実施する。** フェーズ0（第2章）。DDL と適用順は [マイグレーション対象](schema-additions.md) |
+| 新環境へのスキーマ追加（A1〜A24） | **移行直前に実施する。** フェーズ0（第2章）。DDL と適用順は [マイグレーション対象](schema-additions.md) |
 | `tenant_statuses` | **`deleted` を追加する**（recademy 自体は `active`） |
 | マスタとテナントの順序 | **マスタが先**（同じ `foundation.1` の中で、マスタ → テナント → テナント設定の順）。FK の参照先をそろえてからテナントの行を作る |
 | `tenants` の1行作成 | **移行手順に含める**（`foundation.1`）。採番した `id` を設定値として配る |
@@ -263,7 +263,7 @@ dry-run は INSERT を実行しないため、制約違反は出ない。実際�
 | 項目 | 実測 |
 |---|---|
 | 3DES 復号に成功 | 3,155件中 **3,154件** |
-| 旧が空 | 1件（ログインできない状態で入る） |
+| 旧が空 | 1件（`user_id=911`。`role_id` が NULL のため移らない。上の実投入の結果で「パスワードが空の会員 0件」） |
 | 復号できず / 72バイト超 | 0件 |
 | 再ハッシュにかかる時間 | 約2.2分（bcrypt コスト10 × 3,155件） |
 | 照合の確認 | 旧パスワードで新しい `$2a$` ハッシュが通ることを確認済み |
@@ -423,7 +423,7 @@ python -m migrator run --dry-run --section foundation
 |---|---|
 | `tenants` の1行の作り方と投入前後の確認 | [移行時の注意事項](review.md#移行時の注意事項) |
 | ロールの8値対応 | [ロール対応表](review.md#ロール対応表) |
-| `user` 90列すべての行き先 | [全列の行き先](review.md#全列の行き先) |
+| `user` 95列すべての行き先 | [全列の行き先](review.md#全列の行き先) |
 | プロフィール項目の構造（定義 / ラベル / 値の3分割） | [M4](review.md#m4-会員項目状態の定義) |
 | 新環境に追加するテーブル・カラムと、変更が必要な機能 | [A1〜A24](review.md#新環境に追加するテーブルカラム) |
 
@@ -537,6 +537,7 @@ python -m migrator run --dry-run --section foundation
 | `system_admin_role` | 読む実装が無い（ステージングの対象テナントは0行） |
 | `attribute.kiracari_user_chk` | `user_tags` に受け皿が無い |
 | `instructor_assignments.target_id`（`scope='course'`） | NULL のまま。講座の移行後に埋める Step が無い（`legacy_target_id` に旧 `lesson_id` は残る） |
+| `profile_item.*_static_chk`（4列）、`group.system_sort_no`、`user.new_skill_user_chk` / `live_lesson_preview_icon`、`user_personal_no.scout_display_type` | **受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた**（ステージングは `*_static_chk` が49項目中13項目、`system_sort_no` が28行すべて、`live_lesson_preview_icon` が3名、`scout_display_type` の `2` が1名。`new_skill_user_chk` は全員 NULL） |
 
 ### 3.5 検証
 

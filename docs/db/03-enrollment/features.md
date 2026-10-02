@@ -160,6 +160,7 @@
 | 回答 | `enquete_answer.answer` | `survey_responses` / `survey_answers` | ◯ | ◯ | — |
 | 回答済み | `enquete_answer` の有無 | `survey_submission_log` | ◯ | ◯ | —（2026-09-30 に移すようにした） |
 | 何への回答か | `enquete_answer.entity_type_id`（お知らせ / ユニット / 課題） | `survey_responses.entity_type` / `entity_id` | ◯ | — | 新は読まない |
+| お知らせ・課題に付けたアンケートの回答 | `enquete_answer`（`entity_type_id` 1 / 3） | —（受け皿が無い） | ◯ | — | **現状は移していない**（`survey_responses.lesson_id` が NOT NULL。2026-10-02 に受け皿 `survey_entity_responses` を検討したが取り下げた）。一覧にも出ない。このテナントの会員の回答でステージング 226件 |
 | 途中保存 | `enquete_answer.suspended_chk` | `survey_responses.suspended` | ◯ | — | 新は読まない |
 
 #### 差分
@@ -168,7 +169,7 @@
 |---|:--:|---|---|
 | 振る舞い | — | **（対応済み）旧で回答済みの会員が、もう一度回答できた。** 移行ツールが `survey_submission_log` を作っていなかった | 2026-09-30 に移行ツールを直した。途中保存でない回答から、ユニットと会員の組ごとに最初の回答日時で1行作る（ステージングで81行） |
 | 振る舞い | 中 | 途中保存の回答が、回答済みとして集計に混ざる | 新で集計から `suspended` を外す（A4） |
-| 機能 | 高 | お知らせに付いたアンケートの回答が新で見えない | 未決: [C5](../open-questions.md#c-新環境の制約が意図的かの確認) の回答で決める |
+| 機能 | 高 | お知らせに付いたアンケートの回答が新で見えない。回答も移していない | 未決: [C5](../open-questions.md#c-新環境の制約が意図的かの確認) の回答で決める |
 
 ### F06 ライブの予約・出欠
 

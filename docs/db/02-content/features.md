@@ -64,7 +64,7 @@
 | 削除 | `lesson.del_chk` | `courses.status = 'deleted'` | ◯ | △ | 一覧には出ないが、詳細は URL で開ける |
 | カテゴリ | `lesson_cate` | `course_categories` / `courses.category` | ◯ | — | 新の絞り込みは固定の9カテゴリ。表を読まない |
 | カテゴリ画像 | `lesson_cate.lesson_cate_img_file_name` | `course_categories.image_url` | ◯ | — | 旧はトップページだけで使う |
-| タグ | `lesson_tag` / `lesson_lesson_tag` | `course_tags` / `course_tag_links` | ◯ | — | 新は読まない |
+| タグ | `lesson_tag` / `lesson_lesson_tag` | `course_tags` / `course_tag_links` | ◯ | — | 新は読まない。共有のタグ（`tenant_id = 0`）も、移す講座の割当が指していれば移す（2026-10-02） |
 | サムネイル | `lesson.lesson_img_file_name` | `courses.thumbnail_url` | ◯ | ◯ | 新は保存領域のキーとして読む |
 | 進捗の表示方式 | `lesson.progress_display_chk` | `courses.settings` | ◯ | — | 新は読まない |
 
@@ -138,7 +138,7 @@
 | 画面 | 低 | 新は章（`course_chapters`）で見出しを持つ。旧の「折りたたみ」（`open_close_chk`）は章に列が無い | 対応不要。値はユニットの設定（`lessons.settings`）に残っている |
 | 参照データ | 低 | 完了メッセージ・講座内の検索キーワード・所要時間を新は読まない | 新で実装する（A4） |
 
-> **ディスカッション・スキル診断の種別は `hanataba_dev` にまだ無い。** PR #135（`20260928072918`）で足す。
+> **ディスカッション・スキル診断の種別は、比べた `hanataba_dev`（`27741e2`）にはまだ無かった。** その後 PR #135（`20260928072918`）で `hanataba_dev` にマージ済み（2026-10-02 の確認）。
 
 ### F04 動画の視聴
 
@@ -304,7 +304,7 @@
 | カテゴリ | `live_lesson_cate` / `live_lesson_lesson_cate` | `live_lesson_categories` / `_links` | ◯ | — | 新は読まない |
 | 公開するグループ | `live_lesson_group` | `live_lesson_group_targets` | ◯ | — | ステージングは0件 |
 | 予約できる人 | `live_lesson_limit_item`（商品を持っている人） | 講座の受講登録 | ◯ | ◯ | 移行の方針で講座の受講に置き換えた |
-| 講師・説明・画像・配布ファイル・予約数の上限・公開ページ | `live_lesson` の各列 | `live_lessons.settings` | ◯ | — | 新は読まない |
+| 講師・説明・画像・配布ファイル・予約数の上限・公開ページ | `live_lesson` の各列（配布ファイルは `save_file_name1〜3` / `disp_file_name1〜3`） | `live_lessons.settings`（配布ファイルは `files`） | ◯ | — | 新は読まない。配布ファイルは 2026-10-02 から移している（ステージング0件。ファイル本体は L9 の移送が要る） |
 
 #### 差分
 

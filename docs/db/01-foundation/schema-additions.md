@@ -1,20 +1,23 @@
 # 基盤 — マイグレーション対象
 
-[突き合わせ](review.md#新環境に追加するテーブルカラム) の追加一覧（A1〜A21）を、**school-launcher に当てる migration の単位**に落としたもの。
+[突き合わせ](review.md#新環境に追加するテーブルカラム) の追加一覧（A1〜A24）を、**school-launcher に当てる migration の単位**に落としたもの。
 
 - **当てる先**: `school-launcher/btoc-backend/db/migrations/`（goose 形式。雛形は `make migrate-create`）
 - **当てた日**: M1〜M10 は 2026-09-22。M11〜M13 はその後に足した。どれも school-launcher の実ファイルと一致する
-- **実物**（2026-10-02 時点。`20260930044959` までは `hanataba_dev` に PR #139 でマージ済み）:
+- **実物**（2026-10-02 時点）:
+  - `20260930044959` までは `hanataba_dev` にマージ済み（PR #125 / #127 / #134 / #135 / #137 / #139）
+  - `20260930052453` と `20261001085757` は `feat/lw2-support-schema` にコミット・push 済み（`hanataba_dev` には未マージ）
 
   | migration | 中身 |
   |---|---|
   | `20260922070746`〜`20260922070755`（10本） | M1〜M10 |
-  | `20260924022809_lw2_foundation_additions.sql` | `tenants` / `users` の不足分と `user_login_periods` |
+  | `20260924022809_lw2_foundation_additions.sql` | M11 の `tenants` / `users` の旧 ID（当時は `legacy_id`）、`tenant_secret_kinds` に SNS の6種別（A7）、`user_login_periods` の**取り下げ**（`20260922070753` が作った表を DROP する。A17 の取り消し） |
   | `20260928072918_align_lw2_roles_and_lesson_types.sql` | M12 |
-  | `20260929091539` / `20260929102209`（旧 ID の改名） | M11 |
+  | `20260929091539_rename_lw2_legacy_id_to_source_columns.sql` | M7 の `tenant_groups.group_id` / `tenant_attributes.attribute_id` を `legacy_id` から改名（ほかはコンテンツの表） |
+  | `20260929102209_rename_remaining_legacy_id_to_source_columns.sql` | M11 の `users.user_id` / `tenants.tenant_id`、M3 の `tenant_profile_item_categories.profile_cate_id` を `legacy_id` から改名（ほかはコンテンツの表） |
   | `20260927105511_user_tags_and_auto_assign_rules.sql` | M13 のタグの表（新システムの機能。移行で書き込む先） |
   | `20260930044959_rename_lw2_legacy_id_on_chapters_and_tags.sql` | M13 `user_tags.attribute_id` |
-  | **`20261001085757_lw2_keep_deleted_rows.sql`**（2026-10-01。`feat/lw2-support-schema` の上で未追跡） | M13 `user_tags.deleted_at` |
+  | `20261001085757_lw2_keep_deleted_rows.sql`（2026-10-01） | M13 `user_tags.deleted_at` |
 - **確認**: `python -m migrator doctor` / `python -m migrator run --phase common.0`
 
 > **ここに載っているのは案ではなく、当たったもの。** 最初の版は「DDL は案」と断っていたが、
@@ -51,8 +54,18 @@ M6  既存テーブルの変更          20260922070751_add_channel_to_notificat
 M7  グループ・属性              20260922070752_create_tenant_groups_and_attributes.sql
 M8  会員に紐づく残り            20260922070753_create_user_visibility_and_assignments.sql
 M9  認証まわり                  20260922070754_create_sso_login_windows_and_two_factor.sql
+M10 会員の言語・テナント既定値  20260922070755_add_user_language_and_tenant_field_defaults.sql
+M11 会員・テナントの旧 ID       20260924022809_lw2_foundation_additions.sql（legacy_id で追加）
+M13 タグの表                    20260927105511_user_tags_and_auto_assign_rules.sql
 M12 ロールを旧システムに揃える  20260928072918_align_lw2_roles_and_lesson_types.sql
+M7  旧 ID の改名                20260929091539_rename_lw2_legacy_id_to_source_columns.sql
+M11 旧 ID の改名                20260929102209_rename_remaining_legacy_id_to_source_columns.sql
+M13 user_tags.attribute_id      20260930044959_rename_lw2_legacy_id_on_chapters_and_tags.sql
+M13 user_tags.deleted_at        20261001085757_lw2_keep_deleted_rows.sql
 ```
+
+> 番号（M1〜M13）は節の番号で、当てる順ではない。**当てる順は migration のバージョン順**（goose が並べる）。
+> 上の M13 のタグの表（`20260927105511`）は M12 より前のバージョンなので、M12 より先に当たる。
 
 当て方（btoc-backend を起動していなくても当てられる）:
 
@@ -230,6 +243,8 @@ CREATE TABLE tenant_profile_item_labels (
 >
 > **既存の `settings.profile_fields`（`birth_year` / `birth_month_day` / `phone` の3項目固定）と
 > 二重管理にしない。** どちらを正とするかを決めてから実装する。
+>
+> **固定の印（旧 `*_static_chk`）は現状は移していない**（受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた）。
 
 ---
 
@@ -275,7 +290,7 @@ ALTER TABLE users
     ADD UNIQUE KEY uk_users_member_no (tenant_id, member_no);
 
 -- +goose Down
--- 追加した 24 列と UNIQUE 2 本を落とす（追加の逆順）。
+-- 追加した 26 列と UNIQUE 2 本を落とす（追加の逆順）。
 ```
 
 | 追加列 | 旧の対応 | 畳まない理由 |
@@ -472,6 +487,8 @@ CREATE TABLE attribute_required_courses (
 > **FK も張らない**（張ると移行できない）。オンデマンド移行後に `legacy_lesson_id` を使って埋める。
 >
 > **`group_structure` は作らない。** `parent_id` から再構築できる派生データ。
+>
+> **旧 `group.system_sort_no` は現状は移していない**（受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた。`sort_order` = 旧 `sort_no` とは別の値）。
 >
 > **`tenant_groups` は自己参照 FK を持つ。** テナント単位でまとめて消すときは
 > `ORDER BY depth DESC`（深い方から）でないと FK 違反になる。school-launcher の
@@ -749,4 +766,3 @@ ALTER TABLE user_tags
 ```
 
 > **新のアプリは `deleted_at` をまだ読まない。** 削除済みのタグも一覧と会員に出る（移行の方針として受け入れた）。
-

@@ -9,7 +9,7 @@
 
 本ツールは learningware-kiracari のデータを抽出し、school-launcher のデータモデルに変換して投入します。
 1 テーブル分の「抽出 (extract) → 変換 (transform) → 投入 (load)」を **Step** とし、
-Step を **フェーズ**（`foundation.4` のような `区分.番号`）にまとめて順に流します。
+Step を **フェーズ**（`foundation.2` のような `区分.番号`）にまとめて順に流します。
 
 ```
 learningware-kiracari ──▶ Step（抽出 → 変換 → 投入）──▶ school-launcher
@@ -113,7 +113,7 @@ python -m migrator run         # 移行を実行する
 | オプション | 説明 |
 | --- | --- |
 | `--dry-run` | 実際には書き込まず、実行される SQL と件数のみを表示します |
-| `--phase <区分.番号>` | そのフェーズだけを流します（`--phase foundation.4` / `--phase foundation.1-3`）。`--dry-run` と併用できます |
+| `--phase <区分.番号>` | そのフェーズだけを流します（`--phase foundation.2` / `--phase foundation.1-2`）。`--dry-run` と併用できます |
 | `--section <区分>` | その区分をまるごと流します（`--section foundation`） |
 | `--skip-preflight` | 事前検査を飛ばします（非推奨） |
 | `--config <パス>` | 設定ファイルを指定します（既定: `config.yaml`） |

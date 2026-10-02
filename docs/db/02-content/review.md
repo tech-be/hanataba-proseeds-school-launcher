@@ -71,8 +71,8 @@
 
 | 旧カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|:--:|---|---|
-| テーブル全体 | **テーブル** | 中 | **タグの概念が新環境に無い。** カテゴリ（1講座1件）とは別に、横断的な分類が落ちる | `course_tags` と `course_tag_links` を新設して移す（→ A2）。`tag_name` → `name`、`sort_no` → `sort_order`、旧 ID は `lesson_tag_id` |
-| `lesson_tag.del_chk` / `icon_file_name` | カラム | 低 | タグの削除とアイコン画像 | **現状は移していない**（実装が無い。2026-10-02 の確認）。削除済みのタグも生きているタグと同じ形で入る（ステージングは19件中、削除済み0件） |
+| テーブル全体 | **テーブル** | 中 | **タグの概念が新環境に無い。** カテゴリ（1講座1件）とは別に、横断的な分類が落ちる | `course_tags` と `course_tag_links` を新設して移す（→ A2）。`tag_name` → `name`、`sort_no` → `sort_order`、旧 ID は `lesson_tag_id`。**共有のタグ（`tenant_id = 0`）も、移す講座の割当が指していれば、このテナントのタグとして移す**（2026-10-02。ステージングは共有のタグ3件、それを指す割当9件。以前は外部キーで落ちていた） |
+| `lesson_tag.del_chk` / `icon_file_name` | カラム | 低 | タグの削除とアイコン画像 | **現状は移していない**（実装が無い。2026-10-02 の確認。`del_chk` は移行ツールが読むが使わない）。削除済みのタグも生きているタグと同じ形で入る（ステージングは19件中、削除済み0件） |
 
 **まとめ**: 受け皿が無い列 — / 高 0 件
 
@@ -121,7 +121,7 @@
 
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
-| `unit_type_id` tinyint(4) 0〜6 | `type` varchar(32) + FK → `lesson_types(code)` | 性質 | 中 | `lesson_types` は `video`/`live`/`text` の**3値しかない**。テスト(2)・レポート(4)・講座資料(6) がすべて `text` に畳まれ、**移行後に種別で区別できなくなる** | **`lesson_types` に `quiz` / `assignment` / `document` / `discussion` / `skill_check` を追加する**（→ A20）。畳まない。**見出し(0) だけは `lessons` に入れない**（ETL設計 §5-0）。**7（ディスカッション）・8（スキル診断）は `UnitConstants.php` に定数が無い**が、`ShareController::UNIT_TYPE_DISCUSSION` / `UNIT_TYPE_SKILL` にあり、`DiscussionModel` も `unit_type_id = 7` で引いている正規の種別 |
+| `unit_type_id` tinyint(4) 0〜6 | `type` varchar(32) + FK → `lesson_types(code)` | 性質 | 中 | `lesson_types` は `video`/`live`/`text`/`survey` の**4値しかない**。テスト(2)・レポート(4)・講座資料(6) がすべて `text` に畳まれ、**移行後に種別で区別できなくなる** | **`lesson_types` に `quiz` / `assignment` / `document` / `discussion` / `skill_check` を追加する**（→ A20）。畳まない。**見出し(0) だけは `lessons` に入れない**（ETL設計 §5-0）。**7（ディスカッション）・8（スキル診断）は `UnitConstants.php` に定数が無い**が、`ShareController::UNIT_TYPE_DISCUSSION` / `UNIT_TYPE_SKILL` にあり、`DiscussionModel` も `unit_type_id = 7` で引いている正規の種別 |
 | `sort_no` | `sort_order` | 性質 | 中 | 見出し(type=0) を落とす分、番号が飛ぶ。旧は同じ `sort_no` が並ぶことがあり、`unit_id` 順で決まる | **現状は `sort_no` をそのまま入れている**（採番し直していない。2026-10-02 の確認）。番号が飛び、同じ値も残る |
 | `detail` text **NOT NULL** | `description` text NULL可 | 性質 | 低 | 新環境は本文 HTML を信用しない方針。**旧に HTML が入っていれば、表示が崩れるか XSS になる** | **変換せずそのまま移す。** 同梱ダンプの `unit` 2,533行を調べたところ **HTML は1件も無く、`\r\n` 区切りの平文だった**。改行をそのまま保持し、**表示時にサニタイズする**（元を壊さない）。**本番ダンプで同じ棚卸しをやり直す**（[1-3](migration-spec.md#1-4-本番ダンプ受領後に確認すること)） |
 | `open_datetime` / `close_datetime` | — | **カラム** | **高** | **絶対日時での公開開始・終了を入れる列が無い。** 新は `drip_delay_days`（申込日からの相対日数）しか持たず、「この日から公開」を再現できない | `lessons.open_at` / `close_at` を追加して移す（→ A4）。相対日数（`drip_delay_days`）と併存させ、**両方を見て判定する**ようアプリ側を直す |
@@ -164,8 +164,8 @@
 
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|:--:|---|---|---|
-| `pc_path` varchar(200) | `video_lessons.video_url` varchar(512) | 性質 | 中 | **値が3種類混ざっている。** recademy 2,559行のうち **URL 1,171 / 相対パス 44 / 空 1,344**。相対パスは `/html/contents/<tenant_code>/lesson` からの参照で、そのまま入れても新環境では解決できない | **URL はそのまま移す。** 相対パスは **L9 のファイル移送後に新しい配信先の URL へ書き換える**。空の行は `pmovie_token` 側で配信している動画なので、そちらから組み立てる |
-| `smartphone_path` varchar(200) | — | カラム | 低 | **PC と携帯で配信先を分けている。** 新環境は `video_url` 1本 | 入れる先が無い。**PC 用を採用する**（新環境はレスポンシブで、端末別の配信先を持たない） |
+| `pc_path` varchar(200) | `video_lessons.video_url` varchar(512) | 性質 | 中 | **値が3種類混ざっている。** recademy 2,559行のうち **URL 1,171 / 相対パス 44 / 空 1,344**。相対パスは `/html/contents/<tenant_code>/lesson` からの参照で、そのまま入れても新環境では解決できない | **URL はそのまま移す。** 相対パスは **L9 のファイル移送後に新しい配信先の URL へ書き換える**。空の行は `pmovie_token` 側で配信している動画なので、**`pmovie_token` をそのまま `video_url` に入れる**（URL は組み立てない） |
+| `smartphone_path` varchar(200) | `video_lessons.settings.smartphone_path` | カラム | 低 | **PC と携帯で配信先を分けている。** 新環境は `video_url` 1本 | `video_url` には **PC 用を採用する**（新環境はレスポンシブで、端末別の配信先を持たない）。携帯用は捨てずに `video_lessons.settings.smartphone_path` に残す |
 | `sort_no` | — | カラム | 低 | 1ユニットに複数の配信先を持てる（順序つき） | 新環境は1ユニット1動画。**`sort_no` の最小の行を採用する**（lw2 も `array_shift` で先頭を使っている） |
 
 **まとめ**: 受け皿が無い列 2 / 高 0 件
@@ -412,7 +412,7 @@
 
 ### `enquete_question` → `survey_questions` / `survey_question_options`
 
-`enquete_question` (52列) ／ ETL段 L2 ／ ローカルデータ数 11,179 / C
+`enquete_question` (51列) ／ ETL段 L2 ／ ローカルデータ数 11,179 / C
 
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
@@ -457,7 +457,7 @@
 | `item_ticket_price` | `live_lesson_ticket_requirements.cost` | 性質 | 中 | 1予約あたりの消費枚数。**`cost` には `CHECK (cost >= 1)` がある**ので、`0`（= チケット不要）を入れられない | **`0` の行は `live_lesson_ticket_requirements` に行を作らない**（行が無い = チケット不要）。ステージング実測は 18件中 15件が `0` |
 | `img_file_name` | — | カラム | 低 | ライブの画像が落ちる | L9 でファイルを移送し、A22 の `live_lessons.settings` に URL を入れる。ステージング実測2件 |
 | `facility_id` | — | 性質 | 中 | **教室レッスンの開催場所。** `facility` は集合研修（X01、対象外）のテーブル。ステージング実測は3件とも `facility_id = 1`（施設名「ご自身のパソコン」、住所・TEL・URL すべて空） | **施設名と説明を A22 の `live_lessons.settings` に文字列で残す**（`facility` テーブルごとは移さない）。**本番に住所や地図が要る施設があれば別表の追加が要る**（[migration-spec 1-3](migration-spec.md#1-4-本番ダンプ受領後に確認すること)） |
-| `save_file_name1..3` / `disp_file_name1..3` | — | カラム | 低 | 添付資料3組が落ちる | **ステージング実測0件**。本番で件数を確認し、あれば L9 で移送する |
+| `save_file_name1..3` / `disp_file_name1..3` | `live_lessons.settings.files` | カラム | 低 | 配布ファイル3組が落ちる | **A22 の `live_lessons.settings.files` に移す**（2026-10-02）。`{slot, save_file_name, disp_file_name}` の並びで、空の枠は詰める（表示名が空なら実ファイル名）。**ファイル本体は L9 の移送が要る**。ステージング実測0件。本番で件数を確認する |
 | `public_chk` / `valid_chk` / `send_pc_chk` / `send_mobile_chk` / `sort_no` | `lessons.status` / `sort_order` ほか | カラム | 低 | 外部公開・有効フラグ・メール送信設定が落ちる。`valid_chk` は `lessons.status` に写せるが、**残り4列は受け皿が無い** | `valid_chk` → `status`（有効→`published` / 無効→`draft`）、`sort_no` → `lessons.sort_order`。残りは A22 の `live_lessons.settings` に移す |
 | `del_chk` | `lessons.status = 'deleted'` | 性質 | 中 | 削除済みのライブ（ステージング実測3件）を表す先 | `content_statuses.deleted`（オンデマンドで追加済み）を使う。**`valid_chk` より `del_chk` を優先**する |
 | `regist_user_id` / `update_user_id` | — | カラム | 低 | 登録者・更新者が落ちる | A22 の `live_lessons.settings` に移す |
@@ -603,7 +603,7 @@
 | # | 追加するもの | 旧環境の対応 | 変更が必要な機能 |
 |---|---|---|---|
 | **A1** | `courses.allowed_ip_address` TEXT NULL / `courses.is_used` BOOLEAN NOT NULL DEFAULT TRUE / `courses.settings` JSON NULL | `lesson.allowed_ip_address` / `lesson_is_used` / `lesson` の機能フラグ7列（`open_pc_chk` / `open_smartphone_chk` / `progress_display_chk` / `drill_chk` / `quiz_chk` / `sns_shared_chk` / `inquiry_chk`） | ・IP 制限の判定を受講開始時に入れる<br>・**`is_used` と `status` を混ぜない**（公開状態と運用中かは別の軸）。管理画面で2軸を出す<br>・`settings` の各フラグ（弱点問題集 / ランキング / SNS 共有 / 問い合わせ / 進捗率表示 / デバイス別公開）は**読み出し側が無い**。機能を作るかを個別に決める<br>・**`lesson_system` は設定を持たない**（`lesson_id` / `tenant_id` だけの公開対応表）。表示フレーム・問い合わせ先・動作環境などの列は**現状は移していない**（実装が無い。2026-10-02 の確認） |
-| **A2** | `course_tags` / `course_tag_links` | `lesson_tag`（19行）/ `lesson_lesson_tag`（39行） | ・講座一覧のタグ絞り込み<br>・講座編集画面のタグ入力<br>・**`category` と併存する**（カテゴリは1件、タグは複数） |
+| **A2** | `course_tags` / `course_tag_links` | `lesson_tag`（19行＋割当が指す共有のタグ3行）/ `lesson_lesson_tag`（52行。ReCADemy の講座39行＋共有講座13行） | ・講座一覧のタグ絞り込み<br>・講座編集画面のタグ入力<br>・**`category` と併存する**（カテゴリは1件、タグは複数） |
 | **A3** | `course_categories.image_url` VARCHAR(512) NULL / `course_categories.created_by` CHAR(26) NULL ／ `content_statuses` に `deleted` | `lesson_cate_img_file_name` / `regist_user_id` ／ `lesson.del_chk` / `unit.del_chk` | ・**`image_url`（L9 の移送待ち）と `created_by` は現状どちらも NULL で入る**（`regist_user_id` は読んでいない。2026-10-02 の確認）<br>・カテゴリ画像の表示（**`icon` とは別物**。アイコン識別子に流用しない）<br>・**`deleted` を一覧から外す**判定（`is_visible=FALSE` / `is_editable=FALSE` で入れてある） |
 | **A21** | 代理講師の `users` 行（**DDL ではなくデータ**） | 該当なし（lw2 に講座単位の講師が無い） | ・**`courses.instructor_id` は NOT NULL のまま。** 移行ツールが1行作って全講座に割り当てる<br>・`password_hash` を空にして**ログインできない行**にする<br>・**対応表を受け取ったら付け替え、代理講師のままの講座が0件になったことを確認する** |
 | **A27** | `courses.legacy_lesson_id` INT NULL ＋ UNIQUE `uk_courses_legacy (tenant_id, legacy_lesson_id)` / `lessons.unit_id` ＋ `uk_lessons_legacy` | `lesson.lesson_id` / `unit.unit_id` | ・**移行ツールが旧 ID で親子を突き合わせるのに要る**（無いと dry-run が止まる）<br>・cutover 後の問い合わせ調査で「旧画面のこの講座」を引く手段になる<br>・**ライブ由来の `lessons` は NULL のまま**（採番系が違うので衝突する。→ A22） |
@@ -646,7 +646,7 @@
 
 | # | 追加するもの | 旧環境の対応 | 変更が必要な機能 |
 |---|---|---|---|
-| **A22** | `live_lessons.live_lesson_id` ＋ UNIQUE `uk_live_lessons_legacy` / `live_lessons.settings` JSON NULL | `live_lesson.live_lesson_id` ほか（予約上限・詳細 HTML・公開設定・画像・元の講師・種別・施設） | ・**`lessons.unit_id` には入れない。** オンデマンドが `unit.unit_id` で使っており、実測18件中11件が衝突する<br>・1人あたりの予約上限（`reserve_max_count`）の判定は**新環境に無い**。機能を作るかを決める<br>・教室レッスンの会場（`facility`）は文字列で残すだけ。住所や地図が要るなら別表が要る |
+| **A22** | `live_lessons.live_lesson_id` ＋ UNIQUE `uk_live_lessons_legacy` / `live_lessons.settings` JSON NULL | `live_lesson.live_lesson_id` ほか（予約上限・詳細 HTML・公開設定・画像・配布ファイル・元の講師・種別・施設） | ・**`lessons.unit_id` には入れない。** オンデマンドが `unit.unit_id` で使っており、実測18件中11件が衝突する<br>・1人あたりの予約上限（`reserve_max_count`）の判定は**新環境に無い**。機能を作るかを決める<br>・教室レッスンの会場（`facility`）は文字列で残すだけ。住所や地図が要るなら別表が要る |
 | **A23** | `live_lesson_categories` / `live_lesson_category_links` | `live_lesson_cate`（5件）/ `live_lesson_lesson_cate`（6件） | ・**ライブとカテゴリは多対多**（`live_lesson.live_lesson_cate_id` は使われていない）<br>・ライブ一覧のカテゴリ絞り込み |
 | **A24** | `live_lesson_group_targets`（`lesson_id` / `group_id`） | `live_lesson_group`（実測0件） | ・グループ単位の公開判定。参照先のグループは基盤 A10 で移行済み<br>・**実測0件なので、本番ダンプで件数を確認してから実装する** |
 

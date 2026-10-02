@@ -7,9 +7,9 @@
 
   | migration | 中身 |
   |---|---|
-  | `20260924054151_lw2_enrollment_additions.sql` | 0〜7（`feat/lw2-enrollment-schema` で作り、`hanataba_dev` に PR #139 でマージ済み） |
-  | `20260930052453_lw2_support_additions.sql`（`feat/lw2-support-schema` の上で未追跡） | 2 の `submission_feedback_files`（05 の migration に同居） |
-  | **`20261001085757_lw2_keep_deleted_rows.sql`**（2026-10-01。`feat/lw2-support-schema` の上で未追跡） | 8 `survey_responses.deleted_at` |
+  | `20260924054151_lw2_enrollment_additions.sql` | 0〜7（`feat/lw2-enrollment-schema` で作り、`hanataba_dev` に PR #135 でマージ済み） |
+  | `20260930052453_lw2_support_additions.sql`（`feat/lw2-support-schema` にコミット・push 済み） | 2 の `submission_feedback_files`（05 の migration に同居） |
+  | `20261001085757_lw2_keep_deleted_rows.sql`（2026-10-01。`feat/lw2-support-schema` にコミット・push 済み） | 8 `survey_responses.deleted_at` |
 - **当てる時期**: **移行直前**（[migration-spec](migration-spec.md) のフェーズ0）
 - **確認**: `python -m migrator doctor` — この区分が未適用なら `[TODO]` で出る
 
@@ -46,6 +46,7 @@
 5  ライブレビュー              ← lessons / users を参照
 6  （欠番）バッジの定義 — 取り下げ
 7  修了証への列追加
+8  削除済みの回答を移すための列
 ```
 
 ---
@@ -75,7 +76,7 @@ ALTER TABLE lesson_progress
 
 > **`cancel_chk` を `status = 'canceled'` に写さない。** 名前に反してキャンセルフラグではない。
 > `PaymentAuthorityModel` の INSERT 5か所すべてが**作成時に定数を書き込んでおり、
-> UPDATE する箇所が存在しない**。実測の 1=3,064 / 0=620 は購入経路の違いを表す。
+> UPDATE する箇所が存在しない**。実測の 1=3,116 / 0=3,850（商品に紐づく行に限ると 1=3,064 / 0=620）は購入経路の違いを表す。
 > **実質の取り消しは `del_chk`**（実測 828件）。
 
 > **無期限は `expires_at = NULL` で表す。** ただし「無期限」と「未設定」が区別できなくなるので、
@@ -98,8 +99,8 @@ ALTER TABLE lesson_progress
 > `Incorrect datetime value` になる**。無期限（NULL）に寄せ、元の日付を `settings` に残す。
 > 事前検査にも `TIMESTAMP` の範囲チェックを足してある（`_datetime_range`）。
 
-> **母集合は購入による受講権限**（ステージング 4,289組、2026-09-24 決定）。学習実績（33,912組）との差は
-> 93% が無料講座で、旧環境でも権限行を持たないのが正常。
+> **母集合は購入による受講権限**（ステージング 4,289組、2026-09-24 決定）。学習実績 33,912組のうち 31,445組は
+> 権限行を持たない。無料講座は旧環境でも権限行を持たないのが正常（権限が要るのは 235講座中 71件だけ）。
 
 ---
 
@@ -181,7 +182,7 @@ ALTER TABLE submission_feedbacks
 
 > **`submission_feedbacks.object_key`（1本）には入れない。** 同じファイルを2か所に持たない。
 > 添削されていない提出にファイルがあれば、添削の行が無いので付けられず「移さない行」の一覧に出す。
-> 実測で2本目以降を使う提出は 4,963件中 2件。
+> ステージング実測で添削のファイルがある提出は 228件中 5件、2本目以降を使うものは0件。
 
 > **`submissions.submitted_at` の NOT NULL は外さない**（緩めない方針）。
 > 未提出（旧 `submit_date` が NULL）の課題は移らない。件数を確認して合意を取る。
@@ -204,9 +205,10 @@ ALTER TABLE survey_responses
 ```
 
 旧 `enquete_answer.entity_type_id` は 1=お知らせ / 2=ユニット / 3=レポート を指すが、
-**新環境はユニットに紐づく回答しか受けられない**（`survey_responses.lesson_id` が
+**`survey_responses` はユニットに紐づく回答しか受けられない**（`survey_responses.lesson_id` が
 NOT NULL ＋ FK `survey_lessons`）。`entity_type` / `entity_id` を足しても**この列だけでは
-1 と 3 は入らない**ので、いまは `entity_type = 'lesson'` 固定で type 2 だけ移している。
+1 と 3 は入らない**ので、`survey_responses` には `entity_type = 'lesson'` 固定で type 2 だけ移している。
+**1 と 3 は現状は移していない**（受け皿が無い。2026-10-02 に受け皿 `survey_entity_responses` を検討したが取り下げた）。
 
 > **1 と 3 の行き先は受け皿の設計から決め直す。** とくに type 3 は
 > **アンケートではなく課題の設問への回答**（`enquete_type_id = 3`）で、

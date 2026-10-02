@@ -11,7 +11,7 @@
 - **移行ツールが書き込むのは 24 テーブル**（`migrator/phases/registry.py` の `foundation.1` マスター / `foundation.2` ユーザ。LINE の `line_links` は `support.1` で入れるので数えていない）。ETL設計 §4 は `users` / `login_history` / `user_preferences` の3つしか想定していないが、**受け皿が無いものは追加して受ける**方針のため対象が広い。スキーマ追加（A1〜A24）は school-launcher 側の migration で入れる（[マイグレーション対象](schema-additions.md)）
 - **NOT NULL / UNIQUE / 外部キーに当たる行は移さない。** 移行ツールは値を作り替えず、`out/not-migrated.csv` に「誰が・なぜ」を出すだけ。直すのは**移行の外の暫定対応**（`fixups`）で、そのあと再実行すれば入る（[移行仕様 3.3](migration-spec.md#33-投入load)）
 - **調査時点では旧32件のうち新側に受け皿があるのは 4件**（`tenant` / `role_master` / `user` / `user_login_log`）だった。**いまは追加した受け皿で受けており**、受け皿を持たないのは移行の対象外と、[現状は移していないもの](#現状は移していないもの実装が無い)だけ
-- **[移行の原則](../00-template/review.md#移行の原則)に従う。** 対象外区分のデータ以外はすべて移行し、受け皿が無ければ追加し、元の構造を維持する。追加するテーブル・カラムと、それに伴って直す機能は [新環境に追加するテーブル・カラム](#新環境に追加するテーブルカラム)（**A1〜A23**。うち A17 は取り消し）にまとめた。**移行しないのは例外**で、同じ節の[移行の対象外](#移行の対象外移行できないもの--移行しないもの)に理由つきで 16 件（移行できないもの 7 件 / 方針として移行しないもの 9 件）ある。**決定ではなく実装が無いために移っていないもの**は、別に[現状は移していないもの](#現状は移していないもの実装が無い)に挙げた
+- **[移行の原則](../00-template/review.md#移行の原則)に従う。** 対象外区分のデータ以外はすべて移行し、受け皿が無ければ追加し、元の構造を維持する。追加するテーブル・カラムと、それに伴って直す機能は [新環境に追加するテーブル・カラム](#新環境に追加するテーブルカラム)（**A1〜A24**。うち A17 は取り消し）にまとめた。**移行しないのは例外**で、同じ節の[移行の対象外](#移行の対象外移行できないもの--移行しないもの)に理由つきで 16 件（移行できないもの 7 件 / 方針として移行しないもの 9 件）ある。**決定ではなく実装が無いために移っていないもの**は、別に[現状は移していないもの](#現状は移していないもの実装が無い)に挙げた
 - **グループの階層は `group.parent_group_id` が正本**（`group_structure` は派生データなので移行しない）。SSO・ログイン時間制限・2FA は**移行と同時に受け皿を作る**（2FA は受け皿だけで、移す行は無い）
 - **純ログは移行しない。** `user_login_log`（1,326,645行）/ `user_login_log_monthly` / `twostepverification_log` の3件が該当し、[移行の対象外](#移行の対象外移行できないもの--移行しないもの)に入れてある。**`user_login_chk_log` も移行しない** — 名前のとおりバッチが作るログで、**ステージングの lw2 には存在しない**（受け皿も作らない）
 - **U1 会員基本情報は全列を移す。** 列を落とさず、複数列を1列に畳まない（`tel` / `mobile_tel`、`user_img_file_name` の2枚、`valid_chk` / `del_chk` など）
@@ -59,7 +59,7 @@
 | — | `db_type` varchar(32) NOT NULL | テーブル | 低 | 旧に対応列が無い NOT NULL 列。lw2 に共有 DB / 専用 DB の区別が無い | `shared` を入れる（`tenant_db_types` にシード済みで、列の既定値も `shared`） |
 | — | `plan_id` char(26) NULL | テーブル | 低 | 旧に対応列が無い。FK 先の `platform_plans` に行を入れるのは**デモ用の `cmd/seed` だけ**なので、移行先は空のまま | `NULL` で作る。プラットフォームのプラン運用を始めるときに `platform_plans` を用意して設定する |
 | — | `custom_domain` varchar(255) NULL | テーブル | 低 | 旧に独自ドメイン運用が無く、移行元のデータが無い | `NULL` で作る（`<slug>.<ベースドメイン>` で解決される）。必要になったら cutover 後に画面（`PATCH /tenant/custom-domain`）から設定する |
-| — | `settings` json NULL | テーブル | 低 | 旧に対応列が無い。読まれる7キー（下表）のいずれにも lw2 側の移行元が無い | **lw2 の値を独自キーで入れる**（`{}` ではない）: `legacy_site_id` / `service` / `features`（`site`。A3）、`lw2_payment`（`payment_infomation` / `receipt_setting`。課金 P13）、`lw2_config` / `lw2_account` / `lw2_login`（`data_type` 順のリスト）/ `lw2_registration` / `lw2_top_parts` / `lw2_functions`（[テナントの設定](#テナントの設定2026-09-30-に仕分け)）。旧に行が無いキーは作らない。**どれも新のアプリは読まない**。読まれる7キー（`branding` など）は入れないので、cutover 後に画面から設定する |
+| — | `settings` json NULL | テーブル | 低 | 旧に対応列が無い。読まれる7キー（下表）のいずれにも lw2 側の移行元が無い | **lw2 の値を独自キーで入れる**（`{}` ではない）: `legacy_site_id` / `service` / `features`（`site`。A3）、`lw2_payment`（`payment_infomation` / `receipt_setting`。課金 P13）、`lw2_config` / `lw2_account` / `lw2_login`（`data_type` 順のリスト）/ `lw2_registration` / `lw2_top_parts` / `lw2_live`（`config_live_lesson`。2026-10-02）/ `lw2_functions`（[テナントの設定](#テナントの設定2026-09-30-に仕分け)）。旧に行が無いキーは作らない。**どれも新のアプリは読まない**。読まれる7キー（`branding` など）は入れないので、cutover 後に画面から設定する |
 
 #### 移行時の注意事項
 
@@ -220,10 +220,10 @@
 | 旧 `role_id` | 旧 `role_name` | 表示名 | 新 `users.role` | 対応 |
 |---:|---|---|---|---|
 | 1 | `SYSTEM_MANAGER` | システム管理者 | `system_admin` | **追加**。テナント内の全権。`platform_admin` は付けない |
-| 2 | `TOTAL_MANAGER` | 全体管理者 | `tenant_admin` | 既存（実測 31名） |
+| 2 | `TOTAL_MANAGER` | 全体管理者 | `tenant_admin` | 既存（ステージング実測 78名） |
 | 3 | `FACILITY_MANAGER` | 運営管理者 | `facility_manager` | **追加**（**`del_chk=1` の削除済み**）。`AuthModel::$is_manager` が 1/2/3 を管理者扱い |
 | 4 | `COMPANY_MANAGER` | 求人企業 | `company_manager` | **追加**。就職支援（S02 企業（未コミット））と紐づく |
-| 5 | `INSTRUCTOR_MANAGER` | 講座管理者 | `instructor` | 既存（実測 18名） |
+| 5 | `INSTRUCTOR` | 講座管理者 | `instructor` | 既存（ステージング実測 18名） |
 | 6 | `GROUP_MANAGER` | グループ管理者 | `group_manager` | **追加**。A10 のグループと紐づく（`role_index` は 4） |
 | 7 | `STUDENT` | 受講者 | `learner` | 既存 |
 | 8 | `SUPPORTER` | サポーター | `supporter` | **追加**（**`del_chk=1` の削除済み**）。2019年に「現在使用されていない」として `role_id` を 8 に移した経緯がある |
@@ -286,7 +286,7 @@
 
 `auth_methods` (10列, マスタ)
 
-**旧に対応テーブルなし。** migration で投入する。`login_history.method` の取りうる値で `password`/`google`/`line`/`passkey`/`refresh` の5値。旧 `user_login_log` に認証方式の列が無いので、移行時は既定の `password` を入れる。
+**旧に対応テーブルなし。** migration で投入する。`login_history.method` の取りうる値で `password`/`google`/`line`/`passkey`/`refresh` の5値。旧 `user_login_log` に認証方式の列は無いが、**ログイン履歴は移行しない**（[`user_login_log`](#user_login_log--login_history)）ので、`login_history.method` に値を入れる場面は無い（**該当なし**）。
 
 > **SNS ログインと SSO の値を追加する。** lw2 は `sns_setting`（Facebook / Twitter / Instagram）と `sso_config`（SAML）を持つので、この5値では足りない（→ [追加一覧](#新環境に追加するテーブルカラム) A6 / A7）。
 
@@ -298,7 +298,7 @@
 
 | 旧カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|:--:|---|---|
-| `user_login_log.user_login_result` tinyint(4) | 性質 | 中 | **数値と8値の対応表が必要。** lw2 の定数を確認しないと変換規則が書けない | lw2 の定数定義から数値→8値の対応表を作り、ETL の変換規則に落とす |
+| `user_login_log.user_login_result` tinyint(4) | 性質 | — | 数値と8値の対応表が要る**はずだった**が、**ログイン履歴は移行しない**（純ログ）ので変換は発生しない | **該当なし。** 対応表は作らない（`login_history` は cutover 後の認証から記録を始める） |
 
 ---
 
@@ -352,7 +352,7 @@
 
 | 旧カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|:--:|---|---|
-| `item_type` / `item_no` / `field_name` ＋ `show_chk` / `edit_chk` / `required_chk` / `open_chk` ＋ 各 `*_static_chk` | **テーブル** | **高** | **カスタムプロフィール項目が定義ごと落ちる。** 表示・編集・入力必須・他ユーザーへの公開を項目単位で制御する仕組みで、新環境に相当機能が無い | `tenant_profile_items` と `user_profile_values` を新設して項目定義と値を移す（→ [追加一覧](#新環境に追加するテーブルカラム) A9）。**`show_chk` で絞らず全項目を移す**（`show_chk` は `show_flag` に残す。`config.profile_items`） |
+| `item_type` / `item_no` / `field_name` ＋ `show_chk` / `edit_chk` / `required_chk` / `open_chk` ＋ 各 `*_static_chk` | **テーブル** | **高** | **カスタムプロフィール項目が定義ごと落ちる。** 表示・編集・入力必須・他ユーザーへの公開を項目単位で制御する仕組みで、新環境に相当機能が無い | `tenant_profile_items` と `user_profile_values` を新設して項目定義と値を移す（→ [追加一覧](#新環境に追加するテーブルカラム) A9）。**`show_chk` で絞らず全項目を移す**（`show_chk` は `show_flag` に残す。`config.profile_items`）。**固定の印 `show_static_chk` / `edit_static_chk` / `required_static_chk` / `open_static_chk` は[現状は移していない](#現状は移していないもの実装が無い)**（受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた。ステージングは 49項目中 13項目に印がある） |
 
 **まとめ**: 受け皿が無い列 16 / **高 1 件**
 
@@ -407,7 +407,7 @@
 
 | 旧カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|:--:|---|---|
-| テーブル全体 | **テーブル** | **高** | **グループの定義が丸ごと落ちる。** `group_name` / `group_code` / `memo` / `sort_no` すべて受け皿なし | `tenant_groups` を新設して定義を移す（→ [追加一覧](#新環境に追加するテーブルカラム) A10）。階層は `parent_id`（旧 `parent_group_id`）で持つ |
+| テーブル全体 | **テーブル** | **高** | **グループの定義が丸ごと落ちる。** `group_name` / `group_code` / `memo` / `sort_no` すべて受け皿なし | `tenant_groups` を新設して定義を移す（→ [追加一覧](#新環境に追加するテーブルカラム) A10）。階層は `parent_id`（旧 `parent_group_id`）で持つ。**`system_sort_no`（旧システムが階層の並びに使っていた番号。管理者が付ける `sort_no` とは別）は[現状は移していない](#現状は移していないもの実装が無い)**（受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた。ステージングは28行すべてに値） |
 | `parent_group_id` + `hierarchy` | **性質** | **高** | **階層を2通りで持っている。** `group.parent_group_id`（親1つ）と `group_structure`（祖先→子孫の全組み合わせ）。`hierarchy` は階層の深さ | **`parent_group_id` が正本。** `GroupModel::makeGroupStructure()` が `parent_group_id` を遡って `group_structure` を全消し＋作り直ししており、**`group_structure` は派生データ**（[対象外 B](#移行の対象外移行できないもの--移行しないもの)）。A10 の `tenant_groups` は `parent_id` と `depth` を持てばよい |
 
 **まとめ**: 受け皿が無い列 12 / **高 2 件**
@@ -463,11 +463,12 @@
 
 > ロール値（`role_id` → `users.role`）の写像は [`role_master` → `user_roles`](#role_master--user_roles) に置いている。
 >
-> **この節は全列を移す。列を落とさず、複数列を1列に畳まない。** 新環境の `users` は17列しか無いので、**差分はすべて列追加かサイドテーブルで受ける**（A12 / A13 / A14 / A20）。下の[全列の行き先](#全列の行き先)に90列すべての対応を書いた。
+> **この節は全列を移す。列を落とさず、複数列を1列に畳まない。** 新環境の `users` は17列しか無いので、**差分はすべて列追加かサイドテーブルで受ける**（A12 / A13 / A14 / A20）。下の[全列の行き先](#全列の行き先)に95列すべての対応を書いた。
 
 #### 全列の行き先
 
-列は `lw2.sql`（同梱ダンプ、2019-08-28 時点）の `user` 90列。**本番はここに `nationality` / `foreign_*` / `line_id` / `line_entry_chk` / `personal_record_chk` / `career_counselor_chk` / `scout_display_type` などが加わって95列**なので、ダンプ受領後に差分を確認する。
+列は `lw2.sql`（同梱ダンプ、2019-08-28 時点）の `user` 90列に、**ステージング（2026-09-18 取得）で増えていた5列**（`line_id` / `new_skill_user_chk` / `live_lesson_preview_icon` / `sendmail_bbs_comment_pc_chk` / `sendmail_bbs_comment_mobile_chk`）を足した95列。本番ダンプ受領後に差分を確認する。
+**国籍・海外住所（`nationality` / `foreign_*`）は `user` の列ではなく `user_nationality_info`**、`line_entry_chk` / `personal_record_chk` / `career_counselor_chk` は **`user_attached_info`**、`scout_display_type` は **`user_personal_no`** にある（それぞれ下の節）。
 
 | 旧カラム | 行き先 | 備考 |
 |---|---|---|
@@ -502,6 +503,9 @@
 | `regist_date` / `update_date` | `users.created_at` / `updated_at` | |
 | `education` / `employment_status` / `job_category` / `desired_job_type` / `desired_job_location` / `desired_employment_status` / `job_career_*` / `qualification` | career DB の `learner_career_profiles` | **別DB。** 就職支援（未コミット） S05 |
 | `new_user_chk` | **`users.is_new`（追加）** | 新規会員バッジの表示に使っていたかを確認する |
+| `new_skill_user_chk` | — | **現状は移していない**（受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた）。ステージングは全員 NULL |
+| `live_lesson_preview_icon` | — | **現状は移していない**（受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた）。ステージングは3名に値 |
+| `line_id` | `line_links`（`support.1`） | 下表の `line_id` の行 |
 | `scout_count` / `disp_name_chk` / `cashback_chk` | career DB 側 | スカウト・Like・キャッシュバックは就職支援の機能 |
 | `company_id` | career DB の `companies` | S02 |
 
@@ -520,7 +524,7 @@
 | `entry_date` / `limit_date` (date) | `login_start_date` / `login_end_date` **（追加）** | 性質 | 中 | **ログイン開始日・終了日を入れる列が無い。** 新は `status` しか無いので、期限切れを `inactive` に畳むと**「いつからいつまで」が消え、期限が来ても自動で切り替わらない** | **`users` に `login_start_date` / `login_end_date`（date）を追加して2列とも移す**（→ [追加一覧](#新環境に追加するテーブルカラム) A20）。`status` は現時点の判定結果として別に持ち、**期限の判定はこの2列で行う** |
 | `del_chk` / `valid_chk` | `status` | 性質 | 中 | **2つのフラグを `status` 1列に畳むため、`valid_chk=0`（無効）と `del_chk=1`（削除）の組み合わせが区別できなくなる**（両方立っている行の情報が落ちる） | `status` の4値へ振り分けたうえで、**`users` に `is_valid` を追加して `valid_chk` を素のまま残す**（→ [追加一覧](#新環境に追加するテーブルカラム) A20）。`del_chk=1` は `status='deleted'`、`valid_chk=0` は `status='inactive'` に対応させ、**両方立っている行は `deleted` を優先**する |
 | `user_img_file_name` / `user_img_file_name1` | `avatar_url` varchar(512) | 型 | 低 | lw2 は画像列が2本ある（`user_img_file_name` / `user_img_file_name1`）。**プロフィール画像は移行対象外**と決めたので、列は要るがデータは入れない | **例外: プロフィール画像のデータは移行しない**（運営の判断）。列は既存の `avatar_url` をそのまま使い、**L9 のファイル移送からも外す**。2枚目の受け皿は作らない。cutover 後は空で始まり、会員が登録し直す |
-| `*_open_chk` 8列 / `sendmail_*_chk` 6列 / `is_lockout` 系 3列 / `recent_login_date` 系 3列 ほか | — | カラム | 中 | **公開制限・通知受取・ロックアウト状態・最終ログインを入れる列が無い**（計20列前後）。通知受取は新 `notification_optouts` で**極性が反転**する。さらに **`notification_optouts` は `kind` 1列で PC / 携帯の区別が無く、`email_kinds` の13種別にもお知らせ・スカウト・足あと・掲示板コメントが無い** | **全列を移す。** 公開制限は `user_field_visibility` を新設し、`user` の `*_open_chk` 6列を**短いコード（`profile` / `name` / `address` / `birthday` / `diary` / `lesson`）の `field_code`** にして移す（→ [追加一覧](#新環境に追加するテーブルカラム) A13）。ロックアウト3列・最終ログイン3列は `users` に同じ粒度で追加（A14）。通知受取は `email_kinds` に不足種別を追加し、`notification_optouts` に `channel` を足したうえで極性を反転して移す（A21） |
+| `*_open_chk` 6列 / 通知受取の7列（`sendmail_*_chk` 5列・`notify_footprint_*_chk` 2列） / `is_lockout` 系 3列 / `recent_login_date` 系 3列 | — | カラム | 中 | **公開制限・通知受取・ロックアウト状態・最終ログインを入れる列が無い**（計19列）。通知受取は新 `notification_optouts` で**極性が反転**する。さらに **`notification_optouts` は `kind` 1列で PC / 携帯の区別が無く、`email_kinds` の13種別にもお知らせ・スカウト・足あと・掲示板コメントが無い** | **全列を移す。** 公開制限は `user_field_visibility` を新設し、`user` の `*_open_chk` 6列を**短いコード（`profile` / `name` / `address` / `birthday` / `diary` / `lesson`）の `field_code`** にして移す（→ [追加一覧](#新環境に追加するテーブルカラム) A13）。ロックアウト3列・最終ログイン3列は `users` に同じ粒度で追加（A14）。通知受取は `email_kinds` に不足種別を追加し、`notification_optouts` に `channel` を足したうえで極性を反転して移す（A21）。**移しているのは7列のうち5列**（`sendmail_pc_chk` / `sendmail_mobile_chk` / `sendmail_scout_chk` / `notify_footprint_pc_chk` / `notify_footprint_mobile_chk`）で、`sendmail_bbs_comment_pc_chk` / `_mobile_chk` の2列は[現状は移していない](#現状は移していないもの実装が無い) |
 | `line_id` varchar(100) | `line_links` | テーブル | 中 | **LINE 公式アカウントは継続すると決まった**ので移行対象。`line_links.line_user_id` は Messaging API の userId（`U` で始まる33文字）で、**lw2 の `line_id` が別プロバイダー発行だと値が一致せず push が届かない**。友だち状態に相当する列も lw2 に無い | ETL で `line_links` を作る（`user_id` + `line_user_id` + `is_friend` + `linked_at`）。**移行前に `line_id` が `U` 始まり33文字かを検査**し、形式が違うものは移さず一覧を運営に渡す。`is_friend` は `TRUE` で入れ、**初回 push の 403 で落とす**運用にする |
 | `employment_status` / `job_category` / `desired_job_*` / `job_career_*` / `education` / `qualification` | career:`learner_career_profiles` | テーブル | 中 | **別DB（career）へ行く。** 就職支援（未コミット） S05 を参照 | career-backend の移行時期（Wave 4 / Step 2）が決まってから着手する |
 | `company_id` | career:`companies` | テーブル | 低 | 就職支援（未コミット） S02 を参照 | 同上。career-backend 側で `companies` を作ってから紐付ける |
@@ -581,7 +585,7 @@
 | 旧カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|:--:|---|---|
 | `personal_no` int(11) / `regist_no` int(11) | **テーブル** | **中** | **会員の一意 ID が落ちる。** 新環境で会員を外部から指すキーは `external_user_links.external_id`（= lw2 の `user_id`）であって `personal_no` ではない。**会員向けの画面・帳票・外部連携でこの番号を見せていたなら、移行後に同じ番号を提示できなくなる。** 用途を運用に確認し、必要なら `external_user_links` を種別違い（`external_system='lw2_personal_no'` など）でもう1行持つか、CSV で運営に渡す | `personal_no` は `users.member_no` を追加して移す（→ [追加一覧](#新環境に追加するテーブルカラム) A12）。**`regist_no` は現状は移していない**（実装が無い。2026-10-02 の確認。ステージングは 3,155名全員に値がある）。外部連携のキーは従来どおり `external_user_links.external_id`（= lw2 の `user_id`）を使う |
-| `scout_display_type` | 性質 | 中 | スカウト画面での名前表示設定。**就職支援（S03）側の設定がこのテーブルに入っている**ので、`personal_no` がスカウト時に実名の代わりに出す匿名 ID だった可能性がある | 就職支援（S03 スカウト）側の受け皿に移す。**用途確認は `personal_no` と併せて行う**（就職支援（未コミット） を参照） |
+| `scout_display_type` | 性質 | 中 | スカウト画面での名前表示設定。**就職支援（S03）側の設定がこのテーブルに入っている**ので、`personal_no` がスカウト時に実名の代わりに出す匿名 ID だった可能性がある | **現状は移していない**（受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた）。ステージングは `0` 3,154名 / `2` 1名。就職支援（S03 スカウト）側でどう使うかは、**用途確認を `personal_no` と併せて行う**（就職支援（未コミット） を参照） |
 
 **まとめ**: 受け皿が無い列 6 / 高 0 件。**機微情報ではないので廃棄方針の議論は不要**
 
@@ -647,7 +651,7 @@
 |---|---|---|:--:|---|---|
 | `user_id` int(11) **NULL可** | `user_id` char(26) **NOT NULL** + FK → `users` | **型** | **高** | **ログイン失敗でユーザーが特定できない行が1行も入らない。** `auth_outcomes` に `user_not_found` があるのに受け皿が無いという矛盾 | 移行では対応不要（ログを移さないため）。ただし**新環境側の問題として `user_id` を NULL 可にする**（→ [追加一覧](#新環境に追加するテーブルカラム) A16）。`auth_outcomes` に `user_not_found` がある以上、**失敗ログを記録できない設計は cutover 後に効く** |
 | `input_password` varchar(200) | — | **性質** | **高** | **入力パスワードを保存している列。** 新に受け皿が無いのは正しい。**移行してはならず、抽出クエリでも SELECT しないこと** | **例外: 移行しない。** **抽出クエリでこの列を SELECT しない**ようにし、レビューで確認する |
-| `user_login_result` tinyint(4) | `outcome` varchar(32) + FK → `auth_outcomes` | 性質 | 中 | 8値との対応表が要る（[なし → `auth_outcomes`](#なし--auth_outcomes) を参照） | M3 `auth_outcomes` で作る対応表を使って変換する |
+| `user_login_result` tinyint(4) | `outcome` varchar(32) + FK → `auth_outcomes` | 性質 | 中 | 8値との対応表が要る（[なし → `auth_outcomes`](#なし--auth_outcomes) を参照） | 移行では対応不要（ログを移さないため。対応表も作らない） |
 | `web_user_agent` text | `user_agent` varchar(512) NOT NULL DEFAULT '' | 型 | 中 | **text → varchar(512) で切り捨て** | 抽出時に512文字超の件数を検査し、切り捨てる方針を決める |
 | `ip_address` varchar(20) NULL可 | `ip_address` varchar(45) NOT NULL | 型 | 低 | 桁は拡大（IPv6 対応）。NULL は '' 補完 | ETL で NULL を空文字に補完する |
 | `user_login_time` datetime | `created_at` **timestamp** | 型 | 中 | **`timestamp` 列なのでセッションTZで UTC 変換される。** JST naive を素で書くと9時間ずれる | ETL で JST naive → UTC に変換してから書く。`timestamp` 列であることを列ごとに判定する仕組みに載せる |
@@ -910,6 +914,11 @@
 | `system_admin_role` | 読む実装が無い | 0行 |
 | `attribute.kiracari_user_chk` | `user_tags` に受け皿が無い | 7件中1件が `1` |
 | `instructor_assignments.target_id`（`scope='course'`） | NULL のまま。講座の移行後に埋める Step が無い（`legacy_target_id` に旧 `lesson_id` は残る） | — |
+| `profile_item.show_static_chk` / `edit_static_chk` / `required_static_chk` / `open_static_chk` | 受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた | 49項目中 13項目にいずれかの印 |
+| `group.system_sort_no` | 受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた | 28行すべてに値 |
+| `user.new_skill_user_chk` | 受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた | 全員 NULL |
+| `user.live_lesson_preview_icon` | 受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた | 3名に値 |
+| `user_personal_no.scout_display_type` | 受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた | `2` が1名（残りは `0`） |
 
 ---
 
@@ -944,7 +953,7 @@
 
 ## テナントの設定（2026-09-30 に仕分け）
 
-どの区分にも仕分けていなかったテナントの設定6表を、基盤として `tenants.settings` に入れる（新に対応する列が無いため）。
+どの区分にも仕分けていなかったテナントの設定を、基盤として `tenants.settings` に入れる（新に対応する列が無いため）。**旧の9表を7キーに入れる**（`function_*` の3表は `lw2_functions` 1キーにまとめる。`config_live_lesson` → `lw2_live` は 2026-10-02 に足した）。読むのは `migrator/steps/tenant.py` の `_tenant_settings`。
 
 | 旧 | `tenants.settings` のキー | 備考 |
 |---|---|---|
@@ -953,5 +962,6 @@
 | `login_setting` | `lw2_login` | ログイン画面の文言・ログイン後のお知らせ |
 | `registration_setting` | `lw2_registration` | 会員登録画面の文言・画像 |
 | `top_parts_setting` | `lw2_top_parts` | トップページの部品の並び |
+| `config_live_lesson` | `lw2_live` | ライブの機能の有効・無効（`valid_chk`）とキャンセルの締切（`ticket_cancel_*`）。行全体を旧の値のまま（2026-10-02）。締切は開催回の `cancel_closes_at` の計算にも使う（[受講の突き合わせ](../03-enrollment/review.md#config_live_lesson--live_lesson_occurrencescancel_closes_at)）。新は読まない |
 | `function_default_tenant` / `function_admin_tenant` / `function_admin_role` | `lw2_functions` | メニューと管理画面の機能ごとの権限 |
 

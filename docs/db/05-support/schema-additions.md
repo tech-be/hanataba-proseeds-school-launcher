@@ -3,10 +3,10 @@
 [突き合わせ](review.md#新環境に追加するテーブルカラム) の追加一覧を、**school-launcher に当てる migration の単位**に落としたもの。
 
 - **当てる先**: `school-launcher/btoc-backend/db/migrations/`（goose 形式。雛形は `make migrate-create`）
-- **実物**: `20260930052453_lw2_support_additions.sql`（school-launcher の `feat/lw2-support-schema` の上で未追跡。2026-10-02 時点）。
+- **実物**: `20260930052453_lw2_support_additions.sql`（school-launcher の `feat/lw2-support-schema` にコミット・push 済み、`hanataba_dev` には未マージ。2026-10-02 時点）。
   1 と 2 の表をまとめて足す。**受講（3）の `submission_feedback_files` も同じ migration に入れてある**
   （[受講 schema-additions 2](../03-enrollment/schema-additions.md#2-課題提出の新テーブルと列追加)）
-- **あわせて当てる**: **`20261001085757_lw2_keep_deleted_rows.sql`**（2026-10-01。`feat/lw2-support-schema` の上で未追跡） の `admin_notes.deleted_at`（下の 3）
+- **あわせて当てる**: **`20261001085757_lw2_keep_deleted_rows.sql`**（2026-10-01。同じブランチにコミット・push 済み） の `admin_notes.deleted_at`（下の 3）
 - **当てる時期**: **移行直前**（[migration-spec](migration-spec.md) のフェーズ0）
 - **確認**: `python -m migrator doctor` — この区分が未適用なら `[TODO]` で出る
 
@@ -109,7 +109,7 @@ CREATE TABLE library_material_tag_targets (
 ## 2. その他の旧テーブルの受け皿（2026-09-30）
 
 どの区分にも仕分けていなかった旧テーブルを 05 として移すための受け皿。school-launcher の
-`20260930052453_lw2_support_additions.sql`（上の1の2表も同じ migration で足した）。旧 ID の列は旧列名で NULL 可。
+`20260930052453_lw2_support_additions.sql`（上の1の4表も同じ migration で足した）。旧 ID の列は旧列名で NULL 可。
 
 | 旧 | 新 | 備考 |
 |---|---|---|

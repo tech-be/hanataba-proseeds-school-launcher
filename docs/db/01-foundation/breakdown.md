@@ -74,15 +74,15 @@
 | `sso_config` | `tenant_sso_configs` | B10 SSO | 設定 | 1 | C | `tenant_id` + `sso_type` + `sso_parameter` の3列。IdP 設定 | `tenant_sso_configs` を新設して移す（A6。`config.sso`）。調査時点では受け皿が無く、**この1件が B10 SSO を ◯→X に再判定した根拠**だった |
 | `sns_setting` | `tenant_secrets` | B10 SSO | 設定 | 63 | C | SNS ログイン設定 | 認証情報6列を `tenant_secrets` に移す（A7。`config.secrets`）。`auth_methods` に `facebook` / `twitter` / `instagram` を追加 |
 | `login_limit` | `tenant_login_windows` | B09 ログイン履歴 | データ | 0 | B | 曜日・時間帯ごとのログイン制限 | `tenant_login_windows` を新設して移す（A8）。ステージング実測0行 |
-| — | `auth_methods` | B09 ログイン履歴 | マスタ | — | — | `login_history.method` の値。`password`/`google`/`line`/`passkey`/`refresh` | migration で投入。旧に対応列が無いので既定 `password` |
-| — | `auth_outcomes` | B09 ログイン履歴 | マスタ | — | — | `login_history.outcome` の値。8種 | **`user_login_log.user_login_result`（数値）との対応表が必要** |
+| — | `auth_methods` | B09 ログイン履歴 | マスタ | — | — | `login_history.method` の値。`password`/`google`/`line`/`passkey`/`refresh` | migration で投入。**ログイン履歴は移行しないので、旧からの変換は該当なし** |
+| — | `auth_outcomes` | B09 ログイン履歴 | マスタ | — | — | `login_history.outcome` の値。8種 | migration で投入。`user_login_log.user_login_result`（数値）との対応表は**該当なし**（ログイン履歴は移行しない） |
 
 ## M4 会員項目・状態の定義
 
 | 旧テーブル | 新テーブル | データ種 | lw2区分 | ローカルデータ数 | A·B·C | 説明 | 移行の注意 |
 |---|---|---|---|---:|:--:|---|---|
 | `profile_cate` | `tenant_profile_item_categories` | B06 会員プロフィール | マスタ | 5 | C | プロフィール項目のカテゴリ | 5行を recademy 用として移す（A9）。**項目より先に入れる** |
-| `profile_item` | `tenant_profile_items` | B06 会員プロフィール | データ | 3,123 | C | **項目の定義**（`tenant_id` + 表示/編集/必須/公開の各フラグ）。会員データではないためマスターに置く | 項目定義を移す（A9）。`profile_cate_id=0` は分類なしで NULL |
+| `profile_item` | `tenant_profile_items` | B06 会員プロフィール | データ | 3,123 | C | **項目の定義**（`tenant_id` + 表示/編集/必須/公開の各フラグ）。会員データではないためマスターに置く | 項目定義を移す（A9）。`profile_cate_id=0` は分類なしで NULL。固定の印（`*_static_chk`）は**現状は移していない**（受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた） |
 | `profile_item_label` | `tenant_profile_item_labels` | B06 会員プロフィール | データ | 3,187 | C | 項目のラベル | `locale` 付きで移す（A9）。**親の項目が無いラベルは落とす**（実測1件） |
 | `user_item_default` | `tenant_field_defaults` | B06 会員プロフィール | データ | 10 | C | `item_name` + `tenant_id` + `value`。**テナント単位の既定値**。名前に反して会員データではない | `tenant_field_defaults` を新設して**旧の構造のまま移す**（A23）。`tenant_profile_items.default_value` とは別物 |
 | — | `user_statuses` | B06 会員プロフィール | マスタ | — | — | `users.status` の値。`active`/`inactive`/`pending`/`deleted` | `del_chk` / `valid_chk` からの変換先（期間は `status` に使わない） |
@@ -93,7 +93,7 @@
 
 | 旧テーブル | 新テーブル | データ種 | lw2区分 | ローカルデータ数 | A·B·C | 説明 | 移行の注意 |
 |---|---|---|---|---:|:--:|---|---|
-| `group` | `tenant_groups` | B07 グループ | データ | 1,009 | C | グループの定義 | `parent_id` + `depth` で階層ごと移す（A10） |
+| `group` | `tenant_groups` | B07 グループ | データ | 1,009 | C | グループの定義 | `parent_id` + `depth` で階層ごと移す（A10）。`system_sort_no` は**現状は移していない**（受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた） |
 | `group_structure` | — | B07 グループ | 中間 | 1,313 | C | `group_id` + `slave_group_id` の2列。**グループの階層定義**で会員には紐づかないためマスターに置く | **派生データなので移行しない。** `group.parent_group_id` が正本（対象外 B） |
 | `attribute` | `user_tags` | B08 属性 | データ | 427 | C | 属性の定義 | **旧の「属性」を新の「タグ」として移す**（A11。`config.attributes`）。削除済みの属性も `user_tags.deleted_at` 付きで移す |
 | `attribute_lesson` | — | B08 属性 | データ | 332 | C | `lesson_id` + `attribute_id`。属性に必須講座を紐づける**定義** | **移さない。** 旧でも講座を結んでいない（作成時に `attribute_id` だけの行を作る）。ステージング実測5行 |
@@ -108,7 +108,7 @@
 
 | 旧テーブル | 新テーブル | データ種 | lw2区分 | ローカルデータ数 | A·B·C | 説明 | 移行の注意 |
 |---|---|---|---|---:|:--:|---|---|
-| `user` | `users` | B06 会員プロフィール | データ | 48,906 | C | **95列 → 17列。** 会員の本体 | **列追加とサイドテーブルで全列を受ける**（フリガナ・住所2組・カスタムプロフィール・公開制限・通知設定）。`UNIQUE (tenant_id, email)` にメールの欠損・重複が当たる（ステージング実測 **欠損 2,698名 / 重複 389名**。当たった会員は移らず一覧に出る） |
+| `user` | `users` | B06 会員プロフィール | データ | 48,906 | C | **95列 → 17列。** 会員の本体 | **列追加とサイドテーブルで全列を受ける**（フリガナ・住所2組・カスタムプロフィール・公開制限・通知設定）。`UNIQUE (tenant_id, email)` にメールの欠損・重複が当たる（ステージング実測 **欠損 2,698名 / 重複 389名**。当たった会員は移らず一覧に出る）。`new_skill_user_chk` / `live_lesson_preview_icon` は**現状は移していない**（受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた） |
 | `user_attached_info` | `users.is_career_counselor` | B06 会員プロフィール | データ | 15,653 | C | ユーザー付属情報 | `career_counselor_chk` を列として移す（A19）。**ロールに畳まない**。`personal_record_chk` / `line_entry_chk` は**現状は移していない**（実装が無い。2026-10-02 の確認） |
 | `user_nationality_info` | `user_addresses`(kind=foreign) | B06 会員プロフィール | データ | 8,478 | C | ユーザー国籍情報 | 国籍・海外住所を `kind='foreign'` の行で移す（A12）。**コードは `country_master` で国名に展開**。`language_code` は `users.language_code` に移す（A22。実測 ja 133名 / th 1名） |
 | — | `external_user_links` | B06 会員プロフィール | データ | — | — | lw2 ↔ 新のユーザー対応表。`UNIQUE (tenant_id, external_system, external_id)` | 移行ツールは `external_system='lw2'` 固定で入れる（`users.EXTERNAL_SYSTEM`）。資料間で `lw2` と `kiracari` に割れていたので、**ブリッジ・テストも `lw2` に揃っているかを確かめる**（食い違うと同じ会員が二重登録される） |
@@ -117,7 +117,7 @@
 
 | 旧テーブル | 新テーブル | データ種 | lw2区分 | ローカルデータ数 | A·B·C | 説明 | 移行の注意 |
 |---|---|---|---|---:|:--:|---|---|
-| `user_personal_no` | `users.member_no` | B11 マイナンバー | データ | 53,568 | C | **会員に振る一意の ID**（運用担当に確認済み）。`personal_no` は `int(11)` で12桁のマイナンバーは格納できず、PDF のデータ種名が実体と合っていない | `personal_no` を列として移す（A12）。**`regist_no` は現状は移していない**（実装が無い。2026-10-02 の確認。ステージングは 3,155名全員に値がある） |
+| `user_personal_no` | `users.member_no` | B11 マイナンバー | データ | 53,568 | C | **会員に振る一意の ID**（運用担当に確認済み）。`personal_no` は `int(11)` で12桁のマイナンバーは格納できず、PDF のデータ種名が実体と合っていない | `personal_no` を列として移す（A12）。`scout_display_type` は**現状は移していない**（受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた）。**`regist_no` は現状は移していない**（実装が無い。2026-10-02 の確認。ステージングは 3,155名全員に値がある） |
 
 ## U3 認証情報・セキュリティ
 
@@ -201,6 +201,7 @@ foundation.2 ユーザ
 | `twostepverification` | 受け皿（`user_two_factor_secrets`）だけ作り、移す行は無い |
 | `system_admin_role` | **現状は移していない**（実装が無い） |
 | `user_personal_no.regist_no`、`user_attached_info.personal_record_chk` / `line_entry_chk` | **現状は移していない**（実装が無い） |
+| `profile_item.*_static_chk`、`group.system_sort_no`、`user.new_skill_user_chk` / `live_lesson_preview_icon`、`user_personal_no.scout_display_type` | **現状は移していない**（受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた） |
 
 ---
 

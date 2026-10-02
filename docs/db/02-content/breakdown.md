@@ -25,7 +25,7 @@
 | `lesson` | `courses` | O01 講座 | データ | 2,208 | C | 講座の本体 | **`courses.instructor_id` が NOT NULL なのに lw2 に講座単位の講師が無い。** 既定講師を決めないと1行も入らない |
 | `lesson_is_used` | `courses.is_used` | O01 講座 | データ | 2,066 | C | 講座の利用可否 | **`lesson_is_used` に行がある講座を `courses.is_used = TRUE` にする**（A1）。`status`（公開状態）とは別の列 |
 | `lesson_system` | — | O01 講座 | データ | 243 | C | **講座をテナントに公開する対応表**（列は `lesson_id` / `tenant_id` の2つだけ） | 設定は持っていない。移行では**共有講座（`tenant_id = 0`）のどれを移すかの判定**にだけ使う（`SourceDatabase.shared_lessons`）。行そのものの移し先は無い |
-| `lesson_tag` / `lesson_lesson_tag` | `course_tags` / `course_tag_links` | O01 講座 | データ / 中間 | 31 / 281 | C | 講座タグと割当 | A2 で受け皿を足して移す。**`lesson_tag.del_chk` と `icon_file_name` は現状は移していない**（実装が無い。2026-10-02 の確認。ステージングは削除済み0件） |
+| `lesson_tag` / `lesson_lesson_tag` | `course_tags` / `course_tag_links` | O01 講座 | データ / 中間 | 31 / 281 | C | 講座タグと割当 | A2 で受け皿を足して移す。**共有のタグ（`tenant_id = 0`）も、移す講座の割当が指していれば、このテナントのタグとして移す**（2026-10-02。ステージングは共有のタグ3件・割当9件）。**`lesson_tag.del_chk` と `icon_file_name` は現状は移していない**（実装が無い。2026-10-02 の確認。ステージングは削除済み0件） |
 | `lesson_cate` | `course_categories` | O02 講座カテゴリ | データ | 482 | C | 講座カテゴリ | **移行ツールが `lesson_cate` から作る**（コードは `lw2-<旧テナントID>-<旧ID>`）。`courses` より先に入れる（`courses.category` は FK） |
 | — | `content_statuses` | O01 講座 | マスタ | — | — | `courses.status` の値 | migration で投入。`draft`/`published`/`archived` の3値に、**移行で `deleted` を足す**（A3） |
 | — | `course_difficulties` | O01 講座 | マスタ | — | — | 講座の難易度 | 旧に対応列なし |

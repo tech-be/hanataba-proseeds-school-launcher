@@ -8,7 +8,7 @@
 > `billing.live_limit_item_history`）、`billing.3` 帳票（3 Step）、`billing.4` 自動割当（6 Step）。
 > **決済・帳票・自動割当のきっかけは暫定の規則で作ってある**（1-3。運営の回答で差し替える）。
 
-> **追加スキーマは school-launcher の4本**: A1〜A8 の `20260928132756_lw2_billing_additions.sql`（ブランチ `feat/lw2-billing-schema`）、
+> **追加スキーマは school-launcher の4本**: A1〜A8 の `20260928132756_lw2_billing_additions.sql`（`feat/lw2-billing-schema` で作り、`hanataba_dev` に PR #139 でマージ済み）、
 > 自動割当の表の `20260927105511`、`tag_auto_assign_rules.assign_id` の `20260930044959`、削除済みの対応・
 > 自動割当の列・予約できる商品の全行の `20261001085757`（[schema-additions.md](schema-additions.md) の冒頭）。
 > **どれかが当たっていないと `--section billing` はスキーマ確認で止まる**（`migrator/steps/schema.py` の `BILLING_SCHEMA`）。
@@ -240,7 +240,7 @@ billing.4    tag_auto_assign_rules → tag_auto_assign_rule_triggers → tag_aut
 
 - `verify --section billing` が OK になること。**2段で見る。**
   - 照合: 移行元から作り直した行と全列で突き合わせる（移行先 = 変換結果）
-  - **旧 DB との突き合わせ**（`migrator/validation/legacy_checks.py` の `billing_checks`）: 旧 DB から独立に出した件数・金額・日付・本文と比べる。支払い方法 × 状態の組ごとの件数・金額（組の数はデータで変わる）に、状態・会員ごとの金額・総額・種類・領収書・商品・商品と講座の組・受講との結びつき・規約の本文・チケットの残枚数と台帳・自動割当の項目を足したもの。変換の規則そのものの誤りはここで出る
+  - **旧 DB との突き合わせ**（`migrator/validation/legacy_checks.py` の `billing_checks`）: 旧 DB から独立に出した件数・金額・日付・本文と比べる。支払い方法 × 状態の組ごとの件数・金額（組の数はデータで変わる）に、状態・会員ごとの金額・総額・種類・領収書・商品・商品と講座の組・受講との結びつき・規約の本文・チケットの残枚数と台帳・自動割当の項目、予約できる商品の全行（`live_lesson_limit_item` → `live_lesson_limit_item_history` の件数。削除済みを含む）を足したもの。変換の規則そのものの誤りはここで出る
 - 再実行で 0 行（冪等）
 - `out/not-migrated.csv` の件数と理由が、1-2 の #14 / #15 と矛盾しないこと
 - 台帳を作れなかった予約の件数（警告ログ）が、#14 / #15 の残高で予約した件数と合うこと（ステージングは #15 で9件）

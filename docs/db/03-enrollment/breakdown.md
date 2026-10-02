@@ -48,8 +48,8 @@
 
 | 旧テーブル | 新テーブル | データ種 | lw2区分 | ローカルデータ数 | A·B·C | 説明 | 移行の注意 |
 |---|---|---|---|---:|:--:|---|---|
-| `user_learning_unit` | `lesson_progress` | J02 ユニット進捗 | データ | 19,009 | C | ユニットごとの学習状況（実測 7,209 行） | **`progress_status` はユニット種別ごとに意味が変わる**（同じ `2` がテストなら「受験中」、アンケートなら「回答済」）。新は `last_position` / `completed_at` の2列しかない。**`last_position` は常に NULL**（`suspend_data` は `settings` に原文で残す）。**同じ (会員, ユニット) の重複は `update_date` の新しい1行だけを残し、残りは一覧に出さずに捨てる**（ステージング 153組 495行 → 342行を捨てる） |
-| `user_learning_lesson` | —（`enrollments.completed_at` に入れる想定だった） | J03 講座進捗 | データ | 35,532 | C | 講座ごとの学習状況（実測 24,484 行 / 23,956 組） | **母集合にはしない。** 差の 22,833 組は 93% が無料講座で、旧環境でも権限行を持たない（`LessonModel::1363` は「権限がある **OR** 有料講座でない」の2分岐）。**修了日（`lesson_complete_date`）は現状は移していない**（実装が無く、`enrollments.completed_at` は常に NULL。修了日のある行はステージング 258件。2026-10-02 の確認） |
+| `user_learning_unit` | `lesson_progress` | J02 ユニット進捗 | データ | 19,009 | C | ユニットごとの学習状況（ステージング実測 13,008 行） | **`progress_status` はユニット種別ごとに意味が変わる**（同じ `2` がテストなら「受験中」、アンケートなら「回答済」）。新は `last_position` / `completed_at` の2列しかない。**`last_position` は常に NULL**（`suspend_data` は `settings` に原文で残す）。**同じ (会員, ユニット) の重複は `update_date` の新しい1行だけを残し、残りは一覧に出さずに捨てる**（ステージング 153組 495行 → 342行を捨てる） |
+| `user_learning_lesson` | —（`enrollments.completed_at` に入れる想定だった） | J03 講座進捗 | データ | 35,532 | C | 講座ごとの学習状況（ステージング実測 34,510 行 / 33,912 組） | **母集合にはしない。** 33,912 組のうち 31,445 組は権限行を持たない。無料講座は旧環境でも権限行を持たないのが正常（`LessonModel::1363` は「権限がある **OR** 有料講座でない」の2分岐）。**修了日（`lesson_complete_date`）は現状は移していない**（実装が無く、`enrollments.completed_at` は常に NULL。修了日のある行はステージング 258件。2026-10-02 の確認） |
 | `user_learning_unit_log` | — | J02 ユニット進捗 | イベント・履歴 | 33,998 | C | 進捗の更新履歴 | **受け皿なし。** 純ログとして移さない |
 | `user_lesson_session` | — | J02 ユニット進捗 | データ | 267,639 | C | ユニット画面の一時値（CSRF トークンなど）。実測 1,860件 | **一時データなので移さない** |
 | `summary_finish_unit_num` | — | J02 ユニット進捗 | データ | 1 | C | 講座ごとの完了ユニット数の集計。実測0件 | **移さない。** 進捗から作り直せる集計 |
@@ -66,7 +66,7 @@
 
 | 旧テーブル | 新テーブル | データ種 | lw2区分 | ローカルデータ数 | A·B·C | 説明 | 移行の注意 |
 |---|---|---|---|---:|:--:|---|---|
-| `user_learning_test_sub` | `quiz_answers` / `quiz_answer_selected_options` | O10 設問別回答 | データ | **10,705,972** | C | 設問ごとの回答 | **区分最大のテーブル。** `question_answer` はパイプ区切りの選択肢番号。**出題条件（`test_sub_type_id = 2`）から出た問題の回答と、固定出題から一意に引けない回答は、一覧に出さずに飛ばす**（ステージング 4,922件中 50件。すべて前者） |
+| `user_learning_test_sub` | `quiz_answers` / `quiz_answer_selected_options` | O10 設問別回答 | データ | **10,705,972** | C | 設問ごとの回答 | **区分最大のテーブル。** `question_answer` はパイプ区切りの選択肢番号。**移らない回答は `out/not-migrated.csv` に出す**（2026-10-02 から。それまでは黙って飛ばしていた）。ステージング 4,922件中 4,812件を移し、110件を一覧に出す — 移らない受験にぶら下がる回答 60件（旧データの不整合）と、出題条件（`test_sub_type_id = 2`）から出た問題・固定出題から一意に引けない問題の回答 50件（受け皿なし。すべて前者） |
 
 ## E5 テスト中断・再開
 
@@ -87,7 +87,7 @@
 
 | 旧テーブル | 新テーブル | データ種 | lw2区分 | ローカルデータ数 | A·B·C | 説明 | 移行の注意 |
 |---|---|---|---|---:|:--:|---|---|
-| `enquete_answer` | `survey_responses` / `survey_answers` / `survey_answer_selected_options` | O14 アンケート | データ | 64,883 | C | 回答 | **`tenant_id` を持たない**ので親と join して絞る。**recademy 単体では 2,464件**（26分の1） |
+| `enquete_answer` | `survey_responses` / `survey_answers` / `survey_answer_selected_options` | O14 アンケート | データ | 64,883 | C | 回答 | **`tenant_id` を持たない**ので親と join して絞る。**ステージング `tenant_id = 10` のアンケートへの回答は 232件**（ユニット 80 / レポート 149 / お知らせ 3。共有のアンケートへの回答は別）。**お知らせ・レポートへの回答は現状は移していない**（受け皿が無い。`survey_responses.lesson_id` が NOT NULL。2026-10-02 に受け皿 `survey_entity_responses` を検討したが取り下げた） |
 | — | `survey_submission_log` | O14 | 中間 | — | — | 提出ログ | |
 
 ## E8 ライブ予約・出欠
@@ -95,7 +95,7 @@
 | 旧テーブル | 新テーブル | データ種 | lw2区分 | ローカルデータ数 | A·B·C | 説明 | 移行の注意 |
 |---|---|---|---|---:|:--:|---|---|
 | `live_lesson_reserve` | `live_reservations` | L03 予約 | データ | 18,041 | C | 予約・キャンセル・出欠（16列 → 11列） | **UNIQUE `(occurrence_id, user_id)` に当たる。** 旧は同じ会員が同じ開催回に複数行持てる（キャンセル後の再予約）。旧の3フラグを `status` 1列に畳む |
-| `config_live_lesson` | `live_lesson_occurrences.cancel_closes_at` | L03 予約 | 設定 | 64 | C | テナント単位のキャンセル期限設定 | **旧に対応列が無く、計算で作る**。`starts_at − ticket_cancel_day 日 − ticket_cancel_time 時間` |
+| `config_live_lesson` | `live_lesson_occurrences.cancel_closes_at` | L03 予約 | 設定 | 64 | C | テナント単位のキャンセル期限設定 | **旧に対応列が無く、計算で作る**。`starts_at − ticket_cancel_day 日 − ticket_cancel_time 時間`。設定の行そのもの（`valid_chk` / `ticket_cancel_chk` ほか）は基盤で `tenants.settings.lw2_live` に旧の値のまま残す |
 | — | `live_reservation_statuses` | L03 予約 | マスタ | — | — | `live_reservations.status` の値 | シード済み4値（`reserved`/`canceled`/`attended`/`no_show`）。**「開催側の中止」を表す値が無い** |
 
 ---

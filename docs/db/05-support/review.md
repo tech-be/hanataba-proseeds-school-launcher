@@ -479,7 +479,7 @@ SNS 共有（707件。画像の `unit_share_image` / `public_unit_share_image` �
 ## 新環境に追加するテーブル・カラム
 
 > **migration に落とした形は [マイグレーション対象](schema-additions.md)。**
-> **migration は school-launcher の `20260930052453_lw2_support_additions.sql`**（`feat/lw2-billing-schema`）。A1〜A6 をまとめて足す。
+> **migration は school-launcher の `20260930052453_lw2_support_additions.sql`**（`feat/lw2-support-schema` にコミット・push 済み）。A1〜A6 をまとめて足す。
 
 | # | 追加するもの | 旧環境の対応 | 変更が必要な機能 |
 |---|---|---|---|

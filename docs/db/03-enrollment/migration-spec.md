@@ -126,7 +126,7 @@ cd -
 | `user_learning_unit` | `user_learning_lesson` → `user.tenant_id`（`fetch_joined(via=...)`。講座側で絞ると共有講座を通じて他テナントの会員を拾う） |
 | `user_learning_lesson` | `user.tenant_id` |
 | `user_learning_test` / `user_learning_test_sub` / `user_learning_report` | `user_learning_unit` → `user_learning_lesson` → `user.tenant_id` |
-| `enquete_answer` | `enquete.tenant_id`（共有アンケートを含む）。会員は `entity_id` → `user_learning_unit` から引く |
+| `enquete_answer` | `enquete.tenant_id`（共有アンケートを含む）。会員は `entity_id` → `user_learning_unit` から引く（お知らせ・レポートへの回答は移していないので引かない） |
 | `live_lesson_reserve` | 自身の `tenant_id`。開催回（`live_lesson_date`）が引けない行は一覧に出す |
 | `user_certificate` | `user.tenant_id` |
 
@@ -156,7 +156,7 @@ cd -
 - **ライブの受け皿講座には全会員を受講登録する**（`enrollment.live_host_enrollments`、2026-09-24 決定）。
   lw2 に元データが無い行で、`user` の全行（ステージング 3,155名。削除済みの会員 503名を含む）を
   `source = 'admin'` / `status = 'active'` / 期限なしで入れる。受け皿講座を作らないテナントでは作らない
-- **期限切れはそのまま移す。** 実測で 1,874組中 1,603組（86%）が失効済みだが、旧環境でも開けない。**期限を延ばさない**
+- **期限切れはそのまま移す。** ステージング 4,289組のうち 3,381組が期限切れ（ほかに active 534組 / revoked 374組。2026-10-02 の判定）だが、旧環境でも開けない。**期限を延ばさない**
 
 **学習履歴（3-2）**
 
@@ -194,12 +194,15 @@ cd -
 | 対象 | 扱い | ステージング |
 |---|---|---:|
 | `user_learning_unit` の重複（同じ会員・同じユニット） | 新しい1行だけを残す | 342行 |
-| `user_learning_test_sub` のうち出題条件（`test_sub_type_id = 2`）の問題、または固定出題から一意に引けない問題 | `quiz_answers` を作らない | 50件 |
 | `user_learning_report` のうち、`user_learning_unit` / `user_learning_lesson` が引けない行 | 提出を作らない | — |
-| `enquete_answer` のうち `entity_type_id` が 1（お知らせ）/ 3（レポート）の行 | 回答を作らない | 152件 |
 | `enquete_answer.answer` の JSON が壊れている行、`answer_<数字>` 以外のキー、設問が引けないキー | 設問別回答を作らない | — |
+| `enquete_answer` のうち `entity_type_id` が 1（お知らせ）/ 3（レポート）の行 | 回答を作らない（受け皿が無い。`survey_responses.lesson_id` が NOT NULL。2026-10-02 に受け皿 `survey_entity_responses` を検討したが取り下げた） | 226件（このテナントの会員の回答。お知らせ 3 / レポート 223。レポートのうち 149件はこのテナントのアンケート、74件は共有のアンケート） |
 | `user_certificate` のうち `certificate_type = 2`（商品単位） | 移さない | 0件 |
 | `user_certificate` のうち `user_learning_lesson` が引けない行 | 移さない（ログに警告だけ出す） | 0件 |
+
+**2026-10-02 から一覧に出すようにしたもの**（以前はこの表に載っていた）:
+
+- `user_learning_test_sub` のうち、移らない受験にぶら下がる回答（「旧データの不整合」。ステージング 60件）と、出題条件（`test_sub_type_id = 2`）の問題・固定出題から一意に引けない問題の回答（「受け皿なし」。50件）は **`out/not-migrated.csv` に出す**。4,922件中 4,812件を移し、110件を一覧に出す
 
 **削除済みの受験・提出は区別せずに移す。** `user_learning_test.del_chk` / `user_learning_report.del_chk` は使っておらず、
 `quiz_attempts` / `submissions` に削除の印を書いていない（ステージングはどちらも0件）。

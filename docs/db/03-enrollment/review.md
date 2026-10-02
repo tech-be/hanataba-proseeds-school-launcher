@@ -24,8 +24,8 @@
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
 | `(user_id, item_id, lesson_id)` | `(user_id, course_id)` | **性質** | **高** | **粒度が違う。** 旧は商品×講座で、同じ商品が複数講座を売り、同じ講座が複数商品から売られる。ステージング実測 6,966 行が 4,289 組に重なる | **lw2 自身の解決規則に従う。** `LessonModel::1804` の受講可否判定が `GROUP BY user_id, lesson_id` で畳み、期限は `MAX()` を取っている。**同じ規則で寄せる**（独自に決めない） |
-| `cancel_chk` tinyint | — | **性質** | **高** | **名前に反してキャンセルフラグではない。** 全 INSERT 箇所（`PaymentAuthorityModel` の5か所）で**作成時に定数を書き込んでおり、UPDATE する箇所が存在しない**。実測 1=3,064 / 0=620 は「どの購入経路で作られたか」を表す | **`status = 'canceled'` に写さない。** 受講可否は `del_chk = 0` と期間で決まる。元の値は A8 の `settings` に残す |
-| `payment_item.is_auto_extension` ＋ `payment_application.is_cancel` | `status` / `expires_at` | **性質** | **高** | **自動継続の権限は期限を見ない。** lw2 の判定は `PA.is_cancel IS NULL` だけで（`PaymentModel:383`）、`authority_end_date` が過去でも受講できる。**権限行だけを読むと、いま受講できている人を失効扱いにする**（実測 249組） | **商品のモードと申込の解約状態を一緒に読む。** 未解約の自動継続は `status = 'active'` / `expires_at = NULL`、全部解約済みなら `revoked`（`expired` ではない）。元の期限は A8 の `settings` に残す |
+| `cancel_chk` tinyint | — | **性質** | **高** | **名前に反してキャンセルフラグではない。** 全 INSERT 箇所（`PaymentAuthorityModel` の5か所）で**作成時に定数を書き込んでおり、UPDATE する箇所が存在しない**。実測は全行で 1=3,116 / 0=3,850（商品に紐づく行 3,684行に限ると 1=3,064 / 0=620）で、「どの購入経路で作られたか」を表す | **`status = 'canceled'` に写さない。** 受講可否は `del_chk = 0` と期間で決まる。元の値は A8 の `settings` に残す |
+| `payment_item.is_auto_extension` ＋ `payment_application.is_cancel` | `status` / `expires_at` | **性質** | **高** | **自動継続の権限は期限を見ない。** lw2 の判定は `PA.is_cancel IS NULL` だけで（`PaymentModel:383`）、`authority_end_date` が過去でも受講できる。**権限行だけを読むと、いま受講できている人を失効扱いにする**（ステージングで未解約の自動継続は 331組。うち 228組は自動継続の権限行の期限が 2026-09-18 時点で過去） | **商品のモードと申込の解約状態を一緒に読む。** 未解約の自動継続は `status = 'active'` / `expires_at = NULL`、全部解約済みなら `revoked`（`expired` ではない）。元の期限は A8 の `settings` に残す |
 | `del_chk` | `status` | 性質 | 中 | **これが実質の取り消し。** 実測 828行。削除済みの行を含む組は 493組で、**全行が削除済みの組は 362組** | 畳んだ組の**全行が** `del_chk = 1` なら `status = 'revoked'`（1行でも生きていれば生きている行で判定する）。ほかに自動継続の全解約 12組も `revoked` になり、ステージングで計 374組。**`canceled` という値は無い**（`enrollment_statuses` は `active` / `expired` / `refunded` の3値だったので、A10 で `revoked` を足した） |
 | `authority_start_date` | `enrolled_at` | 型 | 低 | 開始日。実測 NULL 0件 | そのまま移す |
 | `authority_end_date` / `payment_authority_end_date` | `expires_at` **1列** | 性質 | 中 | **2つの期限が1列に畳まれる。** 実測はどちらも NULL 0件 | 受講期限は `authority_end_date`（畳んだ行の最大）。**`payment_authority_end_date` は現状は移していない**（読むが書かない。実装が無い。2026-10-02 の確認）。`authority_end_date` の元の値も、未解約の自動継続の組だけ `settings.legacy_authority_end_dates` に残している |
@@ -39,7 +39,7 @@
 | — | `source` **NOT NULL** + FK | 性質 | 中 | 旧に対応する列が無い | **商品に紐づく行は `purchase`、紐づかない行は `admin`。** `manual` という値は存在しない（`purchase`/`subscription`/`free`/`admin`/`marketplace`）。ライブの受け皿講座も `admin` を使うので、**区別は `course_id` で行う** |
 | — | `subscription_id` / `provider_payment_id` | カラム | 低 | 決済との紐付け | `provider_payment_id` は、畳んだ行のうち決済として移す申込の最も新しいものの決済 ID を入れる（課金 04 の暫定の規則 P10。外部キーではない）。`subscription_id` は NULL |
 
-**まとめ**: 受け皿が無い列 8 / 変換規則が要る列 6 / **高 5 件**
+**まとめ**: 受け皿が無い列 8 / 変換規則が要る列 6 / **高 6 件**
 
 > **「他テナントの講座を指す権限 807行」は誤りだったので取り下げる。** 参照先が `tenant_id = 0` の
 > 行を別テナントのものと読み違えていた。**共有講座**（lw2 は講座をテナント間で共有できる）であって、
@@ -57,23 +57,23 @@
 
 ### `user_learning_lesson` → `enrollments`（母集合の判断）
 
-`user_learning_lesson` (19列) → `enrollments` ／ ローカルデータ数 35,532 / C ／ ステージング実測 24,484件（23,956組）
+`user_learning_lesson` (19列) → `enrollments` ／ ローカルデータ数 35,532 / C ／ ステージング実測 34,510件（33,912組）
 
 会員が講座の学習を始めた時点で作られる記録。**受講権限とは別の表**で、桁が2つ違う。
 
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
-| `(user_id, lesson_id)` | `(user_id, course_id)` | **性質** | **高** | **学習実績の大半は「無料講座」で、権限行を持たないのが旧環境でも正常。** `LessonModel::1363` の受講可否は「権限がある **OR** その講座が有料ユニットを持たない／表示中の商品で売られていない」の2分岐で、**実測 235講座のうち権限が要るのは 71件だけ**。権限なし×学習実績ありの 22,833組のうち 21,161組（93%）は無料講座で、旧環境でも権限行は無い | **母集合は権限側（`payment_item_lesson_authority`）。** 学習実績は `enrollments` の母集合にしない。ただし**無料講座 164件は新環境では `enrollments` が無いと開けない**ので、扱いを 1-1 で決める |
+| `(user_id, lesson_id)` | `(user_id, course_id)` | **性質** | **高** | **学習実績の大半は「無料講座」で、権限行を持たないのが旧環境でも正常。** `LessonModel::1363` の受講可否は「権限がある **OR** その講座が有料ユニットを持たない／表示中の商品で売られていない」の2分岐で、**実測 235講座のうち権限が要るのは 71件だけ**。学習実績 33,912組のうち 31,445組は権限行を持たない（無料講座ぶんの内訳は数え直していない）。無料講座は旧環境でも権限行が無いのが正常 | **母集合は権限側（`payment_item_lesson_authority`）。** 学習実績は `enrollments` の母集合にしない。ただし**無料講座 164件は新環境では `enrollments` が無いと開けない**ので、扱いを 1-1 で決める |
 | `lesson_start_date` / `lesson_end_date` | `enrolled_at` / `expires_at` | 性質 | 中 | 学習の開始・終了で、権限の期間とは別物 | **使わない**（母集合は権限側）。無料講座ぶんを作る場合だけ `enrolled_at` に使う |
 | `lesson_complete_date` | `completed_at` | 型 | 低 | 講座の修了日。ステージング実測 258件 | **現状は移していない**（`lesson_complete_date` を読む実装が無く、`enrollments.completed_at` は常に NULL。2026-10-02 の確認）。当初は該当する組の `completed_at` に入れる想定だった |
 | `finish_unit_num` / `finish_unit_percent` / `finish_unit_duration` | — | カラム | 中 | **講座単位の進捗率が落ちる。** 新環境は `lesson_progress`（ユニット単位）から都度計算する作り | 都度計算できるので**移さない**。ただし旧の値と一致しない可能性があるので、cutover 後に照合する |
 | `total_learning_count` / `recent_learning_time` / `recent_learning_unit_id` | — | カラム | 低 | 学習回数・最終学習日時・最後に見たユニット | A9 の `lesson_progress` 側に最終学習日時の受け皿が無い。**`settings` を持たない表**なので、要るなら列を足す |
 | `require_chk` / `skill_unit_tab_status` / `block_open_status` | — | カラム | 低 | 必須受講フラグ・タブ状態・ブロック開放状態 | **UI の状態**。移さない |
-| `del_chk` | `status` | 性質 | 低 | 実測 4,250件（17%） | `canceled` に写す（母集合に採用する場合） |
+| `del_chk` | `status` | 性質 | 低 | 実測 7,123件（34,510行中 21%） | `canceled` に写す（母集合に採用する場合） |
 
 **まとめ**: 受け皿が無い列 8 / 変換規則が要る列 3 / **高 1 件**
 
-> **期限切れは正常な状態。** 権限 1,874組（削除除く）のうち **1,603組（86%）が `authority_end_date` 切れ**。
+> **期限切れは正常な状態。** 権限 4,289組のうち **3,381組が期限切れ**で移る（ほかに active 534組 / revoked 374組。2026-10-02 の判定）。
 > 旧環境でもその講座は開けないので、`expires_at` をそのまま移すのが忠実。**期限を延ばさない。**
 
 ### `user_learning_lesson_edit_log` / `application_user_learning_lesson` → なし
@@ -173,7 +173,7 @@
 | `question_score`（配点） | `quiz_questions.points` | 性質 | 中 | 回答ごとの配点 → 問題ごとの配点へ。`test_sub.score_per_question` との整合が要る | [コンテンツ A8](../02-content/review.md#c5-テスト定義) の出題条件を移したうえで、条件ごとの配点と突き合わせる |
 | `option_order`（選択肢の表示順） | — | カラム | 中 | **どの順で選択肢が出たかを入れる列が無い**ので、回答の再現ができない | A2 の `quiz_answers.option_order` を追加して移す |
 | `sort_no` / `pre_question_pass` | — | カラム | 低 | 出題順・前回正誤を入れる列が無い | A2 にまとめて移す |
-| `question_id`（どの大問から出たかを持たない） | `quiz_answers.question_id` | **性質** | 中 | **出題条件（`test_sub_type_id = 2`）から出た問題には `quiz_questions` の行が無い**（条件だけを `quiz_question_rules` に移しているため）。固定出題でも、同じテストの複数の大問に同じ問題があると一意に引けない | **移さない。一覧にも出さずに飛ばす。** ステージング 4,922件中 50件（すべて出題条件ぶん。一意に引けないものは0件） |
+| `question_id`（どの大問から出たかを持たない） | `quiz_answers.question_id` | **性質** | 中 | **出題条件（`test_sub_type_id = 2`）から出た問題には `quiz_questions` の行が無い**（条件だけを `quiz_question_rules` に移しているため）。固定出題でも、同じテストの複数の大問に同じ問題があると一意に引けない | **移さない。`out/not-migrated.csv` に「受け皿なし」で出す**（2026-10-02 から。それまでは黙って飛ばしていた）。ステージング 4,922件中 50件（すべて出題条件ぶん。一意に引けないものは0件）。ほかに、移らない受験にぶら下がる回答 60件を「旧データの不整合」で出す。**移すのは 4,812件、一覧は 110件** |
 
 **まとめ**: 受け皿が無い列 4 / 変換規則が要る列 2 / **高 2 件**
 
@@ -244,15 +244,15 @@
 
 ### `enquete_answer` → `survey_responses` / `survey_answers` / `survey_answer_selected_options`
 
-`enquete_answer` (10列) ／ ETL段 L4 ／ ローカルデータ数 388 / C（**recademy 単体では 232件**）
+`enquete_answer` (10列) ／ ETL段 L4 ／ ローカルデータ数 64,883 / C（**ステージング `tenant_id = 10` のアンケートへの回答は 232件**。共有のアンケートへの回答は別）
 
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
-| `entity_type_id` 1/2/3 | — | **性質** | **高** | **2（ユニット）だけが移行でき、1（お知らせ 3件）と 3（レポート 149件）に受け皿が無い。** 232件中 152件（66%）が落ちる。**A4 の `entity_type` / `entity_id` を足しただけでは解決しない** — `survey_responses.lesson_id` が NOT NULL ＋ FK `survey_lessons` のままなので、ユニットに紐づかない回答は入る場所が無い | 下の「3種類は別物」を参照。**いまは type 2 だけ移している**（`entity_type = 'lesson'` 固定）。**type 1 / 3 は一覧に出さずに飛ばしている** |
+| `entity_type_id` 1/2/3 | — | **性質** | **高** | **`survey_responses` に入るのは 2（ユニット）だけ。** 1（お知らせ 3件）と 3（レポート 149件）は、**A4 の `entity_type` / `entity_id` を足しただけでは入らない** — `survey_responses.lesson_id` が NOT NULL ＋ FK `survey_lessons` のままなので、ユニットに紐づかない回答は入る場所が無い | 下の「3種類は別物」を参照。`survey_responses` は type 2 だけ（`entity_type = 'lesson'` 固定）。**type 1 / 3 は現状は移していない**（受け皿が無い。2026-10-02 に受け皿 `survey_entity_responses` を検討したが取り下げた）。**一覧に出さずに飛ばしている**（このテナントの会員の回答でステージング 226件。[migration-spec 3.4](migration-spec.md#一覧に出ずに移らない行)） |
 | `enquete_type_id` = 3 | — | **性質** | **高** | **type 3 の149件はアンケートではなく「課題（レポート）の設問への回答」。** lw2 は課題の設問を `enquete` テーブルに持っており、`EnqueteModel:49` がアンケート一覧から `enquete_type_id != 3` で除外している。新環境の `submissions` は自由記述1本（`body_text` / `object_key`）で、**設問形式の課題を受ける器が無い** | 未決。**アンケート側に寄せるのではなく、課題側の受け皿を決める**（→ [確認事項](../open-questions.md)） |
 | `answer` text (**JSON**) | `numeric_value` / `text_value` + 選択肢の中間表 | 性質 | 中 | JSON を展開する規則が要る（キーは `answer_<enquete_question_id>`） | ETL設計 §5-5 の規則で展開し、設問タイプごとに入れる列を変える |
 | `enquete_reply_time` NULL可 | `survey_responses.submitted_at` **NOT NULL** | 型 | 中 | NULL 行を入れられない | **`regist_date` で代替して移す**（落とさない）。ステージング実測0件 |
-| `tenant_id` が無い | `survey_responses.tenant_id` NOT NULL | 性質 | 中 | **`enquete` と join しないとテナントが決まらない。** join を落とすと全73テナントが混ざる（棚卸しの 64,883件はこの誤り） | `enquete` と join して `tenant_id = 10`（と共有アンケート）で絞る（区分共通の規則） |
+| `tenant_id` が無い | `survey_responses.tenant_id` NOT NULL | 性質 | 中 | **`enquete` と join しないとテナントが決まらない。** join を落とすと他テナントの回答が混ざる（ローカルデータ数の 64,883件は全73テナントの合計） | `enquete` と join して `tenant_id = 10`（と共有アンケート）で絞る（区分共通の規則） |
 | `suspended_chk` | — | カラム | 低 | 中断フラグを入れる列が無い | A4 の `survey_responses.suspended` を追加して移す |
 | — | `anonymous_allowed` / `open_at` / `close_at` / `max_length` / `description` | カラム | 低 | 旧に対応なし | 既定値に任せる。対応不要 |
 
@@ -265,12 +265,16 @@
 | 旧 `entity_type_id` | `entity_id` が指す先 | 実測 | 新の行き先 | 状態 |
 |---:|---|---:|---|---|
 | 2 ユニット | `user_learning_unit_id` | 80件 | `survey_responses`（`lesson_id` = アンケートユニット） | **移行済み**（77件。残り3件は下の注記） |
-| 3 レポート | `user_learning_report_id` | 149件 | 課題側（`submissions`）。**受け皿が無い** | 未決 |
-| 1 お知らせ | `news_user_id` | 3件 | お知らせ側（[サポート機能](../05-support/review.md) O16）。**受け皿が無い** | 未決 |
+| 3 レポート | `user_learning_report_id` | 149件 | 課題側（`submissions`）。**受け皿が無い** | 未決。**現状は移していない**（一覧にも出ない。共有のアンケートへのこのテナントの会員の回答 74件を足すと 223件） |
+| 1 お知らせ | `news_user_id` | 3件 | お知らせ側（[サポート機能](../05-support/review.md) O16）。**受け皿が無い** | 未決。**現状は移していない**（一覧にも出ない） |
 
 > **type 2 の80件のうち3件は移らない。** 回答が記録している `enquete_id` を、
 > そのユニットがもう参照していない（定義を差し替えた／ユニット自体がアンケートではない）。
 > **旧データの不整合**なので移行ツールでは解決できない。
+>
+> **回答した学習の行が引けない回答も一覧に出す**（旧データの不整合）。理由は「回答した学習の行（user_learning_unit）を、このテナントの会員の行として引けない（物理削除されているか、共有のアンケートへの他テナントの会員の回答）」。ステージングでは共有のアンケートへの回答 1件（`enquete_answer_id = 367`。学習の行は他テナントの会員のもの）。
+>
+> **type 1 / 3 は現状は移していない。** 2026-10-02 に旧の形のまま受ける `survey_entity_responses` を検討したが取り下げた。
 
 ### `enquete_answer` → `survey_submission_log`
 
@@ -324,7 +328,7 @@
 |---|---|---|:--:|---|---|
 | `ticket_cancel_day` / `ticket_cancel_time` | `occurrences.cancel_closes_at` datetime(3) | 性質 | 中 | **テナント単位の設定 → 開催回ごとの絶対時刻へ展開する。** 設定を変えても過去の開催回に遡らない形になる | `starts_at − ticket_cancel_day 日 − ticket_cancel_time 時間` で計算する。**ステージングの実値は 1日 0時間**（ETL設計 §5-6 は14日前としているが、**それは別のデータセットの値**）。本番ダンプで取り直す |
 | `ticket_cancel_chk` tinyint(1) | — | 性質 | 中 | **キャンセル自体の可否フラグ**が落ちる。`0` のとき `cancel_closes_at` に何を入れるかが決まらない | `ticket_cancel_chk = 0` なら **`cancel_closes_at` を `starts_at` と同値にする**（= 開催直前までキャンセル不可の表現にならない）か NULL にするかを決める。ステージングは `1` |
-| `valid_chk` | — | カラム | 低 | ライブ機能そのものの有効フラグ | **テナント設定**なので基盤の `tenants.settings` に移す |
+| `valid_chk` | — | カラム | 低 | ライブ機能そのものの有効フラグ | **テナント設定**なので基盤で `tenants.settings.lw2_live` に移す（`config_live_lesson` の行を `ticket_cancel_*` ごと旧の値のまま。`migrator/steps/tenant.py`）。新のアプリはまだ読まない |
 
 **まとめ**: 受け皿が無い列 2 / 変換規則が要る列 1 / 高 0 件
 
@@ -421,7 +425,7 @@
 
 ### `user_certificate` → `certificates`
 
-`user_certificate` (8列) → `certificates` (20列) ／ ETL段 L7 ／ ローカルデータ数 3 / C（**recademy 実測 3件**）
+`user_certificate` (8列) → `certificates` (20列) ／ ETL段 L7 ／ ローカルデータ数 912 / C（**ステージング実測 3件**）
 
 > **`entity_id` は講座 ID ではない。** `certificate_type = 1` のとき中身は
 > **`user_learning_lesson_id`**（`LessonController:3668` の `$entityId = $userLearningLessonId`）で、
@@ -505,7 +509,7 @@
 |---|---|---|---|
 | **A1** | `quiz_attempts.passed` BOOLEAN NULL / `duration_sec` INT NULL | `user_learning_test.test_pass` / `test_time` | ・**当時の合否を表示に使う。** 新は `score >= passing_score` で都度判定するため、**合格点を後から変えると過去の合格が不合格になる**<br>・**終了判定は `test_end_time` で見る**。`finished_chk` は lw2 が一度も書いていない（全件が「中断」になる） |
 | **A2** | `quiz_answers.is_correct` / `option_order` / `sort_no` / `pre_question_pass` | `question_pass` / `option_order` ほか | ・**当時の正誤を表示に使う**（採点基準を変えても過去が変わらないように）<br>・選択肢の表示順が無いと**回答の再現ができない** |
-| **A3** | `submission_feedback_files`（添削のファイルを行に展開。2026-09-30 に `submission_files` から改めた）/ `submissions.score` / `settings` / `submission_feedbacks.question_comments` | `eval_disp_file_name1..5` / `eval_save_file_name1..5` / `report_question_comment` | ・**5本 → 1本に畳むと2本目以降が消える**（実測 4,963件中2件）<br>・添削が無い提出のスコアを `submissions` 側で持つ<br>・設問ごとの添削コメントの表示 |
+| **A3** | `submission_feedback_files`（添削のファイルを行に展開。2026-09-30 に `submission_files` から改めた）/ `submissions.score` / `settings` / `submission_feedbacks.question_comments` | `eval_disp_file_name1..5` / `eval_save_file_name1..5` / `report_question_comment` | ・**5本 → 1本に畳むと2本目以降が消える**（ステージング実測で添削のファイルがある提出は 228件中5件、2本目以降を使うものは0件）<br>・添削が無い提出のスコアを `submissions` 側で持つ<br>・設問ごとの添削コメントの表示 |
 | **A4** | `survey_responses.entity_type` / `entity_id` / `suspended` | `enquete_answer.entity_type_id` 1/2/3 ＋ `suspended_chk` | ・中断状態を移す先<br>・**これだけでは type 1/3 は移せない**（`lesson_id` が NOT NULL）。行き先は受け皿の設計から決め直す |
 | **A5** | `live_reservations.verification_key` / `settings` ／ `live_reservation_statuses` に `host_canceled` | `verification_key` / `cancel_chk` + `attendance_chk` + `stop_chk` + `recent_access_date` | ・出席確認（QR・コード入力）<br>・**`stop_chk`（開催側の中止）を `canceled` に入れない。** 受講者都合のキャンセルとして記録される<br>・**振替予約（`change_reserve_id` / `base_reserve_id`）は実測0件**。値は `settings` に残している |
 | ~~**A11**~~ | ~~`badge_definitions`（バッジの定義）~~ | `badge_item` | **取り下げ**（2026-09-28 バッジは移行対象外） |
@@ -526,7 +530,7 @@
 
 > **`enquete_answer` の `enquete_reply_time` が NULL の行は移る**（`regist_date` で代替する）。以前はここに載せていた。
 >
-> **一覧に出ずに移らない行がある**（学習履歴の重複・出題条件の回答・お知らせ／レポートへの回答ほか）。
+> **一覧に出ずに移らない行がある**（学習履歴の重複・お知らせ／レポートへの回答ほか）。出題条件の回答は 2026-10-02 から一覧に出す。
 > 一覧は [migration-spec 3.4](migration-spec.md#一覧に出ずに移らない行)。
 
 #### B. 方針として移行しないもの

@@ -214,7 +214,7 @@
 ## 新環境に追加するテーブル・カラム
 
 > **migration に落とした形は [マイグレーション対象](schema-additions.md)。**
-> **school-launcher の `20260928132756_lw2_billing_additions.sql`**（ブランチ `feat/lw2-billing-schema`）に A1〜A8 をまとめてある。
+> **school-launcher の `20260928132756_lw2_billing_additions.sql`**（`feat/lw2-billing-schema` で作り、`hanataba_dev` に PR #139 でマージ済み）に A1〜A8 をまとめてある。
 
 | # | 追加するもの | 旧環境の対応 | 変更が必要な機能 |
 |---|---|---|---|

@@ -5,7 +5,7 @@
 
 - **調査時点:** 2026-09-30
   - 旧: `learningware-kiracari`
-  - 新: `school-launcher` の `feat/lw2-billing-schema`（`hanataba_dev` とアプリのコードは同じ）。就業支援は別サービスの `career-backend`
+  - 新: `school-launcher` の `feat/lw2-support-schema`（2026-10-02 時点。lw2 移行のスキーマは `hanataba_dev` にマージ済みのものと、このブランチで足したもの）（`hanataba_dev` とアプリのコードは同じ）。就業支援は別サービスの `career-backend`
 - **根拠の場所の書き方:**
   - 旧は `learningware-kiracari/application/` からの相対パス。
   - 新は `btoc-backend/internal/` / `career-backend/internal/` / `btoc-frontend/src/` からのパス。

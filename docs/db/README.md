@@ -86,7 +86,7 @@ A/B/C の判定そのものは棚卸し作成者の見解で機械的な基準�
 | 01 基盤 | [breakdown](01-foundation/breakdown.md) | [review](01-foundation/review.md) | [spec](01-foundation/migration-spec.md) | [features](01-foundation/features.md) | マスター / ユーザ |
 | 02 コンテンツ | [breakdown](02-content/breakdown.md) | [review](02-content/review.md) | [spec](02-content/migration-spec.md) | [features](02-content/features.md) | オンデマンド講座 / テスト定義・課題定義 / アンケート定義 / ライブ講座 |
 | 03 受講 | [breakdown](03-enrollment/breakdown.md) | [review](03-enrollment/review.md) | [spec](03-enrollment/migration-spec.md) | [features](03-enrollment/features.md) | 受講権限 / 学習履歴 / テスト結果 / 課題提出 / アンケート回答 / ライブ予約 / 修了証 |
-| 04 課金 | [breakdown](04-billing/breakdown.md) | [review](04-billing/review.md) | [spec](04-billing/migration-spec.md) | [features](04-billing/features.md) | チケット / 決済 / 帳票 |
+| 04 課金 | [breakdown](04-billing/breakdown.md) | [review](04-billing/review.md) | [spec](04-billing/migration-spec.md) | [features](04-billing/features.md) | チケット / 決済 / 帳票 / 自動割当 |
 | 05 サポート機能 | [breakdown](05-support/breakdown.md) | [review](05-support/review.md) | [spec](05-support/migration-spec.md) | [features](05-support/features.md) | LINE / クーポン / お知らせ / 問い合わせ / ファイル / 就業支援 / コミュニティ / 利用料の集計 |
 | 06 対象外 | [breakdown](06-out-of-scope/breakdown.md) | [review](06-out-of-scope/review.md) | **不要** | [features](06-out-of-scope/features.md) | 移行しない |
 
@@ -97,15 +97,17 @@ A/B/C の判定そのものは棚卸し作成者の見解で機械的な基準�
 
 | migration | 区分 | 状態 |
 |---|---|---|
-| `20260922070746`〜`20260922070755`、`20260924022809_lw2_foundation_additions` | 01 | `hanataba_dev` にマージ済み |
-| `20260924022810_lw2_content_additions`、`20260926190305_create_course_chapters` | 02 | 同上 |
-| `20260924054151_lw2_enrollment_additions` | 03 | 同上（PR #139） |
-| `20260927105511_user_tags_and_auto_assign_rules`（新システムの機能。タグ・自動付与ルール） | 01・04 | 同上 |
-| `20260928072918_align_lw2_roles_and_lesson_types` | 01・02 | 同上 |
+| `20260922070746`〜`20260922070755` | 01 | `hanataba_dev` にマージ済み（PR #125） |
+| `20260924022809_lw2_foundation_additions` | 01 | 同上（PR #127） |
+| `20260924022810_lw2_content_additions` | 02 | 同上（PR #127） |
+| `20260926190305_create_course_chapters` | 02 | 同上（PR #137） |
+| `20260924054151_lw2_enrollment_additions` | 03 | 同上（PR #135） |
+| `20260927105511_user_tags_and_auto_assign_rules`（新システムの機能。タグ・自動付与ルール） | 01・04 | 同上（PR #134） |
+| `20260928072918_align_lw2_roles_and_lesson_types` | 01・02 | 同上（PR #135） |
 | `20260928132756_lw2_billing_additions` | 04 | 同上（PR #139） |
-| `20260929091539` / `20260929102209` / `20260930044959`（旧 ID の列を旧列名にする） | 01〜04 | 同上 |
-| career `009_rename_career_history_legacy_id`（職務経歴の旧 ID。移行ツールは career に書かない） | 05 | 同上 |
-| `20260930052453_lw2_support_additions` | 05（03 の添削のファイルを同居） | **`feat/lw2-support-schema` の上で未追跡** |
+| `20260929091539` / `20260929102209` / `20260930044959`（旧 ID の列を旧列名にする） | 01〜04 | 同上（前の2つは PR #135、`20260930044959` は PR #139） |
+| career `009_rename_career_history_legacy_id`（職務経歴の旧 ID。移行ツールは career に書かない） | 05 | 同上（PR #139） |
+| `20260930052453_lw2_support_additions` | 05（03 の添削のファイルを同居） | **`feat/lw2-support-schema` にコミット・push 済み**（`hanataba_dev` には未マージ） |
 | `20261001085757_lw2_keep_deleted_rows`（削除済みも移すための列・表） | 01〜05 | **同上** |
 
 > school-launcher 側の都合で入った lw2 関連の migration（メールアドレスを任意にする `20260928061152`、
@@ -200,7 +202,7 @@ A/B/C の判定そのものは棚卸し作成者の見解で機械的な基準�
 - **`tenants.id` は移行側で採番する。** この1値が全テーブルの `tenant_id` になるため、**採番を1か所に閉じ、決めた値を設定値として配る**こと。ツールごとに決定論 ULID を計算し直す作りだと、入力が1か所ずれただけでテナントが二重にできる
 - **NOT NULL 列とその FK 先は「シードがあるか」で投入可否が決まる。** `tenants` で NOT NULL なのは `slug` / `name` / `db_type` / `status` の4列だけで、FK 先の `tenant_db_types` / `tenant_statuses` は migration がシードまで持っている。**`plan_id` は NULL 可**で、FK 先の `platform_plans` に行を入れるのはデモ用の `cmd/seed` だけなので、移行先では `NULL` を入れる
 - **「新側に既にあるから移行不要」という判断は成り立たない。** 受け皿があるものはすべて移行側が作る
-- **受け皿が無い列・テーブルは新環境に追加して受ける**（01 基盤で [A1〜A21](01-foundation/review.md#新環境に追加するテーブルカラム)）。**複数列を1列に畳むのも「落とす」と同じ**として扱う（`tel` / `mobile_tel` を `phone` 1列にする、`valid_chk` / `del_chk` を `status` に畳む、など）。ただし**追加するだけでは機能しない** — 構造体 / repository / DTO / フロントの型と画面までを1セットで直す必要があり、**移行ツールの外側の作業**になる
+- **受け皿が無い列・テーブルは新環境に追加して受ける**（01 基盤で [A1〜A24](01-foundation/review.md#新環境に追加するテーブルカラム)）。**複数列を1列に畳むのも「落とす」と同じ**として扱う（`tel` / `mobile_tel` を `phone` 1列にする、`valid_chk` / `del_chk` を `status` に畳む、など）。ただし**追加するだけでは機能しない** — 構造体 / repository / DTO / フロントの型と画面までを1セットで直す必要があり、**移行ツールの外側の作業**になる
 
 ---
 
@@ -242,7 +244,7 @@ A/B/C の判定そのものは棚卸し作成者の見解で機械的な基準�
 
 ### C. 新環境に受け皿が無いもの（追加して受ける）
 
-**「落ちる」ではなく「新環境に追加して受ける」対象。** 主なものだけ挙げる。詳細は各区分のファイルを参照。01 基盤は [A1〜A21](01-foundation/review.md#新環境に追加するテーブルカラム)、02 コンテンツは [A1〜A27](02-content/review.md#新環境に追加するテーブルカラム)、03 受講は [A1〜A7](03-enrollment/review.md#新環境に追加するテーブルカラム)、04 課金は [A1〜A2](04-billing/review.md#新環境に追加するテーブルカラム)、05 サポート機能は [A1](05-support/review.md#新環境に追加するテーブルカラム) に書き出してある。**A 番号は区分ごとの通し番号**で、区分をまたぐときは「基盤 A10」のように区分名を添える。
+**「落ちる」ではなく「新環境に追加して受ける」対象。** 主なものだけ挙げる。詳細は各区分のファイルを参照。01 基盤は [A1〜A24](01-foundation/review.md#新環境に追加するテーブルカラム)、02 コンテンツは [A1〜A27](02-content/review.md#新環境に追加するテーブルカラム)、03 受講は [A1〜A10](03-enrollment/review.md#新環境に追加するテーブルカラム)、04 課金は [A1〜A8](04-billing/review.md#新環境に追加するテーブルカラム)、05 サポート機能は [A1〜A6](05-support/review.md#新環境に追加するテーブルカラム) に書き出してある。**A 番号は区分ごとの通し番号**で、区分をまたぐときは「基盤 A10」のように区分名を添える。
 
 | 区分 | 落ちるもの |
 |---|---|
