@@ -91,7 +91,9 @@ class AssignmentsStep(Step):
         for report in reports:
             unit = units.get(int(report["unit_id"]))
             if unit is None:
-                continue  # 孤児。ユニットが物理削除されている
+                # 通らない: 課題は unit → lesson で絞って読むので、ユニットの無い課題は読めない
+                # （テナントで絞れないので、このテナントの行かも分からない）
+                continue
             rows.append({**report, "_unit": unit})
         return rows
 

@@ -113,9 +113,13 @@ class LiveLessonsStep(Step):
         by_live: dict[int, list[dict]] = {}
         for row in occurrences(ctx):
             by_live.setdefault(int(row["live_lesson_id"]), []).append(row)
+        # 教室で行うライブの会場。**会場の表（`facility`）は対象外（06 X01）なので、
+        # ID だけ残しても引けない。** 名前・住所・アクセスを文字列でライブの設定に残す
+        venues = {int(f["facility_id"]): f for f in source.fetch_for_tenant("facility", FACILITY_COLUMNS)}
         for live in lives:
             live["_course"] = placement.get(int(live["live_lesson_id"]))
             live["_dates"] = by_live.get(int(live["live_lesson_id"]), [])
+            live["_facility"] = venues.get(int(live.get("facility_id") or 0))
         return lives
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
@@ -204,6 +208,19 @@ def _status(row: dict) -> str:
     return "published" if int(row.get("valid_chk") or 0) == 1 else "draft"
 
 
+#: 会場（旧 `facility`）から残す列。画像・添付ファイルは L9 の移送待ち
+FACILITY_COLUMNS = (
+    "facility_id", "facility_name", "facility_url", "facility_access", "tel", "zip_code",
+    "pref_id", "city_name", "address", "facility_detail",
+)
+
+
+def _facility(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    return {k: row.get(k) for k in FACILITY_COLUMNS if k != "facility_id" and row.get(k) not in (None, "")}
+
+
 def _settings(row: dict) -> str:
     """新環境に受け皿が無い列をまとめて残す。
 
@@ -216,6 +233,8 @@ def _settings(row: dict) -> str:
             "live_lesson_type": row.get("live_lesson_type"),
             "live_lesson_type_name": LESSON_TYPES.get(int(row.get("live_lesson_type") or 0)),
             "facility_id": row.get("facility_id"),
+            # 会場の中身（会場の表は移さないので、ここに文字列で残す）
+            "facility": _facility(row.get("_facility")),
             "reserve_max_count": row.get("reserve_max_count"),
             "reserve_max_count_start_date": str(row.get("reserve_max_count_start_date") or "") or None,
             "detail_tag_head": row.get("detail_tag_head"),
@@ -275,7 +294,10 @@ class OccurrencesStep(Step):
         for row in rows:
             live = lives.get(int(row["live_lesson_id"]))
             if live is None:
-                continue  # 孤児。親のライブが物理削除されている
+                # 孤児。親のライブが物理削除されている（開催回は tenant_id を持つ）
+                self.drop("live_lesson_occurrences", row["live_lesson_date_id"], "旧データの不整合",
+                          f"ライブ（live_lesson_id={row['live_lesson_id']}）が物理削除されている")
+                continue
             out.append(
                 {
                     **row,
@@ -328,7 +350,11 @@ class OccurrencesStep(Step):
                             if int(row.get("del_chk") or 0) == 1
                             else None
                         ),
-                        "remind_enabled": bool(int(row.get("mail_send_chk") or 0)),
+                        # **旧に開催回ごとのリマインドの止め方は無い**（`mail_send_chk` は「送信済み」の印で、
+                        # 予約の `reminded_at` に移す）。旧のバッチは、削除済みでない回のうち、
+                        # ライブが削除済みでなく有効（`valid_chk = 1`）なものに送っていた。削除・無効は
+                        # 回やライブの状態（`deleted_at` / `status`）に移しているので、ここでは止めない
+                        "remind_enabled": True,
                         "settings": json.dumps(
                             {
                                 "date_type": row.get("date_type"),

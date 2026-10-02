@@ -102,6 +102,11 @@ CONTENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
     ("course_tag_links", None),
     # A4 レッスン
     ("lessons", "unit_id"),
+    # 見出しブロック → 講座の章（school-launcher 20260926190305 / 20260930044959）
+    ("course_chapters", "unit_id"),
+    # 削除済みも移す（2026-10-01。school-launcher 20261001085757）
+    ("course_chapters", "deleted_at"),
+    ("lessons", "chapter_id"),
     ("lessons", "open_at"),
     ("lessons", "close_at"),
     ("lessons", "close_after_days"),
@@ -153,6 +158,9 @@ CONTENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
     ("live_lesson_recurrence_rules", None),
     ("live_lesson_recurrence_details", None),
     ("live_lesson_recurrence_exclusions", None),
+    # 削除済みも移す（2026-10-01。school-launcher 20261001085757）
+    ("live_lesson_group_targets", "deleted_at"),
+    ("live_lesson_exclusion_date_history", "live_lesson_id"),
 )
 
 #: 区分ごとの必須スキーマ。**その区分を流すときだけ確認する**

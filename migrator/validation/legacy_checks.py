@@ -240,6 +240,37 @@ def content_checks(env: Env) -> list[CheckResult]:
     c.values("ユニット名", [(k, lu[k]["title"], nl[k]["title"]) for k in both])
     c.values("ユニットの種別（畳まない）", [(k, UNIT_TYPE.get(int(lu[k]["unit_type_id"])), nl[k]["type"]) for k in both])
 
+    # 見出し → 講座の章（削除済みも移す。2026-10-01）
+    heads = {r["unit_id"]: r for r in env.src("unit", f"""
+        SELECT u.unit_id, u.title, u.del_chk FROM unit u JOIN lesson l ON l.lesson_id = u.lesson_id
+        WHERE (l.tenant_id = %s OR l.lesson_id IN ({marks})) AND u.unit_type_id = 0""", t + ids)}
+    nchr = {r["unit_id"]: r for r in env.dst(
+        "SELECT unit_id, title, deleted_at IS NOT NULL deleted FROM course_chapters WHERE tenant_id = %s AND unit_id IS NOT NULL", d)}
+    nch = {k: v["title"] for k, v in nchr.items()}
+    c.coverage("講座の章（旧の見出し。削除済みを含む）", {k: k for k in heads}, set(nch), env.skipped("course_chapters"))
+    c.values("章の名前", [(k, (heads[k]["title"] or "").strip(), nch[k]) for k in heads if k in nch])
+    c.values("章の削除済み", [(k, int(int(heads[k]["del_chk"] or 0) == 1), int(nchr[k]["deleted"]))
+                         for k in heads if k in nchr])
+    # ユニットの所属: 旧の講座ページと同じ規則で求めた章と、新の chapter_id。
+    # **移行ツールの判定（chapter_of）は使わない。** 旧の並び（UnitModel::_buildSql の既定
+    # `ORDER BY U.sort_no ASC, U.unit_id ASC`）を SQL でそのまま使い、直前の削除されていない見出しにまとめる
+    expected: dict = {}
+    current: dict = {}
+    for r in env.src("unit", f"""
+        SELECT u.unit_id, u.lesson_id, u.unit_type_id, u.del_chk FROM unit u
+        JOIN lesson l ON l.lesson_id = u.lesson_id WHERE l.tenant_id = %s OR l.lesson_id IN ({marks})
+        ORDER BY u.lesson_id, u.sort_no, u.unit_id""", t + ids):
+        if int(r["unit_type_id"]) == 0:
+            if int(r["del_chk"] or 0) == 0:
+                current[r["lesson_id"]] = r["unit_id"]  # 削除済みの見出しは画面に出ないので区切りにしない
+        else:
+            expected[r["unit_id"]] = current.get(r["lesson_id"])
+    nbelong = {r["unit_id"]: r["chapter"] for r in env.dst("""
+        SELECT l.unit_id, ch.unit_id chapter FROM lessons l LEFT JOIN course_chapters ch ON ch.id = l.chapter_id
+        WHERE l.tenant_id = %s AND l.unit_id IS NOT NULL AND l.type <> 'live'""", d)}
+    c.values("ユニットの章（見出しの後ろのユニットがその章に入る）",
+             [(k, expected.get(k), nbelong[k]) for k in nbelong if k in expected])
+
     # アンケートのユニットには定義（survey_lessons）が要る。**定義が無いと回答も入らない**
     surveys = {k for k, v in lu.items() if int(v["unit_type_id"]) == 3}
     marks_s, sids = _in(surveys)
@@ -287,6 +318,12 @@ def content_checks(env: Env) -> list[CheckResult]:
         JOIN live_lesson l ON l.live_lesson_id = dt.live_lesson_id WHERE l.tenant_id = %s""", t)}
     nd = {r["id"] for r in env.dst("SELECT id FROM live_lesson_occurrences WHERE tenant_id = %s", d)}
     c.coverage("ライブの開催回", dates, nd, env.skipped("live_lesson_occurrences"))
+    # 除外日の全行（旧の形のまま。削除済み・保存のたびに積んだ行を含む）
+    ln = env.src("live_lesson_exclusion_date",
+                 "SELECT COUNT(*) n FROM live_lesson_exclusion_date WHERE tenant_id = %s", t)
+    nn = env.dst("SELECT COUNT(*) n FROM live_lesson_exclusion_date_history WHERE tenant_id = %s", d)
+    ln, nn = (int(ln[0]["n"]) if ln else 0), (int(nn[0]["n"]) if nn else 0)
+    c(f"live_lesson_exclusion_date の全行（削除済みを含む。旧 {ln} / 新 {nn}）", ln == nn)
     return c.results
 
 

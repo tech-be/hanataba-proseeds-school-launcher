@@ -1,7 +1,9 @@
 """ondemand.3 — レッスン（旧 `unit`）と動画。
 
-**見出しブロック（`unit_type_id=0`）は入れない。** レッスンではなく表示上の区切りで、
-`lessons` に入れると FK と種別の両方が合わなくなる（ETL設計 §5-0）。
+**見出しブロック（`unit_type_id=0`）は `lessons` に入れず、`course_chapters`（講座の章）に入れる。**
+レッスンではなく表示上の区切りなので、レッスンの種別にはしない（進捗・修了の数え方が狂う）。
+旧は講座の中で `sort_no` 順に並べ、**見出しの後ろのユニットをその見出しにまとめていた**。
+新は所属を `lessons.chapter_id` で持つ（見出しより前のユニットは NULL）。
 
 動画の配信先は `lecture` ではなく **`lecture_path`** が持つ。`pmovie_chk` が
 立っているものは p-movie のトークン、立っていないものは `lecture_path.pc_path`。
@@ -37,6 +39,7 @@ UNIT_COLUMNS = (
     "unit_duration",
     "del_chk",
     "regist_date",
+    "update_date",
 )
 
 LECTURE_COLUMNS = (
@@ -58,12 +61,12 @@ UNIT_EXEMPTION_COLUMNS = ("unit_id", "exemption_unit_id", "exemption_score", "re
 #: 旧 `unit.unit_type_id` → 新 `lessons.type`（`lesson_types.code`）。
 #: **畳まない。** 0 は入れない（見出し）、5 は対象外区分（集合研修）
 UNIT_TYPES: dict[int, str | None] = {
-    0: None,  # 見出しブロック。lessons に入れない
+    0: None,  # 見出しブロック。lessons ではなく course_chapters に入れる（ChaptersStep）
     1: "video",
     2: "quiz",
     3: "survey",
     4: "assignment",
-    5: None,  # 集合研修。対象外区分（X02）
+    5: None,  # 集合研修。対象外区分（X01）
     6: "document",
     7: "discussion",   # ShareController::UNIT_TYPE_DISCUSSION
     8: "skill_check",  # ShareController::UNIT_TYPE_SKILL
@@ -74,6 +77,91 @@ UNIT_TYPES: dict[int, str | None] = {
 #: 診断結果（`public_learning_skill_unit*`）は**就職支援（07）**にある。
 #: どちらもオンデマンドの範囲外で、その区分を移すまで中身は空のまま
 CONTENT_NOT_YET_MIGRATED = {"discussion", "skill_check"}
+
+
+#: 章の ULID の名前空間。**レッスン（`unit`）と分ける** — 同じ旧 unit_id から作るが別の表
+CHAPTER_NS = "unit_chapter"
+
+
+def _is_heading(row: dict) -> bool:
+    return int(row.get("unit_type_id") or 0) == 0
+
+
+def _deleted(row: dict) -> bool:
+    return int(row.get("del_chk") or 0) == 1
+
+
+def chapter_of(rows: list[dict]) -> dict[int, int | None]:
+    """ユニット → 所属する見出しの旧 unit_id。
+
+    **旧の講座ページと同じ規則。** 講座ごとに `sort_no` 順（同じなら unit_id 順）に並べ、
+    （旧 `UnitModel::_buildSql` の `lessonId` の既定の並び `U.sort_no ASC, U.unit_id ASC`。
+    受講者の講座ページ `LessonController` → `findUnitByLessonId` が使う。ReCADemy では見出しと
+    並び順が重なる組が 77 ある。2026-10-01 に旧のソースで確かめた）
+    直前にある**削除されていない**見出しにまとめる。削除済みの見出しは画面に出ないので、
+    区切りにもならない。最初の見出しより前のユニットは章に属さない（None）。
+    """
+    by_course: dict[int, list[dict]] = {}
+    for row in rows:
+        by_course.setdefault(int(row["lesson_id"]), []).append(row)
+    out: dict[int, int | None] = {}
+    for units in by_course.values():
+        current: int | None = None
+        for row in sorted(units, key=lambda r: (int(r.get("sort_no") or 0), int(r["unit_id"]))):
+            if _is_heading(row):
+                if not _deleted(row):
+                    current = int(row["unit_id"])
+                continue
+            out[int(row["unit_id"])] = current
+    return out
+
+
+def _fetch_units(ctx: RunContext) -> list[dict]:
+    # 共有講座（tenant_id=0）のユニットも入る（`SourceDatabase.shared_lessons`）
+    return ctx.require_source().fetch_joined(
+        "unit", UNIT_COLUMNS, parent="lesson", on="c.lesson_id = p.lesson_id"
+    )
+
+
+class ChaptersStep(Step):
+    """見出しブロック（`unit_type_id=0`）を `course_chapters`（講座の章）に移す。
+
+    **削除済みの見出しも移す**（`deleted_at`。2026-10-01 の方針）。新のアプリはまだ `deleted_at` を
+    読まないので、削除済みの章も講座に出る。レッスンの所属（`chapter_of`）は旧の画面どおり、
+    削除済みの見出しを区切りにしない。
+    """
+
+    name = "content.chapters"
+    description = "見出しブロックを講座の章として移す"
+    source_table = "unit"
+    target_table = "course_chapters"
+    depends_on = ("content.courses",)
+
+    def extract(self, ctx: RunContext) -> list[dict]:
+        return [r for r in _fetch_units(ctx) if _is_heading(r)]
+
+    def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
+        tenant_id = ctx.tenant_id.value
+        return [
+            Record(
+                table="course_chapters",
+                values={
+                    "id": ctx.ulid.for_row(CHAPTER_NS, row["unit_id"]),
+                    "tenant_id": tenant_id,
+                    "course_id": ctx.ulid.for_row("lesson", row["lesson_id"]),
+                    "title": (row.get("title") or "").strip(),
+                    "sort_order": int(row.get("sort_no") or 0),
+                    "unit_id": int(row["unit_id"]),
+                    "deleted_at": (
+                        convert(row.get("update_date"), ColumnKind.DATETIME) if _deleted(row) else None
+                    ),
+                    "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
+                },
+                natural_key=("tenant_id", "unit_id"),
+                source_key=int(row["unit_id"]),
+            )
+            for row in rows
+        ]
 
 
 class LessonsStep(Step):
@@ -87,16 +175,14 @@ class LessonsStep(Step):
     description = "ユニットをレッスンとして移す（見出しブロックは除く）"
     source_table = "unit"
     target_table = "lessons"
-    depends_on = ("content.courses",)
+    depends_on = ("content.courses", "content.chapters")
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        # 共有講座（tenant_id=0）のユニットも入る（`SourceDatabase.shared_lessons`）
-        return ctx.require_source().fetch_joined(
-            "unit", UNIT_COLUMNS, parent="lesson", on="c.lesson_id = p.lesson_id"
-        )
+        return _fetch_units(ctx)
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         tenant_id = ctx.tenant_id.value
+        chapters = chapter_of(rows)
         records: list[Record] = []
         skipped: dict[str, int] = {}
         for row in rows:
@@ -118,6 +204,12 @@ class LessonsStep(Step):
                         "tenant_id": tenant_id,
                         "unit_id": int(row["unit_id"]),
                         "course_id": ctx.ulid.for_row("lesson", row["lesson_id"]),
+                        # 所属する章（直前の見出し）。見出しより前のユニットは NULL
+                        "chapter_id": (
+                            ctx.ulid.for_row(CHAPTER_NS, chapters[int(row["unit_id"])])
+                            if chapters.get(int(row["unit_id"])) is not None
+                            else None
+                        ),
                         "title": row.get("title"),
                         "description": row.get("detail"),
                         "type": lesson_type,
@@ -152,7 +244,7 @@ class LessonsStep(Step):
             )
         if skipped:
             ctx.logger.info(
-                "lessons に入れないユニット: %s（0=見出しブロック / 5=集合研修は対象外区分）", skipped
+                "lessons に入れないユニット: %s（0=見出しブロックは course_chapters へ / 5=集合研修は対象外区分）", skipped
             )
         return records
 
@@ -338,4 +430,4 @@ class LessonPreconditionsStep(Step):
 
 
 def build() -> list[Step]:
-    return [LessonsStep(), VideoLessonsStep(), LessonPreconditionsStep()]
+    return [ChaptersStep(), LessonsStep(), VideoLessonsStep(), LessonPreconditionsStep()]
