@@ -3,7 +3,18 @@
 [突き合わせ](review.md#新環境に追加するテーブルカラム) の追加一覧（A1〜A21）を、**school-launcher に当てる migration の単位**に落としたもの。
 
 - **当てる先**: `school-launcher/btoc-backend/db/migrations/`（goose 形式。雛形は `make migrate-create`）
-- **当てた日**: 2026-09-22。下の M1〜M9 は**適用済みの DDL**で、school-launcher の実ファイルと一致する
+- **当てた日**: M1〜M10 は 2026-09-22。M11〜M13 はその後に足した。どれも school-launcher の実ファイルと一致する
+- **実物**（2026-10-02 時点。`20260930044959` までは `hanataba_dev` に PR #139 でマージ済み）:
+
+  | migration | 中身 |
+  |---|---|
+  | `20260922070746`〜`20260922070755`（10本） | M1〜M10 |
+  | `20260924022809_lw2_foundation_additions.sql` | `tenants` / `users` の不足分と `user_login_periods` |
+  | `20260928072918_align_lw2_roles_and_lesson_types.sql` | M12 |
+  | `20260929091539` / `20260929102209`（旧 ID の改名） | M11 |
+  | `20260927105511_user_tags_and_auto_assign_rules.sql` | M13 のタグの表（新システムの機能。移行で書き込む先） |
+  | `20260930044959_rename_lw2_legacy_id_on_chapters_and_tags.sql` | M13 `user_tags.attribute_id` |
+  | **`20261001085757_lw2_keep_deleted_rows.sql`**（2026-10-01。`feat/lw2-support-schema` の上で未追跡） | M13 `user_tags.deleted_at` |
 - **確認**: `python -m migrator doctor` / `python -m migrator run --phase common.0`
 
 > **ここに載っているのは案ではなく、当たったもの。** 最初の版は「DDL は案」と断っていたが、
@@ -14,8 +25,8 @@
 
 | 区別 | 意味 | 欠けているとどうなるか |
 |---|---|---|
-| **必須** | Step が**実際に書き込む先**。**48 件** | `common.0` で止まる。移行できない |
-| **計画** | **移行では使わない**もの。**4 件** | 止まらない。`doctor` が残作業として出す |
+| **必須** | Step が**実際に書き込む先**。**49 件** | `common.0` で止まる。移行できない |
+| **計画** | **移行では使わない**もの。**4 件**（追加するものとしては下の「計画」の2つ） | 止まらない。`doctor` が残作業として出す |
 
 > **「計画」は先送りではない。** 移行で使うものはすべて必須に入れてある。
 > いま計画に残っているのは **A16（`login_history` の列追加）と A15（2FA の受け皿）**で、
@@ -370,6 +381,11 @@ ALTER TABLE notification_optouts
 
 ## M7. グループ・属性（A10 / A11）
 
+> **属性はタグ（M13）に一本化した（2026-09-30）。** 下の `tenant_attributes` / `user_attribute_values` /
+> `attribute_required_courses` は school-launcher に当たっているが、**移行ツールはもう書かない**。
+> 属性と会員の属性は `user_tags` / `user_tag_assignments` に移す。グループ（`tenant_groups` /
+> `tenant_group_members`）はこの節のとおり。
+
 **必須。** 旧 `group` / `attribute` の定義と、会員への割当。
 
 ```sql
@@ -472,7 +488,7 @@ CREATE TABLE user_field_visibility (
     id         CHAR(26) NOT NULL PRIMARY KEY,
     tenant_id  CHAR(26) NOT NULL,
     user_id    CHAR(26) NOT NULL,
-    field_code VARCHAR(50) NOT NULL,   -- 旧 *_open_chk の列名をそのまま使う
+    field_code VARCHAR(50) NOT NULL,   -- 旧 *_open_chk に対応する短いコード（下表）
     visible    BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -501,10 +517,10 @@ CREATE TABLE instructor_assignments (
 | `field_code` | 旧の列 |
 |---|---|
 | `profile` / `name` / `address` / `birthday` / `diary` / `lesson` | `profile_open_chk` / `name_open_chk` / `address_open_chk` / `birthday_open_chk` / `diary_open_chk` / `lesson_open_chk` |
-| `personal_record` | `user_attached_info.personal_record_chk` |
+| `personal_record` | `user_attached_info.personal_record_chk`（**現状は移していない**。実装が無い。2026-10-02 の確認。ステージングで値があるのは87名） |
 
-> **`instructor_assignments.scope='course'` は `target_id` が NULL で始まる。** 講座が未移行のため。
-> `legacy_target_id`（旧 `lesson_id`）を持っておき、オンデマンド移行後に埋める。
+> **`instructor_assignments.scope='course'` は `target_id` が NULL で入る。** 講座が未移行のため。
+> `legacy_target_id`（旧 `lesson_id`）は残るが、**オンデマンド移行後に `target_id` を埋める Step は現状は無い**（2026-10-02 の確認。NULL のまま）。
 > **`courses.instructor_id` の 1:1 見直しはオンデマンド O01 と同時**に行う。
 
 ---
@@ -647,7 +663,7 @@ ALTER TABLE tenants DROP INDEX uk_tenants_legacy, DROP COLUMN tenant_id;
 
 ---
 
-## 計画（移行では使わない 2 件）
+## 計画（移行では使わない 2 件。`PLANNED_SCHEMA` では4項目）
 
 | 追加するもの | A番号 | なぜ移行で使わないか |
 |---|---|---|
@@ -671,7 +687,7 @@ python -m migrator run --phase common.0   # 必須が1件でも欠けていれ�
 `doctor` の出力（適用後）:
 
 ```
-[OK  ] 追加スキーマ（移行に必須 48 件）: すべて入っている
+[OK  ] 追加スキーマ（移行に必須 49 件）: すべて入っている
 [TODO] 追加スキーマ（移行では使わない）: 3 件未適用: login_history.input_login_id,
        login_history.logged_out_at, login_history.session_id。移行は止まらないが、
        cutover 後に失敗ログインを記録できない
@@ -680,7 +696,7 @@ python -m migrator run --phase common.0   # 必須が1件でも欠けていれ�
 計画のうち**未適用のものだけ**が `TODO` で出る（`OK` とは混ぜない）。`user_two_factor_secrets` は
 適用済みのため出ない。
 
-移行ツールを動かさずに school-launcher 側だけで確かめるなら、`REQUIRED_SCHEMA` の 48 組を
+移行ツールを動かさずに school-launcher 側だけで確かめるなら、`REQUIRED_SCHEMA` の 49 組を
 `information_schema` に当てる（`doctor` と同じ判定で、legacy DB への接続が要らない）。
 
 ### school-launcher 側で表を足したときの注意
@@ -714,3 +730,23 @@ UPDATE で直す**。同じ migration で `lesson_types` の `discussion` / `ski
 - 旧で削除済み（`del_chk = 1`）の `facility_manager`（role_id 3）と `supporter`（role_id 8）は、**移行するが削除済み**（`active = FALSE`）で入れる
 - 並び順 1〜6 は seed のロール（10〜90）より前に並ぶ。seed のロールは全テナント共通なので変えない
 - Down は M2 の値に戻し、`facility_manager` は参照が無いときだけ消す
+
+---
+
+## M13. タグ（旧の属性。A11 の一本化。2026-09-30 / 2026-10-01）
+
+**必須。** 旧の「属性」は新の「タグ」。新の自動付与ルール・会員の絞り込みがタグを使うので、属性はタグに移す。
+
+| 追加・前提 | migration | 移すもの |
+|---|---|---|
+| `user_tags` / `user_tag_assignments`（新システムの表） | `20260927105511_user_tags_and_auto_assign_rules.sql` | 旧 `attribute` / `user_attribute` |
+| `user_tags.attribute_id`（旧 ID。NULL 可） | `20260930044959_rename_lw2_legacy_id_on_chapters_and_tags.sql`（`legacy_id` から改名） | 旧 `attribute.attribute_id` |
+| `user_tags.deleted_at` | `20261001085757_lw2_keep_deleted_rows.sql` | 旧 `attribute.del_chk = 1`（削除済みも移す） |
+
+```sql
+ALTER TABLE user_tags
+    ADD COLUMN deleted_at DATETIME(3) NULL AFTER attribute_id;   -- 旧 attribute.del_chk = 1
+```
+
+> **新のアプリは `deleted_at` をまだ読まない。** 削除済みのタグも一覧と会員に出る（移行の方針として受け入れた）。
+
