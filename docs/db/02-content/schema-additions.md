@@ -3,7 +3,14 @@
 [突き合わせ](review.md#新環境に追加するテーブルカラム) の追加一覧（A1〜A27）を、**school-launcher に当てる migration の単位**に落としたもの。
 
 - **当てる先**: `school-launcher/btoc-backend/db/migrations/`（goose 形式。雛形は `make migrate-create`）
-- **実物**: `20260924022810_lw2_content_additions.sql` — **この区分の追加は1本にまとまっている**
+- **実物**（2026-10-02 時点。`20260930044959` までは `hanataba_dev` に PR #139 でマージ済み）:
+
+  | migration | 中身 |
+  |---|---|
+  | `20260924022810_lw2_content_additions.sql` | 1〜9（この区分の追加の本体） |
+  | `20260926190305_create_course_chapters.sql` | 10 講座の章（`course_chapters`、`lessons.chapter_id`） |
+  | `20260930044959_rename_lw2_legacy_id_on_chapters_and_tags.sql` | 10 `course_chapters.unit_id`（`legacy_id` から改名） |
+  | **`20261001085757_lw2_keep_deleted_rows.sql`**（2026-10-01。`feat/lw2-support-schema` の上で未追跡） | 11 削除済みも移すための列と、除外日の全行の表 |
 - **当てる時期**: **移行直前**（[migration-spec](migration-spec.md) のフェーズ0）
 - **確認**: `python -m migrator doctor` / `python -m migrator run --phase common.0`
 
@@ -32,7 +39,7 @@
 > **migration の実装は school-launcher 側で行う。** ここに書くのは当てる内容と順序で、
 > ファイルの作成・適用は school-launcher のリポジトリの作業。
 
-ツール側の定義は `migrator/steps/schema.py` の `CONTENT_SCHEMA`（53件）。**この表とコードは一致させること。**
+ツール側の定義は `migrator/steps/schema.py` の `CONTENT_SCHEMA`（58件）。**この表とコードは一致させること。**
 書き漏らすと `common.0` の存在確認を素通りして、**実 INSERT で初めて落ちる**。
 
 ---
@@ -88,9 +95,9 @@ FK の参照先を先に作る。**1本のファイルの中で、この順に�
 |---|---|
 | `courses.allowed_ip_address` TEXT NULL | `lesson.allowed_ip_address` |
 | `courses.is_used` BOOLEAN NOT NULL DEFAULT TRUE | `lesson_is_used`。**`status` と別の軸**で、畳むと区別が消える |
-| `courses.settings` JSON NULL | `lesson` の機能フラグ12列 ＋ `lesson_system`。列を12本増やすより JSON 1本で受ける |
-| `course_categories.image_url` VARCHAR(512) NULL | `lesson_cate_img_file_name`。**`icon`（アイコン識別子）とは意味が違う** |
-| `course_categories.created_by` CHAR(26) NULL | `regist_user_id` |
+| `courses.settings` JSON NULL | `lesson` の機能フラグ7列（`open_pc_chk` / `open_smartphone_chk` / `progress_display_chk` / `drill_chk` / `quiz_chk` / `sns_shared_chk` / `inquiry_chk`）を `features` に入れる。**`lesson_system` は設定を持たない**（`lesson_id` / `tenant_id` だけの公開対応表）。表示フレーム・問い合わせ先・動作環境・スマホ用画像などの列は**現状は移していない**（実装が無い。2026-10-02 の確認） |
+| `course_categories.image_url` VARCHAR(512) NULL | `lesson_cate_img_file_name`。**`icon`（アイコン識別子）とは意味が違う**。L9 の移送前のいまは NULL |
+| `course_categories.created_by` CHAR(26) NULL | `regist_user_id`。**現状は移していない**（実装が無い。常に NULL。2026-10-02 の確認） |
 
 > **`course_categories` は `tenant_id` を持たないグローバルマスタ**（`code` が主キー）。
 > テナントを増やすとカテゴリ名が衝突するが、recademy 単体では実害が無いので今回は構造を変えない。
@@ -149,7 +156,7 @@ NULL を重複扱いしないので、NULL の行がいくつ並んでも問題�
 | `video_lessons.skip_prevention` BOOLEAN NOT NULL DEFAULT FALSE | `skip_prevention_setting`（早送り禁止） |
 | `video_lessons.settings` JSON NULL | 続きから再生・プラグイン連携 |
 
-`lesson_preconditions`（`lesson_id` / `required_lesson_id`、UNIQUE）は旧 `unit_precondition`（37行）。
+`lesson_preconditions`（`lesson_id` / `required_lesson_id`、UNIQUE）は旧 `unit_precondition`（37行。共有講座の分を含む）。旧の `precondition_type_id` は受け皿が無く、**現状は移していない**（実装が無い。2026-10-02 の確認。ステージングは全件 `100`）。
 
 > **テーブルだけでは効かない。** 受講画面の進行制御が実装されるまでは
 > **全ユニットが最初から受講できる**状態になる。
@@ -173,7 +180,7 @@ NULL を重複扱いしないので、NULL の行がいくつ並んでも問題�
 | 追加するもの | 旧の対応 |
 |---|---|
 | ~~`quiz_question_categories`~~ → **`quiz_question_labels.question_cate_id`** | `question_cate`（124行）。**管理者が作るラベルと同じ表に統合した**（school-launcher `20260928082433`、2026-09-28 決定） |
-| `quiz_question_banks` | `question`（3,880行）。テストに属さない |
+| `quiz_question_banks` | `question`（3,880行）。テストに属さない。**本文・名前・ヒント・分類・レベルだけで、選択肢と正解は持たない** — `quiz_options` は固定出題（`test_sub_type_id` 0 / 1）でテストに組み込まれた設問ごとにしか作らないので、**どのテストにも固定で組み込まれていない問題の選択肢・正解は現状は移していない**（受け皿が無い。2026-10-02 の確認） |
 | `quiz_question_rules` | `test_sub`（285行）。カテゴリ・難易度・出題数 |
 | `quiz_questions.bank_id`（＋FK）/ `image_url` / `name` / `hint` / `required` | **移した設問には `bank_id` が必ず入る**（旧の固定出題も問題バンクを指すため）。NULL になるのは新環境で作ったテストだけ |
 | `quiz_options.image_url` | |
@@ -202,7 +209,10 @@ NULL を重複扱いしないので、NULL の行がいくつ並んでも問題�
 
 あわせて `assignments.due_after_days` / `video_url` / `settings` を足す。
 
-> **提出側は受講（3）の担当。** `submission_files` / `submissions.score` /
+> **`report_path` の受け皿は無い。** 旧 `report_path` は配布ファイルではなく**提出後に見せる解説ページの配信先**（`pc_path` / `smartphone_path`）で、
+> **現状は移していない**（実装が無い。2026-10-02 の確認。ステージング144行、`pc_path` あり23行）。
+
+> **提出側は受講（3）の担当。** `submission_feedback_files`（添削のファイル）/ `submissions.score` /
 > `submission_feedbacks.question_comments` はここには入れない。
 
 ---
@@ -224,7 +234,7 @@ UNIQUE KEY uk_survey_pages (tenant_id, lesson_id, enquete_page_id)
 （旧の設問文が切り捨てられるため）。
 
 > **`survey_lessons.lesson_id` は PK のまま**（制約を緩めない方針）。同じ `enquete` を複数ユニットが
-> 参照していた場合、2件目以降は移らない。事前検査で件数を数える。
+> 参照していた場合は、**ユニットごとに複製して移す**（ページ・設問・選択肢も複製。上の UNIQUE に `lesson_id` を含めたのはこのため）。
 >
 > **回答側は受講（3）の担当。** `survey_responses.entity_type` / `entity_id` / `suspended` は入れない。
 
@@ -240,7 +250,7 @@ UNIQUE KEY uk_survey_pages (tenant_id, lesson_id, enquete_page_id)
 | `live_lesson_categories` / `live_lesson_category_links` | `live_lesson_cate`（5件）/ `live_lesson_lesson_cate`（6件） |
 | `live_lesson_group_targets` | `live_lesson_group`（実測0件） |
 | `live_lesson_occurrences.deleted_at` / `remind_enabled` / `settings` ＋ `idx_llo_deleted` | `live_lesson_date.del_chk` / `mail_send_chk` / `date_type` |
-| `live_lesson_recurrence_rules` / `_details` / `_exclusions` | `live_lesson_date_setting`（86件）/ `_detail`（93件）/ `live_lesson_exclusion_date`（18件） |
+| `live_lesson_recurrence_rules` / `live_lesson_recurrence_details` / `live_lesson_recurrence_exclusions` | `live_lesson_date_setting`（86件）/ `_detail`（93件）/ `live_lesson_exclusion_date`（128行 / (ライブ, 日付) 22組。新の表は組ごとに1行、全行は 11 の履歴の表） |
 
 > **`lessons.unit_id` には入れない。** その列はオンデマンドが `unit.unit_id` で使っており
 > （`uk_lessons_legacy`）、**ライブとユニットは別の採番系なので必ず衝突する**（実測18件中11件）。
@@ -252,6 +262,49 @@ UNIQUE KEY uk_survey_pages (tenant_id, lesson_id, enquete_page_id)
 > **連日設定は開催回と対。** 生成済みの開催回は `live_lesson_occurrences` に実体化しているので
 > 無くても過去の予約は移せるが、**無いと cutover 後に開催回を増やせなくなる**。
 > 除外日も対で、片方だけ移すと意味が変わる。
+
+---
+
+## 10. 講座の章（見出しの受け皿）
+
+**必須。** 旧の見出しのユニット（`unit_type_id = 0`）を章にし、後ろのユニットを章に所属させる。
+`20260926190305_create_course_chapters.sql` が `course_chapters` と `lessons.chapter_id` を作り、
+`20260930044959` で旧 ID の列を `unit_id`（NULL 可）にした。
+
+| 列 | 旧 |
+|---|---|
+| `course_chapters.unit_id` | 見出しの `unit.unit_id`（一意キー `(tenant_id, unit_id)`） |
+| `lessons.chapter_id` | 直前にある削除されていない見出し（旧の講座ページと同じ並び `sort_no` → `unit_id`） |
+
+---
+
+## 11. 削除済みも移すための追加（2026-10-01）
+
+**必須。** `20261001085757_lw2_keep_deleted_rows.sql`。**移行対象外を除き、削除済みも含めてすべての行を移す**方針のため。
+
+```sql
+ALTER TABLE course_chapters
+    ADD COLUMN deleted_at DATETIME(3) NULL AFTER unit_id;     -- 旧 unit.del_chk = 1（見出し）
+ALTER TABLE live_lesson_group_targets
+    ADD COLUMN deleted_at DATETIME(3) NULL AFTER tenant_id;   -- 旧 live_lesson_group.del_chk = 1
+
+-- 旧 live_lesson_exclusion_date の全行（削除済み・保存のたびに積んだ行を含む）を旧の形のまま持つ
+CREATE TABLE live_lesson_exclusion_date_history (
+    id             CHAR(26)    NOT NULL PRIMARY KEY,
+    tenant_id      CHAR(26)    NOT NULL,
+    lesson_id      CHAR(26)    NOT NULL,   -- ライブのレッスン
+    live_lesson_id INT         NULL,       -- 旧 ID
+    exclusion_date DATE        NULL,
+    del_chk        BOOLEAN     NOT NULL DEFAULT FALSE,
+    regist_date    DATETIME(3) NULL,
+    update_date    DATETIME(3) NULL
+    -- FK: tenants / lessons (CASCADE)
+);
+```
+
+> **除外日は新の表（`live_lesson_recurrence_exclusions`、(ライブ, 日付) で一意）に組ごとに1行**入れ、
+> 全行はこの表に入れる。`live_lesson_recurrence_exclusions.deleted_at` は 9 のとおり元からある。
+> **新のアプリは足した `deleted_at` と全行の表をまだ読まない。**
 
 ---
 

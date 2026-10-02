@@ -33,14 +33,14 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 
 | 事項 | 決定 |
 |---|---|
-| 見出しブロック（`unit_type_id=0`） | **`lessons` に入れない**（ETL設計 §5-0）。除外しないと FK 違反 |
+| 見出しブロック（`unit_type_id=0`） | **`lessons` に入れない**（ETL設計 §5-0）。**`course_chapters`（講座の章）に入れ、後ろのユニットを `lessons.chapter_id` で章に所属させる**（2026-09-30。削除済みの見出しも `deleted_at` 付きで移す。2026-10-01）。所属の判定は旧の講座ページと同じく `sort_no` → `unit_id` の順（`UnitModel::_buildSql` の既定の並び。移す範囲（ReCADemy の講座と、参照される共有講座）で見出しと並び順が重なる組は50。ReCADemy 自身の講座だけなら21。2026-10-02 に数え直した） |
 | カテゴリ未設定の講座（235件中142件） | **そのまま移す**（`courses.category` は NULL 可）。旧の状態をそのまま写すだけで、**カテゴリを整備するかは移行とは別の作業**。cutover 前に「講座一覧の絞り込みが半分以上で効かない」ことは伝える |
 | 模試（`is_mock_test` ほか） | **移行しない。** 対象外（未コミット）区分（X02） |
 | 更新履歴3件（計300万行） | **移行しない。** 受験中の作業データで、採点時に本テーブルへコピーされる。**cutover 時点の中断中の受験だけは失われる** |
 | 動画の配信先 | **`lecture_path.pc_path` を `video_lessons.video_url` に移す。** `lecture` に URL 列は無いが、**別テーブル `lecture_path` が配信先を持つ**（recademy 2,559行。URL 1,171 / 相対パス 44 / 空 1,344）。`pmovie_chk` が立っていない動画はこちらで配信している |
 | 画像（問題22列・設問21列） | **移す。** L9 でファイルを移送し `image_url` に入れる（A7 / A12） |
-| 提出ファイル・配布ファイル | **5本とも移す**（`submission_files` / `assignment_materials`）。1本に畳まない（A13 / A14） |
-| ユニットの順序制御・免除 | **移す。** `lesson_preconditions` / `lesson_exemptions` を追加する（A15） |
+| 添削のファイル・配布ファイル | **5本とも移す**（`submission_feedback_files` / `assignment_materials`）。1本に畳まない（A13 / A14）。旧 `eval_*` は添削者が付けたファイル（2026-09-30 に `submission_files` から改めた） |
+| ユニットの順序制御・免除 | **順序制御は移す**（`lesson_preconditions`。A15）。**免除（`unit_exemption`）は現状は移していない**（実装が無い。2026-10-02 の確認）。旧は「別ユニットで◯点以上なら免除」という規則で、会員ごとの免除表（`lesson_exemptions`）は取り下げた。移行ツールは件数を警告に出すだけ（ステージング1行） |
 | アンケート回答の `entity_type` 1/3（お知らせ・レポート添付） | **受講（3）の担当。** 列（A12）だけでは移せない — `survey_responses.lesson_id` が NOT NULL なので、行き先を設計し直す（→ [受講 E7](../03-enrollment/review.md#e7-アンケート回答)） |
 
 **データの持ち方（畳まない・元の粒度を保つ）**
@@ -70,7 +70,6 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | migration の実装 | **school-launcher 側で行う。** [マイグレーション対象](schema-additions.md)は当てる内容と順序を示すもので、ファイルの作成・適用は school-launcher のリポジトリの作業 |
 | 当たった行の処理 | **移さず `out/not-migrated.csv` に出し、暫定対応で直してから再実行する。** **どこが当たるか**は [確認事項](../open-questions.md)の確認事項に挙げる |
 | 既定講師（`courses.instructor_id` が NOT NULL） | **代理講師の `users` 行を1件作り、全講座に割り当てる**（A21）。NOT NULL は外さない。対応表を受け取ってから付け替える |
-| 未提出の課題（`submissions.submitted_at` が NOT NULL） | **NULL 可に変更する**（A21）。提出日時を NULL にして「未提出」を表現する。**制約を緩める判断なので、[確認事項](../open-questions.md)で意図を確認してから実施する** |
 | 発行済み修了証の発行者名 | **`certificates.issuer_name` は NOT NULL**（発行時点の値を凍結する列）。**テナントの設定側 `certificate_settings.issuer_name` は NULL 可**で「NULL なら `tenants.name`」という別の仕様。**取り違えない** |
 
 **暫定対応（2026-09-23 決定）**
@@ -81,7 +80,7 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | 事項 | 暫定対応 |
 |---|---|
 | 講座の講師（`courses.instructor_id` が NOT NULL） | **代理講師の `users` 行を1件作り、全講座に割り当てる**（A21）。対応表を受け取ってから付け替え、**代理講師のままの講座が0件になったことを確認する** |
-| 講座の価格 | **仮データを入れる。** 対応表を受け取ってから差し替える。**入れる値は運営と決める**（0 円は「無料」と区別がつかない） |
+| 講座の価格 | **仮データを入れる。** 対応表を受け取ってから差し替える。**入れる値は運営と決める**（0 円は「無料」と区別がつかない）。**現状は設定 `provisional.course_price` の値を全講座に入れ、設定が無ければ NULL**（`courses.price` は NULL 可。2026-10-02 の確認） |
 | アンケートの回答日時（`survey_responses.submitted_at` が NOT NULL） | **仮データを入れる。** 旧 `enquete_answer.regist_date`（NOT NULL）を代替値にする |
 | 発行済み修了証の発行者名（`certificates.issuer_name` が NOT NULL） | **仮データを入れる。** 設定側（`config_certificate.issuer_name`）が NULL なら `tenants.name` を入れる |
 | 修了証の通し番号（`certificates.serial_text` が NOT NULL） | **仮データを入れる。** 旧 `certificate_no` を文字列にして入れる（書式定義は後から適用する） |
@@ -128,9 +127,8 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | 削除と中止 | **別の軸として持つ。** `live_lesson_date.del_chk` → **`deleted_at`（追加）**、開催の中止 → `canceled_at`。**混ぜると受講者の履歴に「中止された」と見える** |
 | 予約の3フラグ | **`status` に畳むが、元の値は残す。** `cancel_chk` / `attendance_chk` / `stop_chk` を A7 の `live_reservations.settings` に保持する |
 | 開催中止で不成立になった予約 | **`live_reservation_statuses` に値を1つ足す**（A7）。既存4値（`reserved`/`canceled`/`attended`/`no_show`）では**受講者都合のキャンセルと区別できない** |
-| リマインドの送信可否 | **`live_lesson_occurrences.remind_enabled` を追加する**（A5）。旧 `mail_send_chk` を移す |
-| 連日設定・除外日 | **3表をセットで移す**（A6。実測 86 / 93 / 128件）。**片方だけ移すとルールの意味が変わる**（除外日だけ残ると、何を除外しているのか分からない）。**開催回を自動生成する機能を作るかは移行とは別の判断** |
-| リマインドの送信可否（再掲） | **`live_lesson_occurrences.remind_enabled` に移す**（A5）。**送る／送らないを判定する機能を作るかは移行とは別の判断** |
+| リマインドの送信済み | **旧 `mail_send_chk` は「送信済み」の印。** その回の予約の `live_reservations.reminded_at` に移す。`remind_enabled`（A5）は全回 TRUE（2026-09-30 訂正。以前は `mail_send_chk` を `remind_enabled` に写していた） |
+| 連日設定・除外日 | **3表をセットで移す**（A26。実測 86 / 93件、除外日は 128行 / (ライブ, 日付) 22組。除外日の全行は `live_lesson_exclusion_date_history` にも入れる）。**片方だけ移すとルールの意味が変わる**（除外日だけ残ると、何を除外しているのか分からない）。**開催回を自動生成する機能を作るかは移行とは別の判断** |
 | チケット種別の名前が重複 | **そのまま移す。** ステージングの2件は同名（「3級マンツーマンレッスン専用チケット」）。`ticket_types.name` に UNIQUE は無いので投入は止まらない。**運営画面で区別が付かないことは cutover 前に伝える** |
 | ライブのカテゴリ | **多対多のまま移す**（A2）。`live_lesson.live_lesson_cate_id` ではなく `live_lesson_lesson_cate` が正 |
 | チケット残高 | **残高1行 = 付与1行。** `quantity = remaining_quantity = ticket_num` とし、`note` に「lw2 移行時点の残高」と書く（ETL設計 §5-6）。**「何枚付与されて何枚使ったか」は旧が持たないので表現しない** |
@@ -154,15 +152,15 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 
 | 事項 | 暫定対応 |
 |---|---|
-| ライブの受け皿 course | **未決（1-1 の #1）。** 決まるまで実装しない。**暫定で案B を仮置きすると、案A に変えるとき全ライブの ULID が変わる** |
-| `live_lessons.scheduled_at` | **未決（1-1 の #2）。** 同上 |
+| ライブの受け皿 course | **上の 2026-09-24 決定どおり実装してある**（商品制限のあるライブはその講座、無いライブは受け皿講座1本）。受け皿講座の `instructor_id` は、受け皿に入るライブの講師のうち担当数が最も多い1名 |
+| `live_lessons.scheduled_at` | **直近の開催予定日、無ければ最後の回**（削除済みでない回を優先）で実装してある |
 | ライブの必要枚数の種別 | `ticket_limit_lesson` から逆引きできないライブは、**`live_lesson_ticket_requirements` の行を作らない**（チケット不要として扱う）。**対象を記録し、あとで運営が付け直せるようにする** |
 
 **実行の段取り**
 
 | 事項 | 決定 |
 |---|---|
-| 前提区分 | **基盤（`foundation.*`）と オンデマンドのフェーズ1〜4**（`lesson_types` / `content_statuses` / `courses` / `lessons`）が先。**受講（04）・課金（05）には依存しない** |
+| 前提区分 | **基盤（`foundation.*`）と `content.1`**（`lesson_types` / `content_statuses` / `courses` / `lessons`）が先。**受講（04）・課金（05）には依存しない** |
 | 課金区分への依存 | **`live_lesson_limit_item.item_id` と `user_ticket.authority_id` の参照先は課金区分（未コミット）。** 旧 ID を保持する形で先に入れ、**課金の移行後に解決する** |
 
 ### 1-4. 本番ダンプ受領後に確認すること
@@ -177,9 +175,9 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 
 | 確認 | 効く先 |
 |---|---|
-| 1ユニットに複数の `test` があるか | `quizzes` の UNIQUE (tenant_id, lesson_id)。あれば UNIQUE を外す |
+| 1ユニットに複数の `test` があるか | `quizzes` の UNIQUE (tenant_id, lesson_id)。UNIQUE は外さず、2件目以降は移らない |
 | 1ユニットに複数の `lecture` があるか | `video_lessons.lesson_id` が PK。実測では最大1 |
-| 同じ `enquete` を複数ユニットが参照しているか | `survey_lessons.lesson_id` が PK |
+| 同じ `enquete` を複数ユニットが参照しているか | `survey_lessons.lesson_id` が PK。**ユニットごとに複製して移す**ので、件数は複製の規模 |
 | `lesson_cate_name` に50文字超・128文字超があるか | `course_categories.code` / `name_ja` |
 | `enquete_question.question_text` に500文字超があるか | `survey_questions.prompt` |
 | `question.selection1..20` に1000文字超があるか | `quiz_options.body` |
@@ -287,7 +285,7 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | `video_lessons` | 140 | `video_url` が NOT NULL。p-movie トークンも `lecture_path.pc_path` も空 |
 | `submissions` | 105 | 参照先の課題が無い。**32件は孤児**（`report` が物理削除）。残りを「別テナントの課題」としていたのは**読み違い**で、実体は**共有講座（`tenant_id = 0`）の課題**と、**`created_at` に入れる値が無くて落ちた課題17件の巻き添え** |
 | `submissions` | 13 | **未提出**（`submit_date` が NULL）。`submitted_at` は NOT NULL のままにする決定どおり |
-| `submission_feedbacks` / `submission_files` | 40 | 上の巻き添え（提出が移らないので添削・ファイルも移らない） |
+| `submission_feedbacks` / `submission_feedback_files` | 40 | 上の巻き添え（提出が移らないので添削・ファイルも移らない） |
 | `assignments` | 17 | `regist_date` も `update_date` もゼロ日付で、`created_at` に入れる値が無い（当時は1件と記録していたが、共有講座ぶんを数えられていなかった） |
 | `survey_answers` | 7 | 回答 JSON が、そのアンケートに属さない設問を指している |
 | `certificates` / `certificate_events` | 6 | **読み違いだった（2026-09-26 に修正済み、いまは6件とも入る）。** `entity_id` を講座 ID と解釈していたが、実体は `user_learning_lesson_id`（→ [受講 E10](../03-enrollment/review.md#user_certificate--certificates)） |
@@ -334,53 +332,58 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 ```
 前提       foundation.* が完了していること（tenants / users / グループ / 属性）
               ↓
-ondemand.1  マスタの追加値 ※ FK の参照先をそろえる
-              ├ content_statuses に deleted
-              ├ lesson_types に quiz / assignment / document / discussion / skill_check
-              ├ quiz_question_types に free_text
-              └ survey_question_kinds に file_upload
+content.1  オンデマンド講座
+              ├ マスタの追加値 ※ FK の参照先をそろえる
+              │   master.lesson_types（quiz / assignment / document / discussion / skill_check）
+              │   master.content_statuses.deleted / master.quiz_question_types（free_text）
+              │   master.survey_question_kinds（file_upload）
+              ├ content.proxy_instructor（代理講師）
+              ├ content.course_categories → content.courses   ※ courses.category が FK
+              ├ content.course_tags → content.course_tag_links
+              ├ content.chapters（見出しブロック → course_chapters）
+              ├ content.lessons（見出しブロックを除く）→ content.video_lessons
+              └ content.lesson_preconditions
               ↓
-ondemand.2  代理講師 → course_categories → courses
-              ↓  **course_categories は courses より先**（courses.category が FK）
-ondemand.3  lessons（見出しブロックを除く）→ video_lessons
+content.2  テスト定義・課題定義
+              ├ content.quiz_question_categories（→ quiz_question_labels）→ content.quiz_question_banks
+              │   → content.quizzes → content.quiz_question_rules → content.quiz_questions → content.quiz_options
+              └ content.assignments → content.assignment_materials
               ↓
-ondemand.4  テスト定義
-              quiz_question_labels → quiz_question_banks → quizzes
-                → quiz_question_rules → quiz_questions → quiz_options
+content.3  アンケート定義
+              content.survey_lessons → content.survey_pages → content.survey_questions
+                → content.survey_question_options
               ↓
-ondemand.5  アンケート・課題定義
-              ├ survey_lessons → survey_pages → survey_questions → survey_question_options
-              └ assignments → assignment_materials
-              ↓
-ondemand.6  受講実績
-              ├ quiz_attempts → quiz_answers → quiz_answer_selected_options
-              ├ survey_responses → survey_answers → survey_answer_selected_options
-              └ submissions → submission_files → submission_feedbacks
-              ↓
-ondemand.7  certificate_settings → certificates → certificate_events
-              ↓
-ondemand.8  教材・受講制御
-              ├ library_folders → library_materials → library_material_lesson_targets
-              └ lesson_preconditions
+content.4  ライブ講座（→ 4-2）
+              content.live_host_course → content.live_lessons → content.live_lesson_details
+                → content.live_occurrences → content.live_categories → content.live_category_links
+                → content.live_group_targets → content.live_recurrence_rules → content.live_recurrence_details
+                → content.live_recurrence_exclusions → content.live_exclusion_history
 ```
 
-> **番号は `migrator/phases/registry.py` と一致させること。** 指定は `--phase ondemand.4` の形。
+> **番号は `migrator/phases/registry.py` と一致させること。** 指定は `--phase content.2` の形。
+
+**この区分に入っていないもの**（以前の `ondemand.6`〜`8` にあったもの）
+
+| 何が | どこで流すか |
+|---|---|
+| 受験・アンケート回答・課題提出の実績 | 受講の `enrollment.3`〜`5`（[受講の移行仕様](../03-enrollment/migration-spec.md)） |
+| 修了証 | 受講の `enrollment.7` |
+| 受け皿講座への全会員の受講登録 | 受講の `enrollment.1`（`enrollment.live_host_enrollments`） |
+| ライブの予約・レビュー | 受講の `enrollment.6` |
+| チケット / ライブを予約できる商品の全行（`live_lesson_limit_item_history`） | 課金の `billing.1` / `billing.2` |
+| 教材・ライブラリ | サポートの `support.5` |
 
 **順序の根拠**
 
 - **マスタが先。** `content_statuses` / `lesson_types` / `quiz_question_types` / `survey_question_kinds` はいずれも FK の参照先で、`tenant_id` を持たないグローバルマスタ
 - **`course_categories` は `courses` より先。** `courses.category` は `course_categories(code)` への FK で、**新規 DB では空**（既存 `courses.category` からの吸い上げでしか作られない）
-- **`courses` は `lessons` より先**（`lessons.course_id`）、**`lessons` は quizzes / surveys / assignments より先**
-- **実績は定義の後。** `quiz_attempts.quiz_id` / `submissions.assignment_id` が参照する
-- **実績は受講区分（04）を待たない。** `quiz_attempts` / `survey_responses` / `submissions` は
-  いずれも `enrollments` を参照しない（実装時に確認）。旧 `user_learning_test` から会員を引くのに
-  `user_learning_unit` → `user_learning_lesson` の2段を**移行元で**たどるだけで足りる
-- **教材・受講制御（8）は最後でよい。** `lessons` にしか依存しないので、どの段の後でも動く
+- **`courses` は `lessons` より先**（`lessons.course_id`）、**章（`course_chapters`）は `lessons` より先**（`lessons.chapter_id`）、**`lessons` は quizzes / surveys / assignments より先**
+- **ライブは講座の後。** `lessons.course_id` が NOT NULL で、商品制限のあるライブは `content.1` で入れた講座に置く
 - **R3（テスト中断・再開）はこの図に入れない。** 受験中の作業データなので移行しない
 
 ## 2-2. 実行手順
 
-**フェーズの指定は `区分.番号`**（`ondemand.3` など）。**フェーズは区切って流す。**
+**フェーズの指定は `区分.番号`**（`content.2` など）。**フェーズは区切って流す。**
 
 ```bash
 # 0. 追加スキーマを当てる → 移行先を初期化する（school-launcher のリポジトリで）
@@ -399,19 +402,19 @@ python -m migrator verify
 python -m migrator preflight
 
 # 4. dry-run。**フェーズ単位で試せる**
-python -m migrator run --dry-run --phase ondemand.1
-python -m migrator run --dry-run --section ondemand
+python -m migrator run --dry-run --phase content.1
+python -m migrator run --dry-run --section content
 
 # 5. 本番投入。フェーズごとに結果を見てから次へ
-python -m migrator run --phase ondemand.1
-python -m migrator run --phase ondemand.2
+python -m migrator run --phase content.1
+python -m migrator run --phase content.2
 ...
 
 # 6. 検証
 python -m migrator verify
 ```
 
-> **1,070万行のフェーズ6は、時間とバッチサイズを見てから流す。** dry-run で件数を確認し、必要なら投入を分割する。
+> **実績（受験・回答・提出）は受講の区分で流す。** 大きい表（`user_learning_test_sub` 1,070万行）の時間とバッチサイズは、受講の移行仕様で見積もる。
 
 ---
 
@@ -429,7 +432,12 @@ python -m migrator verify
   - `enquete_answer` → `enquete` と join。**落とすと 64,883件を拾う**（recademy 単体は 2,464件。26分の1）
   - `lesson` / `question` / `enquete` は `tenant_id` を持つので直接絞れる
 - **見出しブロック（`unit.unit_type_id = 0`）を除外する。** `lessons` に入れると FK 違反になる（ETL設計 §5-0）
-- **削除済み（`del_chk = 1`）も移す。** `content_statuses` に `deleted` を追加して表現する
+- **削除済み（`del_chk = 1`）も移す。** 講座・ユニット・課題は `status = 'deleted'`（`content_statuses` に `deleted` を追加）、見出しは `course_chapters.deleted_at` で表現する
+  - **テスト・アンケートの定義は、削除済みも削除の印なしで入る。** `test` / `test_sub` / `test_sub_question` / `question` / `question_cate` /
+    `enquete` / `enquete_page` / `enquete_question` は、移行ツールが `del_chk` を読むが使っておらず、生きている行と同じ形で入る。
+    **削除を表す扱いは現状は移していない**（実装が無い。2026-10-02 の確認。受け皿の列も無い）。
+    ステージング（`tenant_id = 10` の定義）で `test` 297件中12件、`test_sub` 285件中4件、`question` 3,880件中5件、
+    `enquete` 337件中26件、`enquete_page` 381件中62件、`enquete_question` 309件中101件（`question_cate` は0件）
 
 **SELECT してはいけない列**
 
@@ -453,14 +461,14 @@ python -m migrator verify
 |---|---|
 | `lesson.open_period`（**月**）→ `courses.access_days`（**日**） | **×30 で換算する。** 忘れると受講期間が 1/30 になる |
 | `unit.unit_type_id` → `lessons.type` | **畳まない。** 1→`video`、2→`quiz`、3→`survey`、4→`assignment`、6→`document`、**7→`discussion`**、**8→`skill_check`**。**0=見出しは除外**、5=集合研修は対象外区分。**対応表に無い値は止める**（黙って `text` に倒さない） |
-| `unit.sort_no` → `sort_order` | 見出しを除いた分を**講座ごとに採番し直す**（並び順は保つ） |
+| `unit.sort_no` → `sort_order` | **現状は `sort_no` をそのまま入れている**（講座ごとに採番し直していない。2026-10-02 の確認）。見出しを除いた分の番号が飛び、旧で同じ `sort_no` だった組も同じ値のまま残る（旧は `unit_id` 順で並べていた） |
 | `question.selection1..20` → `quiz_options` | 横持ち → 縦持ち。有効数は `selection_num` |
 | `question.answer` → `quiz_options.is_correct` | 正解文字列を選択肢と突き合わせてフラグを立てる |
 | `sum_score` / `total_score` → `score` / `max_score` | **`test_score`（百分率）は使わない。** `sum_score` が素点、`total_score` が満点 |
 | `exam_limit_times`（**分**）→ `time_limit_sec`（**秒**） | **×60 で換算する。** `test_time` は秒なのでそのまま |
 | `question_answer` → `quiz_answer_selected_options` | **`|` で分割**し、`quiz_options` と突き合わせる。`question_type_id=3` は判定が逆 |
 | `enquete_answer.answer`(JSON) → `survey_answers` | キーは `answer_<enquete_question_id>`（ETL設計 §5-5）。設問タイプごとに入れる列が変わる |
-| `test_sub_question` の ID | **旧 ID を引き継がない**（採番が枯渇・履歴断裂）。`(test_id, question_id, 並び順)` から採番する |
+| `test_sub_question` の ID | **旧 ID を引き継がない**（採番が枯渇・履歴断裂）。**`(test_sub_id, question_id, sort_no)` から採番する**（同じテストの別の大問に同じ問題が入るため、テスト単位だと衝突する） |
 | 画像ファイル名 → `image_url` | L9 でファイルを移送し、移送先の URL を入れる |
 | `test_start_time` / `test_end_time` → `started_at` / `completed_at` | **`timestamp` 列なので JST naive → UTC に変換してから書く** |
 
@@ -480,7 +488,7 @@ python -m migrator verify
 
 | 対象 | なぜ移行できないか |
 |---|---|
-| `remote_api_token` 全体 | **発行中の一時トークン**で、移した時点で無効。新環境は予約システムで概念も違う。ただし `lesson_id` は `courses.remote_pc_enabled` の初期値に使う |
+| `remote_api_token` 全体 | **発行中の一時トークン**で、移した時点で無効。新環境は予約システムで概念も違う。**移行ツールはこの表を読まず、`courses.remote_pc_enabled` は全講座 FALSE**（`lesson_id` から初期値を導く案は現状は実装が無い。2026-10-02 の確認） |
 | `drive.dir_name` | ファイルパスそのもの。**L9 の移送で URL に置き換わる**ため、移送後は参照されない（移送の入力としては使う） |
 
 **B. 方針として移行しないもの**
@@ -489,6 +497,23 @@ python -m migrator verify
 |---|---|
 | `test.is_mock_test` / `mock_post_message` / `mark_type_id` | **模試は対象外（未コミット）区分**（X02） |
 | `library_downloads` | 新環境側の**純ログ**。旧に対応データも無く、空で始める |
+
+**C. 現状は移していないもの（実装が無い。2026-10-02 の確認）**
+
+**移さないと決めたものではない。** 移行ツールに実装が無く、いまは入っていないもの。
+
+| 対象 | 状態 |
+|---|---|
+| `unit_exemption`（免除の規則） | 受け皿なし。移行ツールは件数を警告に出すだけ（ステージング1行） |
+| `report_path`（提出後の解説ページの配信先） | 受け皿なし。読んでいない（ステージング144行、`pc_path` あり23行） |
+| テスト・アンケート定義の `del_chk` | 削除済みも削除の印なしで入る（3.1） |
+| `lesson` の `lesson_thumbnail_type` / `img_smartphone` / `lesson_img_file_name` / `inquiry_address` / `frame_id` / `disp_type_id` / `frame_height` / `frame_width` / `operating_env` / `inquire_cate_id` | 読んでいない。`courses.settings` に入るのは7フラグ（`open_pc` / `open_smartphone` / `progress_display` / `drill` / `quiz` / `sns_shared` / `inquiry`）だけ |
+| `lesson.update_date` / `unit.update_date` / `live_lesson.update_date` → `updated_at` | 書いていない（投入時の既定値になる） |
+| `unit.enquete_suspended_chk` | 読んでいない |
+| `unit_precondition.precondition_type_id` | 読むが書いていない（ステージングは全件 `100`） |
+| `lesson_cate.regist_user_id` → `created_by`、`del_chk` の日時 → `deprecated_at` | どちらも NULL（`del_chk = 1` は `active = FALSE` だけ） |
+| `lesson_tag.del_chk` / `icon_file_name` | 読んでいない（ステージングは削除済み0件） |
+| `lecture.pmovie_token` の URL 化 | トークンをそのまま `video_url` に入れている |
 
 ### 3.5 検証
 
@@ -500,7 +525,7 @@ python -m migrator verify
 | 点数 | `quiz_attempts` の `score` / `max_score` を数件抽出し、lw2 の画面表示と突き合わせる |
 | 合否 | `passed` が当時の `test_pass` と一致すること |
 | アンケート回答 | `entity_type` 2（ユニット）が入っていること。**1 / 3 は受け皿が未定**（→ [受講 E7](../03-enrollment/review.md#e7-アンケート回答)） |
-| 提出ファイル | 5本使っている提出（実測2件）でファイルが5行あること |
+| 添削のファイル | 5本使っている添削（実測2件）でファイルが5行あること |
 | 画像 | 問題・選択肢・解説の `image_url` が埋まっていること |
 
 ---
@@ -511,9 +536,7 @@ python -m migrator verify
 
 ### 4-1. 検証データでの実測
 
-**dry-run は未実施。** ライブの移行ツールがまだ無い（`migrator/phases/registry.py` で `live` は `pending`）。
-
-本書の「ステージング実測」は、**移行ツールを通さず旧 DB に直接クエリして数えた値**。
+**移行ツールは実装済み**（`content.4`。`migrator/steps/content/live_*.py`）。本書の「ステージング実測」は、**移行ツールを通さず旧 DB に直接クエリして数えた値**。
 
 > **ここの数値は本番ではない。** 2026-09-18 取得のステージングダンプ（`lw2_stg_kiracari_20260918_1946`）を
 > ローカルの lw2 に取り込み、`tenant_id = 10`（ReCADemy）で絞って数えたもの。
@@ -564,11 +587,8 @@ python -m migrator verify
 | 開催回の日時レンジ | 2022-11-07 〜 2026-12-15（過去2,742 / 未来98） |
 | 予約のある開催回 | **32件すべて過去** |
 
-**実装したら、次を通したうえでこの節を書き直すこと。**
-
-1. `run --dry-run --section live` — 件数と変換結果
-2. **実際に INSERT してロールバックする予行** — dry-run は INSERT を実行しないため、
-   制約違反はここでしか出ない（基盤では dry-run 通過後の予行で**7件**の違反が出た）
+**この節の件数は移行ツールを通さず旧 DB に直接クエリして数えた値。** 移行ツールは `content.4` として実装してある（4-2）。
+dry-run と、実際に INSERT してロールバックする予行の件数でこの節を取り直すこと（dry-run は INSERT を実行しないため、制約違反は予行でしか出ない）。
 
 ---
 
@@ -578,47 +598,45 @@ python -m migrator verify
 
 ```
 前提       foundation.*（tenants / users / グループ / 属性）
-           ondemand.1〜4（lesson_types / content_statuses / courses / lessons）
+           content.1（lesson_types / content_statuses / courses / lessons）
               ↓
-フェーズ0  追加スキーマを当てる（schema-additions.md）
-              ↓
-フェーズ1  マスタの追加値
-              └ live_reservation_statuses に「開催中止で不成立」を1件（A7）
-              ↓
-フェーズ2  ライブの受け皿
-              ├ live_lesson_categories（A2）
-              └ courses（ライブ用。案A / 案B）
-              ↓
-フェーズ3  lessons(type=live) → live_lessons
-              ├ live_lesson_category_links（A2）
-              ├ live_lesson_group_targets（A3）
-              └ live_lesson_item_restrictions（A4）
-              ↓
-フェーズ4  live_lesson_occurrences
-              └ live_lesson_recurrence_rules / _details / _exclusions（A6）
-              ↓
-フェーズ5  ticket_types → ticket_type_lessons / live_lesson_ticket_requirements
-              ↓
-フェーズ6  live_reservations
-              ↓
-フェーズ7  ticket_grants → ticket_ledger_entries（予約ぶんの consumed）→ monthly_ticket_allowances（A9）
-              └ live_lesson_reviews（A9）
+content.4  ライブ講座
+              content.live_host_course      受け皿講座（商品制限の無いライブを入れる。無ければ作らない）
+                ↓
+              content.live_lessons          lessons(type=live)。商品制限のあるライブはその講座、無いものは受け皿講座
+                ↓
+              content.live_lesson_details   live_lessons（代表日時・旧設定・旧 ID）
+                ↓
+              content.live_occurrences      live_lesson_occurrences（削除は deleted_at、中止は予約の stop_chk から）
+                ↓
+              content.live_categories → content.live_category_links
+              content.live_group_targets
+              content.live_recurrence_rules → content.live_recurrence_details
+                → content.live_recurrence_exclusions（(ライブ, 日付) ごとに1行）
+              content.live_exclusion_history（除外日の全行を旧の形のまま）
 ```
+
+**ライブに関わるが、この区分では流さないもの**
+
+| 何が | Step | どこで流すか |
+|---|---|---|
+| 受け皿講座への全会員の受講登録 | `enrollment.live_host_enrollments` | 受講 `enrollment.1` |
+| チケット種別・対象・必要枚数・付与・台帳 | `billing.ticket_types` ほか | 課金 `billing.1` |
+| ライブを予約できる商品の全行 | `billing.live_limit_item_history` | 課金 `billing.2`（`plan_id` が商品を指すため） |
+| 予約・レビュー | `enrollment.live_reservations` / `enrollment.live_reviews` | 受講 `enrollment.6` |
 
 **順序の根拠**
 
-- **`courses` が先。** `lessons.course_id` は `courses(id)` への FK で **NOT NULL**。**lw2 のライブは講座に属さないため、この course は移行で作る**
+- **`courses` が先。** `lessons.course_id` は `courses(id)` への FK で **NOT NULL**。**lw2 のライブは講座に属さないため、置き場所の講座は `content.1` で入れた講座か、移行で作る受け皿講座**
 - **`live_lessons` は `lessons` の子。** PK が `lesson_id` で `lessons(id)` への FK（`ON DELETE CASCADE`）
 - **`live_lesson_occurrences` は `live_lessons` の子**（`fk_llo_lesson`）。`live_lessons` が入っていないと1行も入らない
-- **`ticket_types` は `ticket_type_lessons` / `live_lesson_ticket_requirements` / `ticket_grants` より先**（3つとも `ticket_type_id` の FK を持つ）
-- **`ticket_type_lessons.lesson_id` と `live_lesson_ticket_requirements.lesson_id` は `lessons` を指す**（`live_lessons` ではない）。フェーズ3の後
+- **カテゴリの割当・公開グループ・連日設定はレッスンを参照する**ので、`content.live_lessons` の後
+- **`ticket_type_lessons.lesson_id` と `live_lesson_ticket_requirements.lesson_id` は `lessons` を指す**（`live_lessons` ではない）。`content.4` の後
 - **`live_reservations` は開催回と会員の両方に依存する**（`fk_lr_occurrence` / `fk_lr_user`）。**会員は基盤で入っている**
-- **`ticket_ledger_entries` はこの図に入れない。** 履歴を再生しない方針のため
-- **`live_lesson_item_restrictions`（A4）の `item_id` は課金区分（未コミット）を指す。** 旧 ID を保持する形で入れ、**課金の移行後に解決する**
 
 #### 2-2. 実行手順
 
-**フェーズの指定は `区分.番号`**（`live.3` など）。**フェーズは区切って流す。**
+**フェーズの指定は `区分.番号`**（`content.4`）。
 
 ```bash
 # 0. 追加スキーマを当てる → 移行先を初期化する（school-launcher のリポジトリで）
@@ -629,22 +647,19 @@ make reseed
 python -m migrator doctor
 python -m migrator plan
 
-# 2. 前提区分が終わっていることを確認する
+# 2. 前提のフェーズが終わっていることを確認する
 python -m migrator run --section foundation
-python -m migrator run --section ondemand
+python -m migrator run --phase content.1
 python -m migrator verify
 
 # 3. 事前検査
 python -m migrator preflight
 
-# 4. dry-run。**フェーズ単位で試せる**
-python -m migrator run --dry-run --phase live.1
-python -m migrator run --dry-run --section live
+# 4. dry-run
+python -m migrator run --dry-run --phase content.4
 
-# 5. 本番投入。フェーズごとに結果を見てから次へ
-python -m migrator run --phase live.1
-python -m migrator run --phase live.2
-...
+# 5. 投入
+python -m migrator run --phase content.4
 
 # 6. 検証
 python -m migrator verify
@@ -667,12 +682,15 @@ python -m migrator verify
   - `ticket_limit_lesson` → `ticket`（`ticket_id`）
   - `user_ticket` / `month_user_ticket` / `user_ticket_log` → `user`（`user_id`）
   - `coupon_live_lesson` → `live_lesson`（`live_lesson_id`）
-- **削除済み（`del_chk = 1`）も移す。** ライブは `content_statuses.deleted`、開催回は A5 の `deleted_at` で表す
+- **削除済み（`del_chk = 1`）も移す。** ライブは `content_statuses.deleted`、開催回は A25 の `deleted_at` で表す。カテゴリ（`deprecated_at`）と連日設定（`deleted_at`）は、**削除日時ではなく `regist_date` を入れている**（旧の削除日時を読んでいない。2026-10-02 の確認）
+- **親のライブが物理削除されている開催回（孤児）は移さず、「移さない行」の一覧に出す**（ステージング0件）
 - **プレビュー2表は抽出しない**（`live_lesson_preview` / `live_lesson_date_preview`）
-- **除外日と制限商品は `del_chk = 0` の行だけ読む。** どちらも保存のたびに旧行を `del_chk = 1` にして
-  積む作りで、**除外日は 128行のうち110行が削除済み**（生きているのは18行）、
-  **制限商品は 50行のうち45行が削除済み**（生きているのは5行）。
-  全部読むと `uk_llre_lesson_date` に当たり、件数の見積もりも狂う
+- **除外日と制限商品は全行を旧の形のまま移す**（2026-10-01）。どちらも保存のたびに旧行を `del_chk = 1` にして
+  積む作りで、**除外日は 128行のうち110行が削除済み**、**制限商品は 50行のうち45行が削除済み**。
+  - 除外日: 新の `live_lesson_recurrence_exclusions` は (ライブ, 日付) で一意なので**組ごとに1行**
+    （生きている行があれば生きた行、全部削除済みなら `deleted_at` 付き。実測22組・うち削除済み4組）。
+    全行は `live_lesson_exclusion_date_history` に入れる。`exclusion_date` が NULL の行は新の表に入らず、履歴の表にだけ入る（ステージング0件）
+  - 制限商品: 置き場所の判定は生きている行だけを見る。全行は `live_lesson_limit_item_history` に入れる（課金の2で流す）
 
 **SELECT してはいけない列**
 
@@ -697,8 +715,8 @@ python -m migrator verify
 | 変換 | 規則 |
 |---|---|
 | `live_lesson.live_lesson_url` → `occurrences.meeting_url` | **レッスン側の1つの URL を、そのライブの全開催回に複製する。** 開催回ごとに URL を変える概念は旧に無い |
-| `live_lesson` の `capacity` / `reserve_start_day` / `reserve_end_day` / `reserve_end_time` | **開催回の値が優先、無ければレッスン側。** ただし**単位が違う** — レッスン側は「開始の何日前」の `int`、開催回側は `date` / `datetime`。レッスン側を使うときは `starts_at` から逆算する |
-| `config_live_lesson` → `occurrences.cancel_closes_at` | `starts_at − ticket_cancel_day 日 − ticket_cancel_time 時間`。**テナント設定を開催回ごとの絶対時刻に焼き付ける** |
+| `live_lesson` の `capacity` / `reserve_start_day` / `reserve_end_day` / `reserve_end_time` | **`capacity` だけ、開催回の値が優先・無ければレッスン側**（`0` は NULL）。**`reserve_opens_at` / `reserve_closes_at` は開催回の値だけから作り、レッスン側での補完は現状していない**（実装が無い。2026-10-02 の確認。ステージングは開催回側の NULL が0件）。レッスン側は「開始の何日前」の `int` で単位が違うので、補完するなら `starts_at` から逆算する。レッスン側の生値は `live_lessons.settings.defaults` に残る |
+| `config_live_lesson` → `occurrences.cancel_closes_at` | `starts_at − ticket_cancel_day 日 − ticket_cancel_time 時間`。**テナント設定を開催回ごとの絶対時刻に焼き付ける**。キャンセル不可（`ticket_cancel_chk = 0`）なら `starts_at` |
 | `live_lesson_date.reserve_start_day`（**date**）→ `reserve_opens_at` | **JST の 00:00:00 として UTC に変換する。** 素で入れると**前日15:00**になり予約開始が1日早まる |
 | `user_ticket.ticket_end_date`（**date**）→ `expires_at` | **JST の 23:59:59 として変換する**（終了日なので日の終わりを補う） |
 | `live_lesson_reserve` の3フラグ → `live_reservations.status` | `stop_chk=1` → **A7 の新値**、`cancel_chk=1` → `canceled`、`attendance_chk=1` → `attended`、いずれでもなく**開催回が過去** → `no_show`、**未来** → `reserved`。**元の3フラグは `settings` に残す** |
@@ -790,4 +808,4 @@ python -m migrator verify
 | 予約の重複をどう畳むか | **1-1 の #4。** 決まらないと該当する会員の予約が丸ごと移らない |
 | チケット消費履歴の提供形式 | **1-1 の #7。** 台帳には再生できないので、必要なら参照専用 CSV |
 | 課金区分（未コミット）への依存2件 | `live_lesson_limit_item.item_id` と `user_ticket.authority_id`。**その区分の移行後に解決する** |
-| 移行ツールの実装 | **未着手。** `migrator/phases/registry.py` で `live` は `pending` |
+| 移行ツールの実装 | **実装済み**（`content.4`。2026-10-02 の確認）。予約・チケットは受講・課金の区分で流す（4-2） |
