@@ -3,14 +3,21 @@
 [突き合わせ](review.md#新環境に追加するテーブルカラム) の追加一覧を、**school-launcher に当てる migration の単位**に落としたもの。
 
 - **当てる先**: `school-launcher/btoc-backend/db/migrations/`（goose 形式。雛形は `make migrate-create`）
-- **実物**: `20260928132756_lw2_billing_additions.sql`（ブランチ `feat/lw2-billing-schema`）。A1〜A8 を1本にまとめた
+- **実物**（2026-10-02 時点）:
+
+  | migration | 中身 |
+  |---|---|
+  | `20260928132756_lw2_billing_additions.sql` | 1〜4（A1〜A8。`feat/lw2-billing-schema` で作り、`hanataba_dev` に PR #139 でマージ済み） |
+  | `20260927105511_user_tags_and_auto_assign_rules.sql` | 5 自動割当の表（新システムの機能。移行で書き込む先） |
+  | `20260930044959_rename_lw2_legacy_id_on_chapters_and_tags.sql` | 5 `tag_auto_assign_rules.assign_id`（`legacy_id` から改名） |
+  | **`20261001085757_lw2_keep_deleted_rows.sql`**（2026-10-01。`feat/lw2-support-schema` の上で未追跡） | 5・6 自動割当の列とグループの条件、削除済みの対応、予約できる商品の全行 |
 - **当てる時期**: **移行直前**（[migration-spec](migration-spec.md) のフェーズ0）
 - **確認**: `python -m migrator doctor` — この区分が未適用なら `[TODO]` で出る
 
 > **旧 ID の列は旧システムの列名にする**（`ticket_types.ticket_id` / `monthly_ticket_allowances.month_user_ticket_id` / `tenant_plans.item_id` / `payments.application_id` / `receipts.receipt_log_id`。NULL 可）。
 > 基盤・コンテンツと同じ規則（[ひな形](../00-template/schema-additions.md#旧-id-を持たせる基準)）。旧システムの値の列も同じ規則で、`monthly_ticket_allowances.application_id`（`payments.application_id` と同じ値）とする。`ticket_types.legacy_ticket_type`（旧 `ticket.ticket_type`）だけは、新の `ticket_types`（種別の表）と別物なので `legacy_` を付ける。**school-launcher の `20260928132756` と移行ツールはこの列名で揃えてある。**
 
-> **チケット（A1 / A2）・決済（A3〜A6）・帳票（A7 / A8）の3つ。** どれも移行ツールの Step が書き込む先なので**必須**。
+> **チケット（A1 / A2）・決済（A3〜A6）・帳票（A7 / A8）に、自動割当（5）と削除済みの対応・予約できる商品の全行（6）。** どれも移行ツールの Step が書き込む先なので**必須**（`migrator/steps/schema.py` の `BILLING_SCHEMA` で確かめる）。下の「適用順」は `20260928132756` の中の順。
 
 > **コンテンツ（2）が先。** `ticket_type_lessons` / `live_lesson_ticket_requirements` が
 > コンテンツで作るライブの `lessons` を参照する。
@@ -24,7 +31,7 @@
 
 **この区分に「計画」はない。**
 
-ツール側の定義は `migrator/steps/schema.py` の `BILLING_SCHEMA`（10件）。**この表とコードは一致させること。**
+ツール側の定義は `migrator/steps/schema.py` の `BILLING_SCHEMA`（21件）。**この表とコードは一致させること。**
 lookup への値の追加（A5 / A6）は列ではないので一覧に無い。無いと投入時の外部キー確認で止まる。
 
 ---
@@ -174,6 +181,56 @@ CREATE TABLE tenant_legal_documents (
 > 本文を失わないために受ける。どう見せるかは確認事項 D6。
 
 > **`tenants` を RESTRICT で参照する。** `cleanupDemoData` に `monthly_ticket_allowances` と一緒に列挙してある。
+
+---
+
+## 5. 自動割当（billing.4。2026-09-30 / 2026-10-01）
+
+**必須。** 旧 `assign` ほか（受講のデータ種 J04 / J05）を、新システムの自動付与ルール（`20260927105511`）に移す。
+きっかけの商品（`tenant_plans`）が課金の2で入るので、課金の最後に流す。
+書き込む先は `tag_auto_assign_rules` / `tag_auto_assign_rule_triggers` / `tag_auto_assign_rule_conditions` /
+`tag_auto_assign_rule_grants` / `tag_auto_assign_logs`（どれも `20260927105511` の表）と、下で足した列・表。
+
+| 追加 | migration | 旧 |
+|---|---|---|
+| `tag_auto_assign_rules.assign_id`（NULL 可） | `20260930044959` | `assign.assign_id` |
+| `tag_auto_assign_rule_triggers.item_id` / `item_type` | `20261001085757` | `assign_payment_item`。講座の商品 → `plan_id`、レッスン → `course_id`、それ以外の商品は旧 ID だけ |
+| `tag_auto_assign_rule_group_conditions`（新設） | `20261001085757` | `assign_group`（新の条件はタグだけなので受け皿を足した） |
+| `tag_auto_assign_rule_grants.item_id` / `valid` / `deleted_at` | `20261001085757` | `assign_item` の旧 ID・`valid_chk`・`del_chk` |
+
+> **ルールは旧の状態のまま有効。** 新のアプリはグループの条件・旧 ID だけのきっかけ・付与の
+> `valid` / `deleted_at` をまだ読まない（移行の方針として受け入れた）。
+
+---
+
+## 6. 削除済みも移すための追加（2026-10-01）
+
+**必須。** `20261001085757_lw2_keep_deleted_rows.sql`。
+
+```sql
+ALTER TABLE plan_courses
+    ADD COLUMN deleted_at DATETIME(3) NULL AFTER course_id;   -- 旧 payment_item_lesson.del_chk = 1
+ALTER TABLE ticket_type_lessons
+    ADD COLUMN deleted_at DATETIME(3) NULL AFTER lesson_id;   -- 旧 ticket_limit_lesson.del_chk = 1
+
+-- 旧 live_lesson_limit_item（ライブを予約できる商品）の全行を旧の形のまま持つ
+CREATE TABLE live_lesson_limit_item_history (
+    id             CHAR(26)    NOT NULL PRIMARY KEY,
+    tenant_id      CHAR(26)    NOT NULL,
+    lesson_id      CHAR(26)    NOT NULL,   -- ライブのレッスン
+    live_lesson_id INT         NULL,       -- 旧 ID
+    item_id        INT         NULL,       -- 旧 payment_item
+    plan_id        CHAR(26)    NULL,       -- 講座の商品なら tenant_plans（SET NULL）
+    del_chk        BOOLEAN     NOT NULL DEFAULT FALSE,
+    regist_date    DATETIME(3) NULL,
+    update_date    DATETIME(3) NULL
+    -- FK: tenants / lessons (CASCADE) / tenant_plans (SET NULL)
+);
+```
+
+> **新のアプリは足した `deleted_at` をまだ読まない**ので、商品から外した講座も購入で付与され、
+> 外したライブにもそのチケットが使える（移行の方針として受け入れた）。
+> 予約できる商品の全行の表は、`plan_id` が `tenant_plans` を指すので課金の2で入れる。
 
 ---
 

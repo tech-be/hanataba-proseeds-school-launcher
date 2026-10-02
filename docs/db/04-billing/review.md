@@ -27,7 +27,7 @@
 | `ticket_type` int(11) | — | 性質 | 中 | **種別コードが落ちる。** `ticket_types` は `name` で区別する設計で、**種類を表す列を持たない**。**`user_ticket_log.ticket_type` はこの値を参照している**ので、落とすと履歴と残高を突き合わせられなくなる | A1 の `ticket_types.legacy_ticket_type` を追加して移す。ステージング実測では2件とも `1` |
 | `ticket_id` | `id` char(26) | 性質 | 中 | ID の読み替え | A1 の `ticket_types.ticket_id` ＋ `UNIQUE (tenant_id, ticket_id)` を追加し、決定論 ULID で採番する |
 | `ticket_name` varchar(200) | `name` varchar(200) | — | — | 対応あり | **ステージング実測では2件が同じ名前**（「3級マンツーマンレッスン専用チケット」）。`ticket_types.name` に UNIQUE は無いので投入は止まらないが、**運営画面で区別が付かない** |
-| `del_chk` | `active` / `deprecated_at` | 性質 | 低 | 削除フラグ → 有効フラグ | `del_chk = 1` なら `active = FALSE` + `deprecated_at`。ステージング実測は0件 |
+| `del_chk` | `active` / `deprecated_at` | 性質 | 低 | 削除フラグ → 有効フラグ | `del_chk = 1` なら `active = FALSE` + `deprecated_at`。**`deprecated_at` は旧の `regist_date`**（旧に削除日時が無い）。ステージング実測は0件 |
 | — | `description` / `refund_deadline_days` | カラム | 低 | 旧に対応なし | NULL のまま。`chk_tt_refund_days` は NULL を許す |
 
 **まとめ**: 受け皿が無い列 1 / 変換規則が要る列 3 / 高 0 件
@@ -39,7 +39,7 @@
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
 | `live_lesson_id` | `lesson_id` char(26) + FK → `lessons` | 性質 | 中 | **新の参照先は `lessons`**（`live_lessons` ではない）ので、**コンテンツ（2）でライブのレッスン行が先に入っている必要がある** | [投入順序](#投入順序この区分の実行計画)のとおり、コンテンツの後に流す。ステージング実測では孤児0件 |
-| `del_chk` | — | カラム | 低 | 削除フラグ | **削除済みの行は移さない**（中間表なので、行の不在で表現できる）。ステージング実測は0件 |
+| `del_chk` | `deleted_at`（2026-10-01 追加） | カラム | 低 | 削除フラグ | **削除済みも移す**（同じ組が積まれていれば生きている行を優先して1行）。新のアプリはまだ読まないので、外したライブにもチケットが使える。ステージング実測は0件 |
 | `regist_date` | `created_at` | — | — | 対応あり | |
 
 **まとめ**: 受け皿が無い列 1 / 変換規則が要る列 1 / 高 0 件
@@ -50,7 +50,7 @@
 
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
-| — | `ticket_type_id` char(26) **NOT NULL** + FK → `ticket_types` | **テーブル** | **高** | **旧はライブ側に「どの種別のチケットが要るか」を持たない。** `ticket_limit_lesson` が逆向き（種別→ライブ）に持っているだけで、**その行が無いライブは種別を決められない**。ステージング実測で **`item_ticket_price > 0` の3件のうち1件**（`live_lesson_id = 10`）に `ticket_limit_lesson` の行が無い | `ticket_limit_lesson` から逆引きする。**いまの実装は、引けないライブの行を作らない — つまりチケット不要のライブとして移る**（警告ログを出す）。未決: **それでよいか**を運営と決める（→ [制約に当たって移らない行 #17](../constraint-violations.md)）。**1つの種別に絞れない場合も同じ**（`live_lesson_ticket_requirements` の PK は `lesson_id` 単独なので、ライブ1件につき1種別しか持てない） |
+| — | `ticket_type_id` char(26) **NOT NULL** + FK → `ticket_types` | **テーブル** | **高** | **旧はライブ側に「どの種別のチケットが要るか」を持たない。** `ticket_limit_lesson` が逆向き（種別→ライブ）に持っているだけで、**その行が無いライブは種別を決められない**。ステージング実測で **`item_ticket_price > 0` の3件のうち1件**（`live_lesson_id = 10`）に `ticket_limit_lesson` の行が無い | `ticket_limit_lesson` から逆引きする。**いまの実装は、引けないライブの行を作らない — つまりチケット不要のライブとして移る**（警告ログを出す）。未決: **それでよいか**を運営と決める（→ [制約に当たって移らない行 #17](../constraint-violations.md)）。**1つの種別に絞れない場合は、いまの実装は読んだ順の最初の1つを黙って使う**（行は作る。警告は出さない。`live_lesson_ticket_requirements` の PK は `lesson_id` 単独なので、ライブ1件につき1種別しか持てない）。ステージング実測は該当なし。逆引きは生きている（`del_chk = 0`）`ticket_limit_lesson` の行だけを見る |
 | `item_ticket_price` | `cost` int NOT NULL DEFAULT 1 + **CHECK `chk_lltr_cost (cost >= 1)`** | 型 | 中 | **`0` を入れられない** | **`0` の行は行自体を作らない**（[`live_lesson`](../02-content/../02-content/review.md#live_lesson--lessonstypelive--live_lessons) 参照）。ステージング実測は 18件中15件が `0` |
 
 **まとめ**: 受け皿が無い列 — / 変換規則が要る列 2 / **高 1 件**
@@ -59,7 +59,7 @@
 
 | 新テーブル | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|:--:|---|---|
-| `course_ticket_grants` (8列) | テーブル | 低 | **講座購入時のチケット付与。** lw2 は付与を商品（`payment_item`）側で管理していて、講座に紐づく概念が無い | **空で始める**（→ [移行の対象外 B](#b-方針として移行しないもの)）。決済（4-2）の移行時に、商品→講座の対応が付くなら埋め直す |
+| `course_ticket_grants` (8列) | テーブル | 低 | **講座購入時のチケット付与。** lw2 は付与を商品（`payment_item`）側で管理していて、講座に紐づく概念が無い | **空で始める**（→ [移行の対象外 B](#b-方針として移行しないもの)）。決済（4-2）は実装済みだが、**この表には現状は書いていない**（実装が無い。2026-10-02 の確認） |
 | `ticket_grant_sources` (8列) | — | — | シード済み3値（`manual` / `course_purchase` / `standalone_purchase`） | **移行分はすべて `manual`** とし、`note` に出どころを残す |
 | `ticket_ledger_kinds` (9列) | 性質 | 中 | シード済み5値（`granted` / `consumed` / `refunded` / `expired` / `revoked`）。**旧 `action_type` の `update` に対応する値が無い** | [`user_ticket_log`](#user_ticket_log--なし台帳-ticket_ledger_entries-は予約から組み立てる) 参照。**履歴を再生しない方針なら追加は不要** |
 
@@ -75,12 +75,12 @@
 
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
-| `ticket_id` int(11) **NULL可** | `ticket_type_id` char(26) **NOT NULL** + FK | **型** | **高** | **種別が未設定の残高行を入れられない。** ステージング実測で **8件中3件**が NULL | 未決: **既定の種別を1つ作って入れるか、その行を移さないか**を運営と決める（→ [制約に当たって移らない行 #14](../constraint-violations.md)）。**ツールは移さない**（[共通仕様 3.5.1](../../migration-spec.md#351-not-null--unique--外部キーに当たる行)）ので、決めないとその残高が消える。**その残高で予約したライブは消費を台帳に書けず、キャンセルしてもチケットが戻らない**（ステージングで予約9件） |
-| `ticket_num` int(11) | `quantity` int + **CHECK `chk_tg_qty (quantity >= 1)`** | **型** | **高** | **`0` の行を入れられない。** ステージング実測で **8件中2件**が `0`（使い切った残高） | 未決: **使い切った残高を移す必要があるか**を運営と決める（→ [制約に当たって移らない行 #15](../constraint-violations.md)）。**移すなら新環境側の CHECK を緩める**判断になる（`quantity >= 0`）。移さないと、その残高で予約したライブの消費を台帳に書けない（ステージングでは該当する予約0件） |
+| `ticket_id` int(11) **NULL可** | `ticket_type_id` char(26) **NOT NULL** + FK | **型** | **高** | **種別が未設定の残高行を入れられない。** ステージング実測で **8件中3件**が NULL | 未決: **既定の種別を1つ作って入れるか、その行を移さないか**を運営と決める（→ [制約に当たって移らない行 #14](../constraint-violations.md)）。**ツールは移さない**（[共通仕様 3.5.1](../../migration-spec.md#351-not-null--unique--外部キーに当たる行)）ので、決めないとその残高が消える。台帳を作れない予約9件は #15 のもので、**種別を割り当ててもこの9件は戻らない**（3件のうち1件は `ticket_num = 0` で #15 にも当たる） |
+| `ticket_num` int(11) | `quantity` int + **CHECK `chk_tg_qty (quantity >= 1)`** | **型** | **高** | **`0` の行を入れられない。** ステージング実測で **8件中2件**が `0`（使い切った残高） | 未決: **使い切った残高を移す必要があるか**を運営と決める（→ [制約に当たって移らない行 #15](../constraint-violations.md)）。**移すなら新環境側の CHECK を緩める**判断になる（`quantity >= 0`）。移さないと、その残高で予約したライブの消費を台帳に書けず、**キャンセルしてもチケットが戻らない**。ステージングで**予約9件**（会員 3181 がライブ `live_lesson_id = 5` を予約したもの。その会員の種別 2 の残高が0枚）。CHECK を緩めれば9件とも台帳に書ける |
 | `ticket_num` | `remaining_quantity` int + **CHECK `chk_tg_remaining`** | 性質 | 中 | **残高1行 = 付与1行**として両方に同じ値を入れる。**「何枚付与されて何枚使ったか」は表現できない**（旧が残高しか持たないため） | `quantity = remaining_quantity = ticket_num` とし、`note` に「lw2 移行時点の残高」と書く（ETL設計 §5-6） |
 | `ticket_end_date` date | `expires_at` datetime(3) | 型 | 低 | date → datetime。**JST 00:00 を UTC に直すと前日 15:00 になり、有効期限が1日早まる** | **JST の 23:59:59 として変換する**（終了日なので日の終わりを補う）。ステージング実測は**全件 NULL** |
 | `ticket_start_date` date | — | カラム | 低 | 利用開始日が落ちる | A1 の `ticket_grants.starts_at` を追加して移す。ステージング実測は全件 NULL |
-| `authority_id` | `source_ref` char(26) | 性質 | 低 | 有料受講権限（`payment_item_lesson_authority`）との紐付け。受講（3）はこれを `(会員, 講座)` の組に畳んで `enrollments` に移しているので、**権限1行と受講1行が対応しない** | **NULL のまま**（`source_ref` は NULL 可）。紐付けが要るかは決済（4-2）に着手するときに決める |
+| `authority_id` | `source_ref` char(26) | 性質 | 低 | 有料受講権限（`payment_item_lesson_authority`）との紐付け。受講（3）はこれを `(会員, 講座)` の組に畳んで `enrollments` に移しているので、**権限1行と受講1行が対応しない** | **NULL のまま**（`source_ref` は NULL 可）。決済（4-2）は実装済みだが、`source_ref` には現状は入れていない（実装が無い。2026-10-02 の確認） |
 | — | `source` varchar(32) **NOT NULL** + FK | 性質 | 中 | 旧に対応列なし | `manual` 固定（ETL設計 §5-6） |
 | `(user_id, ticket_id, authority_id)` | — | 性質 | 低 | **旧は UNIQUE。** 新に対応する一意制約が無い | 決定論 ULID の入力にこの3列を使う（再実行で同じ ID になる） |
 
@@ -122,9 +122,13 @@
 **移行ツールは実装済み（暫定の規則。[migration-spec 1-3](migration-spec.md) の P1〜P10）。** 下の「未決:」は、運営の回答で規則を差し替える点。
 
 > **内訳の残り（`payment_item_lesson` / `payment_item_cate` ほか / `payment_application_item` /
-> `payment_infomation` / `payment_application_set_user_learning_lesson`）はまだ突き合わせていない。**
-> `payment_item_lesson` は `plan_courses` に、`payment_application_item` は決済の商品の特定に使っている。
-> 残りは受け皿が無く、商品・決済の `settings` にも入れていない（分類・申込と受講の古い対応表）。
+> `payment_infomation` / `payment_application_set_user_learning_lesson`）は列の突き合わせをしていない。** いまの扱い:
+>
+> - `payment_item_lesson` は `plan_courses` に移す（削除済みの対応も `deleted_at` で移す）。`payment_application_item` は決済の商品の特定に使う
+> - `payment_infomation` は**移している**。設定は基盤のテナントの Step で `tenants.settings.lw2_payment`（P13）、
+>   規約の URL・表題の上書きは `tenant_legal_documents`（`receipts.py`。P12）
+> - 商品の分類（`payment_item_cate` 3件 / `payment_item_item_cate` 7件）と申込と受講の古い対応表
+>   （`payment_application_set_user_learning_lesson` 27件）は**現状は移していない**（実装が無い。2026-10-02 の確認）。商品・決済の `settings` にも入れていない
 
 ### `payment_item` → `course_purchase_payments`（一部）
 
@@ -137,7 +141,7 @@
 |---|---|---|:--:|---|---|
 | `(item_id, lesson_id)` | `tenant_plans` / `plan_courses` | 性質 | 中 | **商品と講座が 1:N。** 新環境にも**まとめ商品の受け皿はある**（`tenant_plans` ＋ `plan_courses`、`plan_type = course_bundle`）。買い切りも `interval_type = one_time` で表せる | **商品は `tenant_plans` に移す**（P1。**すべて `inactive`**、`provider_price_id` は `lw2-item-{id}`）。情報は落ちない。**`courses.price`（講座1本の値段）には写す元が無い**ので NULL のままにする — 埋めると lw2 に無かった単品販売を始めることになる（→ [確認事項 B2 / C3](../open-questions.md#c-新環境の制約が意図的かの確認)） |
 | `item_type` | — | 性質 | 中 | 商品の種別。0 講座 / 1 チケット（都度）/ 2 チケット（月次）/ 3 ライブ（`PaymentItemController`）。受講可否判定は `item_type = 0` で絞る（`LessonModel::1814`） | **講座（0）だけを `tenant_plans` に移す**（P1）。1/2/3 は新の商品に受け皿が無いので、決済の `settings` に商品の情報を残す（P2） |
-| `display_chk` / `valid_chk` / `del_chk` | `tenant_plans.settings` | カラム | 中 | 表示中か・有効か・削除済みか | `settings.legacy` に残す。**新ではすべて `inactive`**（P1）。切り替え後も売るかは[確認事項 D7](../open-questions.md#d-cutover-の運用で決めておきたいこと) |
+| `display_chk` / `valid_chk` / `del_chk` | `tenant_plans.settings` | カラム | 中 | 表示中か・有効か・削除済みか | `settings.legacy` に残す（削除済みは `settings.legacy.deleted = true`。`deleted_at` は入れない）。**新ではすべて `inactive`**（P1）。切り替え後も売るかは[確認事項 D7](../open-questions.md#d-cutover-の運用で決めておきたいこと) |
 | `price` / `first_price` | `price` / `settings` | 性質 | 中 | **税込**（コメントの「税抜」は誤り。管理画面の JavaScript が税抜から税込を計算して入れる） | そのまま `price` に入れる |
 
 **まとめ**: 受け皿が無い列 — （A3 の `settings`）/ 高 0 件
@@ -164,6 +168,11 @@
 
 流入元計測。**移行対象外**（PDF・再判定とも X）。実測は `analytics_tag` 7件のみで、
 `trigger_media` / `payment_trigger_media` は対象テナント 0件。
+
+### `analytics_tag_display` → なし
+
+ローカルデータ数 127 ／ ステージング実測11件（`analytics_tag` 経由）。計測タグを出す画面と位置。
+**計測タグ本体と一緒に移行対象外。**
 
 ## B4 帳票
 
@@ -196,7 +205,7 @@
 
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
-| 本文 | `tenant_legal_documents.body` | **性質** | **高** | **規約の本文を置く先が無かった。** `user_consents` は「誰がいつ何に同意したか」の記録で、**同意した文書そのものは持たない**。新の画面は文面を固定で持つ | `tenant_legal_documents` を足して移す（A8 / P12。空の本文は移さない。ステージングは利用規約の ja / en だけ）。**アプリはまだ読まない**（→ 確認事項 D6） |
+| 本文 | `tenant_legal_documents.body` | **性質** | **高** | **規約の本文を置く先が無かった。** `user_consents` は「誰がいつ何に同意したか」の記録で、**同意した文書そのものは持たない**。新の画面は文面を固定で持つ | `tenant_legal_documents` を足して移す（A8 / P12。**本文が空で、外部 URL の上書きも無いものは移さない**。ステージングは利用規約の ja / en だけ）。**アプリはまだ読まない**（→ 確認事項 D6） |
 | 同意の記録 | `user_consents` | 性質 | 中 | **lw2 は同意を記録していない**（購入画面のチェックを確かめるだけ） | 移すものが無い |
 | 版・改定日 | — | 性質 | 低 | **lw2 は版を持たない**（テナント × 言語に1行を上書き保存） | 移すものが無い |
 
@@ -226,7 +235,7 @@
 |---|---|
 | `user_ticket` のうち種別が無い残高（実測3件） | `ticket_grants.ticket_type_id` の NOT NULL に当たる（→ [#14](../constraint-violations.md)） |
 | `user_ticket` のうち `ticket_num = 0` の残高（実測2件） | `ticket_grants` の CHECK `chk_tg_qty (quantity >= 1)` に当たる。**制約を緩めるかは運営の判断**（→ [#15](../constraint-violations.md)）。**CHECK は事前検査でも見る** — 見ていなかった頃は dry-run を通って実 INSERT で落ちた |
-| 上の残高で予約したライブの消費（実測で予約9件。すべて種別が無い残高のもの） | 戻し先の付与が移らないので台帳（`ticket_ledger_entries.grant_id` NOT NULL）に書けない。**キャンセルしてもチケットが戻らない** |
+| 上の残高で予約したライブの消費（実測で予約9件。すべて `ticket_num = 0` の残高（#15）のもの。会員 3181 の種別 2） | 戻し先の付与が移らないので台帳（`ticket_ledger_entries.grant_id` NOT NULL）に書けない。**キャンセルしてもチケットが戻らない** |
 
 #### B. 方針として移行しないもの
 
@@ -243,12 +252,16 @@
 
 ```
 [migration]  A1〜A8（20260928132756_lw2_billing_additions.sql）
+             ＋ 20260927105511 / 20260930044959 / 20261001085757（自動割当の表・列、削除済みの対応、予約できる商品の全行）
                 ↓
 [billing.1]  ticket_types → ticket_type_lessons → live_lesson_ticket_requirements
              → ticket_grants → ticket_ledger_entries → monthly_ticket_allowances
                 ↓
 [billing.2]  tenant_plans → plan_courses → payments → course_purchase_payments / subscription_payments
+             → live_lesson_limit_item_history
 [billing.3]  receipt_settings → receipts → tenant_legal_documents
+[billing.4]  tag_auto_assign_rules → tag_auto_assign_rule_triggers → tag_auto_assign_rule_conditions
+             → tag_auto_assign_rule_group_conditions → tag_auto_assign_rule_grants → tag_auto_assign_logs
 ```
 
 > **台帳は受講（3）のライブ予約を参照する。** 予約は `enrollment.6` で入るので、
