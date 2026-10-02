@@ -33,11 +33,11 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | LINE 公式アカウント | **継続する。** `user.line_id` → `line_links` を移行対象にする |
 | プロフィール画像 | **データは移行しない。** `avatar_url` の列は使うが空で始め、会員が登録し直す |
 | プロフィール項目 | **非表示のものも含めて全項目を移す**（固定34・自由記述15）。`show_flag` などの制御はそのまま移し、**新環境の画面に出ないことは移行の問題としない**。ステージング実測では非表示7項目に値は0件だったが、あれば値も移す |
-| `site` の運用値 | **`tenants.settings` に移す**（A3）。`service`（名称・説明・提供期間・URL・`application_path`）と `features`（`lw_type` / テスト分析 / ランキング / 日次メール）。`linkpreview_api_key` は `tenant_secrets` へ。**新環境に対応する機能が無くても移す** — 参照されないことは移行しない理由にならない |
+| `site` の運用値 | **`tenants.settings` に移す**（A3）。`legacy_site_id`、`service`（名称・説明・提供期間・URL・`application_path`）と `features`（`lw_type` / テスト分析 / ランキング / 日次メール）。`linkpreview_api_key` は `tenant_secrets` へ。テナントの設定6表（`lw2_config` など）と決済の設定（`lw2_payment`）も同じ `settings` に入る（[review.md のテナントの設定](review.md#テナントの設定2026-09-30-に仕分け)）。**新環境に対応する機能が無くても移す** — 参照されないことは移行しない理由にならない |
 | 純ログ | **移行しない。** `user_login_log` / `user_login_log_monthly` / `twostepverification_log` の3件。cutover 後の認証から記録を始める |
 | グループ階層 | **`group.parent_group_id` が正本。** `group_structure` は `GroupModel::makeGroupStructure()` が作り直す閉包テーブルなので移行しない（[対象外 B](#34-移行の対象外)）。`tenant_groups` は `parent_id` と `depth` で持つ |
 | SNS ログインの認証情報 | **移行する。** 旧 `sns_setting` の6列を `tenant_secrets` へ（種別は `facebook_client_id` など6種を追加。A7）。**新環境でもそのまま使えるため、移行できない理由が無い**（[移行の原則](../00-template/review.md#移行の原則)の1）。**移行後、SNS ログインを動かすには SNS 側の管理画面でコールバック URL を新環境のものに修正する作業が要る** — データの移行だけでは動作しない（移行の可否には影響しない） |
-| 平文の認証情報 | **抽出クエリで SELECT しない。** `migrator/db/guards.py` の `FORBIDDEN_COLUMNS` が実行前に検査して止める（テスト済み）。対象は [3.4 の A](#34-移行の対象外)の3か所（lw2 自身の DB 接続情報、入力パスワードの平文、失効済みの認証コード）。**承認を取る項目ではなく、ツールの既定動作。** ただし **`user.password` と `sns_setting` の6列は読む** — どちらも移行対象のため（`user.password` は 3DES 復号 → bcrypt。鍵の受け渡しは [確認事項](../open-questions.md)） |
+| 平文の認証情報 | **抽出クエリで SELECT しない。** `migrator/db/guards.py` の `FORBIDDEN_COLUMNS` が実行前に検査して止める（テスト済み）。対象は [3.1 の表](#31-抽出extract)のとおり（lw2 自身の DB 接続情報・DB 名、`application_config.special_pass_word`、入力パスワードの平文、認証コード）。**承認を取る項目ではなく、ツールの既定動作。** ただし **`user.password`、`sns_setting` の6列、`application_config` の LINE の2列（`line_channel_sercret` / `send_line_chanel_token`）、`site.linkpreview_api_key` は読む** — いずれも移行対象のため（秘密の値は `tenant_secrets` へ）（`user.password` は 3DES 復号 → bcrypt。鍵の受け渡しは [確認事項](../open-questions.md)） |
 
 **データの持ち方（畳まない・元の粒度を保つ）**
 
@@ -48,7 +48,7 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | 固定電話と携帯電話 | **別の列で持つ**（`phone` / `mobile_phone`）。1列に畳まない |
 | 住所 | **郵便番号 / 都道府県 / 市区町村 / 番地・建物名の4項目 × 2組**で移す |
 | 国籍・海外住所 | **`user_addresses` の `kind='foreign'` で移す**（A12）。`nationality` / `country` は**コードなので `country_master` で国名に展開**する（`AR` → アルゼンチン）。選択肢に無い値は `*_another` の自由入力をそのまま使う |
-| パスワード | **3DES 復号 → bcrypt 再ハッシュを移行ツールで行う。** 新環境と同じ `$2a$` / コスト10。**会員にパスワード再設定を求めない。** 旧の秘密鍵は**環境変数 `LW2_CRYPT_KEY`**（設定ファイルに書かない）。平文はログにも例外にも出さない。復号できないものは**空で入れず、件数と会員 ID を警告に出す** |
+| パスワード | **3DES 復号 → bcrypt 再ハッシュを移行ツールで行う。** 新環境と同じ `$2a$` / コスト10。**会員にパスワード再設定を求めない。** 旧の秘密鍵は**環境変数 `LW2_CRYPT_KEY`**（設定ファイルに書かない）。平文はログにも例外にも出さない。復号できないもの・旧が空のものは**空のハッシュ（`''`）で入れ、件数と会員 ID を警告に出す**（その会員はログインできない状態で移る。ステージングは旧が空の1名） |
 | ロールの対応表 | **実データで確定。** 1=`system_admin` / 2=`tenant_admin` / 3=`facility_manager`（削除済み）/ 4=`company_manager` / 5=`instructor` / 6=`group_manager` / 7=`learner` / 8=`supporter`（削除済み）。**表示名は `translate_master` から、並び順は `role_index` から**（`role_id` と食い違う） |
 | 追加ロールの権限 | **移行としては問題なし。** 移したロール文字列（`system_admin` 17名 / `company_manager` 56名 / `group_manager` 20名）に新環境のコードが対応していないことは**把握済み**。権限をどう実装するかは移行とは別の判断で、[追加一覧の「変更が必要な機能」](review.md#新環境に追加するテーブルカラム)に置く |
 | プロフィール項目の分類 | **`profile_cate` を `tenant_profile_item_categories` に移す**（項目より先）。`profile_cate_id=0` は「分類なし」で NULL |
@@ -74,8 +74,8 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 |---|---|
 | 新環境へのスキーマ追加（A1〜A23） | **移行直前に実施する。** フェーズ0（第2章）。DDL と適用順は [マイグレーション対象](schema-additions.md) |
 | `tenant_statuses` | **`deleted` を追加する**（recademy 自体は `active`） |
-| マスタとテナントの順序 | **マスタが先**（`foundation.1`）。FK の参照先をそろえてからテナントの行を作る |
-| `tenants` の1行作成 | **移行手順に含める**（`foundation.2`）。採番した `id` を設定値として配る |
+| マスタとテナントの順序 | **マスタが先**（同じ `foundation.1` の中で、マスタ → テナント → テナント設定の順）。FK の参照先をそろえてからテナントの行を作る |
+| `tenants` の1行作成 | **移行手順に含める**（`foundation.1`）。採番した `id` を設定値として配る |
 | 動作確認時の移行先 | **移行前にローカルデータを削除し seed を入れ直す**（`make reseed`）。判定は `slug='recademy'` が1件かで行い、**テナントの総数では判断しない** |
 | 移行元に無いテーブル | **設定 `source.absent_tables` に書いたときだけ**読み飛ばす。書かなければ事前検査で停止する。**書いた分のデータは移らない**ので、本番では空にして実在を確かめる |
 
@@ -89,8 +89,8 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | **`tenant_code` の文字種・桁・重複**（73件分）。大文字 / アンダースコア / 3文字以下 / 同じ値が無いか | slug をそのまま使えるかの判断（[1-1 #2](../open-questions.md)） |
 | `del_chk` / `language_code` の実値 | `status`、多言語判断 |
 | `role_master` 8行が検証用と同じか（`FACILITY_MANAGER` / `SUPPORTER` が削除済みか） | ロール対応表。**ローカルでは確定済み** |
-| **会員のロール分布**（本番の実数） | 追加する4ロールに該当者がいるか |
-| `profile_item` の `show_chk=1` の項目 | 移すプロフィール項目 |
+| **会員のロール分布**（本番の実数） | 追加する5ロールに該当者がいるか |
+| `profile_item` の `show_chk=1` の項目 | 画面に出ている項目（**移行は `show_chk` で絞らず全項目を移す**） |
 | `tel` / `mobile_tel` に32文字超があるか | `varchar(32)` を広げるかの判断 |
 | `line_id` が `U` 始まり33文字か | `line_links` に入れてよいか |
 | `mail_add` の欠損・重複件数 | UNIQUE 違反の実数 |
@@ -131,6 +131,10 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 
 **dry-run の件数（`--section foundation`、合計 35,617行）**
 
+> **2026-09-22 時点の記録。** フェーズは当時の5分割（いまは `foundation.1` マスター＝当時の1〜3、`foundation.2` ユーザ＝当時の4〜5。`line_links` は `support.1`）。
+> その後、属性はタグに一本化し（`config.attributes` → `user_tags`、`user_attribute_values` → `user_tag_assignments`）、`config.attribute_required_courses` は廃止した。
+> `config.field_defaults` / `config.secrets` もこのあとに加わっている。
+
 | フェーズ | Step | 抽出 | 投入予定 |
 |---|---|---:|---:|
 | foundation.1 | master.user_roles | 8 | 1 |
@@ -157,7 +161,7 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 
 **旧 DB と照合済み**（抽出件数と投入件数が食い違うものは、すべて旧の値どおり）
 
-- `user_addresses` 218 = 住所1が入っている 211名 ＋ 住所2が入っている 7名
+- `user_addresses` 218 = 住所1が入っている 211名 ＋ 住所2が入っている 7名（当時。**いまは国籍・海外住所の `kind='foreign'` 行も入る**）
 - `user_profile_values` 27 = `user_profile1`〜`20` のうち空でない値の数
 - `user_field_visibility` 18,507 = `*_open_chk` 6列の NOT NULL 数
 
@@ -272,32 +276,29 @@ dry-run は INSERT を実行しないため、制約違反は出ない。実際�
 新環境は**実 FK を持つ**ため順序が強制される。**前のフェーズが終わるまで次に進まない。**
 
 ```
-フェーズ0  新環境のスキーマ追加（A1〜A21 の migration）※ 移行直前に実施する
-              ↓  ※ 追加が入る前に L1 以降を流すと、受け皿の無い列が落ちる
-フェーズ1  L0: マスタの追加値 ※ FK の参照先をそろえる
-              ├ user_roles に system_admin / company_manager / group_manager / supporter
-              ├ tenant_statuses に deleted
-              ├ auth_methods に saml / facebook / twitter / instagram / totp
-              ├ email_kinds に announcement / scout / footprint / bbs_comment
-              └ tenant_secret_kinds に外部 API キーの種別
-              ↓
-フェーズ2  L0: tenants の1行（recademy）※ 移行手順に含める。手作業で先に作らない
-              ↓  ここで採番した tenants.id を設定値として配る
-フェーズ3  L1: テナント設定・定義系（会員より先に入れる）
-              ├ tenant_limits / tenant_sso_configs / tenant_login_windows
-              ├ tenant_profile_item_categories → tenant_profile_items → *_labels
-              ├ tenant_groups → tenant_group_members は後（会員の後）
-              └ tenant_attributes / attribute_required_courses
-              ↓
-フェーズ4  L1: 会員本体
-              users → external_user_links
-              ↓  ※ 既存ブリッジ（external_user_import_service）が正本。cutover 前夜にフル同期
-フェーズ5  L1: 会員に紐づくもの（users の行が揃ってから）
-              ├ user_addresses / user_profile_values / user_field_visibility
-              ├ notification_optouts（極性を反転）
-              ├ tenant_group_members / user_attribute_values
-              ├ instructor_assignments
-              └ line_links
+フェーズ0      新環境のスキーマ追加（A1〜A24 の migration）※ 移行直前に実施する。common.0 で確認
+                 ↓  ※ 追加が入る前に流すと、受け皿の無い列が落ちる
+foundation.1   マスター
+                 ├ マスタの追加値（FK の参照先をそろえる）
+                 │   ├ user_roles に system_admin / facility_manager / company_manager / group_manager / supporter
+                 │   ├ tenant_statuses に deleted
+                 │   ├ auth_methods に saml / facebook / twitter / instagram / totp
+                 │   └ email_kinds に announcement / scout / footprint / bbs_comment
+                 ├ tenants の1行（recademy）※ 移行手順に含める。手作業で先に作らない
+                 │   ↓  ここで採番した tenants.id を設定値として配る
+                 ├ tenant_limits / tenant_field_defaults / tenant_secrets
+                 ├ tenant_profile_item_categories → tenant_profile_items → *_labels
+                 ├ tenant_groups / user_tags（旧の属性）
+                 └ tenant_sso_configs / tenant_login_windows
+                 ↓
+foundation.2   ユーザ（会員より先に定義が入っていること）
+                 ├ users → external_user_links
+                 │   ↓  ※ 既存ブリッジ（external_user_import_service）が正本。cutover 前夜にフル同期
+                 ├ user_addresses / user_profile_values / user_field_visibility
+                 ├ notification_optouts（極性を反転）
+                 └ tenant_group_members / user_tag_assignments / instructor_assignments
+
+support.1      line_links（LINE。書き込み先は会員に紐づく表だが、区分はサポート機能）
 ```
 
 > **`login_history` は入れない。** 純ログのため移行せず、**cutover 後の認証から記録を始める**。
@@ -315,13 +316,13 @@ dry-run は INSERT を実行しないため、制約違反は出ない。実際�
 - `tenants` が無いと `tenant_id` を持つ全テーブルが FK 違反になる
 - `users` が無いと会員に紐づくテーブルが入らない。`courses.instructor_id` は NOT NULL なので、**講師の users 行はコースより先**
 - マスタ（`*_statuses` / `*_kinds` / `*_methods` / `user_roles`）は FK の参照先なので、値を使う行より先
-- `tenant_group_members` は `tenant_groups`（フェーズ3）と `users`（フェーズ4）の両方に依存するのでフェーズ5
+- `tenant_group_members` は `tenant_groups`（`foundation.1`）と `users`（`foundation.2`）の両方に依存するので、`foundation.2` の中で `users` の後
 
 ---
 
 ## 2-2. 実行手順
 
-**フェーズの指定は `区分.番号`**（`foundation.4` など）。区分をまたぐ順序と区分の中の順序を混ぜないための形。**フェーズは区切って流す。** 区切る単位でコミットと検証が入るので、失敗したときのやり直しが小さくなる。
+**フェーズの指定は `区分.番号`**（`foundation.2` など）。区分をまたぐ順序と区分の中の順序を混ぜないための形。**フェーズは区切って流す。** 区切る単位でコミットと検証が入るので、失敗したときのやり直しが小さくなる。
 
 **前提**（どちらも欠けると事前検査で止まる）
 
@@ -355,17 +356,14 @@ python -m migrator run --phase common.0
 python -m migrator preflight
 
 # 4. dry-run。**フェーズ単位で試せる**
-python -m migrator run --dry-run --phase foundation.1      # マスタだけ
-python -m migrator run --dry-run --phase foundation.2      # テナントだけ
-python -m migrator run --dry-run --phase foundation.1-3    # 定義系まで
+python -m migrator run --dry-run --phase foundation.1      # マスタ・テナント・定義系
+python -m migrator run --dry-run --phase foundation.2      # 会員と会員に紐づくもの
 python -m migrator run --dry-run --section foundation      # 基盤まるごと
 
 # 5. 本番投入。フェーズごとに結果を見てから次へ
 python -m migrator run --phase foundation.1
 python -m migrator run --phase foundation.2
-python -m migrator run --phase foundation.3
-python -m migrator run --phase foundation.4
-python -m migrator run --phase foundation.5
+python -m migrator run --phase support.1                   # LINE の紐付け（line_links）
 
 # 6. 検証（3.5）
 python -m migrator verify
@@ -409,7 +407,7 @@ python -m migrator run --dry-run --section foundation
 > 実際には投入されていないため、外部キーの参照先が無く**全行が「移行しない」になる**。
 > 単独フェーズが意味を持つのは実投入のとき（前のフェーズが入っている状態）。
 >
-> **`foundation.2` の直後に `tenants.id` を控えて設定値として配る。** 他のツールが同じ値を読む必要がある。
+> **`foundation.1` の直後に `tenants.id` を控えて設定値として配る。** 他のツールが同じ値を読む必要がある。
 >
 > **途中のフェーズから流すとき**、ツールは `tenant_id` を新環境から `slug` で引く（無ければ旧 `tenant` 行から
 > 決定論 ULID で組み立てる）。ただし**飛ばしたフェーズが投入済みかは確認しない**ので、
@@ -427,7 +425,7 @@ python -m migrator run --dry-run --section foundation
 | ロールの8値対応 | [ロール対応表](review.md#ロール対応表) |
 | `user` 90列すべての行き先 | [全列の行き先](review.md#全列の行き先) |
 | プロフィール項目の構造（定義 / ラベル / 値の3分割） | [M4](review.md#m4-会員項目状態の定義) |
-| 新環境に追加するテーブル・カラムと、変更が必要な機能 | [A1〜A21](review.md#新環境に追加するテーブルカラム) |
+| 新環境に追加するテーブル・カラムと、変更が必要な機能 | [A1〜A24](review.md#新環境に追加するテーブルカラム) |
 
 ### 3.1 抽出（extract）
 
@@ -442,21 +440,23 @@ python -m migrator run --dry-run --section foundation
 | テーブル | 列 | 理由 |
 |---|---|---|
 | `site` | `db_server` / `user_id` / `password` / `database` | DB 接続情報の平文 |
+| `application_config` | `special_pass_word` / `kanri_db_name` | 平文のパスワードと、lw2 自身の DB 名 |
 | `user_login_log` | `input_password` | 入力パスワードの平文（**そもそも純ログなので抽出しない**） |
 | `twostepverification_log` | `input_code` / `correct_code` | 認証コードの平文 |
+| `twostepverification` | `verification_code` | 発行中の認証コード |
 
-> **抽出クエリのレビュー項目にする。** 「移さない」ではなく「読み出さない」。
+> **抽出クエリのレビュー項目にする。** 「移さない」ではなく「読み出さない」。一覧の正は `migrator/db/guards.py` の `FORBIDDEN_COLUMNS` で、SELECT を実行する前に機械で弾く。
 
 **事前検査**
 
 | 検査 | 対象 | 判断 |
 |---|---|---|
 | NULL / 空 | `tenant.tenant_name` | NOT NULL なので1件でもあれば投入前に値を決める |
-| 値の照合 | `tenant.tenant_code` | `recademy` と一致するか |
-| 欠損・重複 | `user.mail_add` | ステージング実測で欠損 2,698名・重複 389名。**この会員は移行しない**（一覧に出る） |
+| 値の照合 | `tenant.tenant_code` | `recademy` と一致するか（**事前検査ではなく変換時の警告**。止めない） |
+| 欠損・重複 | `user.mail_add` | ステージング実測で欠損 2,698名・重複 389名。**この会員は移行しない**（**事前検査ではなく投入前の制約検査**で当たり、一覧に出る） |
 | 桁溢れ | `user.tel` / `mobile_tel`（32文字超） | 超過があれば列を `varchar(50)` に広げる |
-| 形式 | `user.line_id`（`U` 始まり33文字か） | 外れたものは `line_links` に入れず一覧を渡す |
-| コード値の網羅 | `user.role_id` / `pref_id` / `sex_type` / `blood_type` | 対応表に無い値が無いこと |
+| 形式 | `user.line_id`（`U` 始まり33文字か） | 外れたものは `line_links` に入れず一覧を渡す（**`support.1` の変換時に警告**） |
+| コード値の網羅 | `user.role_id` と `role_master` の全行 | ロール対応表に無い値が無いこと。`role_id` が NULL の会員は件数を出して通す（移行しない）。**`pref_id` / `sex_type` / `blood_type` は検査していない**（`pref_id` は `pref_master` で展開し、`sex_type` / `blood_type` はコード値のまま入れる） |
 | 復号 | `user.password` を200件試す | 鍵が違っても例外にならず**意味のない文字列**が返る。半数以上失敗なら鍵違いとして止める |
 | 一意性 | `user.login_id` | 新環境の UNIQUE に当たる重複を**再ハッシュ（数分）の前に**出す |
 | 初期状態 | 移行先の `tenants` | 対象テナントが未登録で、シードが入っていること。**前の移行の残りが混ざると件数の照合が意味を失う** |
@@ -477,8 +477,8 @@ python -m migrator run --dry-run --section foundation
 | `user.password` → `users.password_hash` | **base64 → 3DES-CBC 復号 → bcrypt（`$2a$` / コスト10）**。鍵導出は lw2 の `Crypt` と同じ（鍵 = `substr(md5(秘密鍵),0,24)` / IV = `substr(md5(鍵),0,8)` / ゼロ埋め）。**1文字でも変えると一部だけ壊れる** |
 | ゼロ日付 (`0000-00-00`) | **NULL として扱う**（日時列すべて共通）。件数を警告に出す |
 | `user.birth_date` | `birth_year` / `birth_month` / `birth_day` に分解（時刻部は捨てる。全件 `00:00:00`） |
-| `user.role_id` が NULL | 設定に既定があればその値。**無ければ停止する**（黙って倒さない） |
-| `user.del_chk` / `valid_chk` / `limit_date` | `status` は判定結果。**元の列は `is_valid` / `login_start_date` / `login_end_date` に残す** |
+| `user.role_id` が NULL | **既定値に倒さず、停止もしない。** `users.role` を NULL のまま投入前の制約検査に当て、NOT NULL 違反としてその会員を `out/not-migrated.csv` に出す（移らない） |
+| `user.del_chk` / `valid_chk` / `limit_date` | `status` は判定結果で、`del_chk=1`→`deleted` / `valid_chk=0`→`inactive` / それ以外→`active`。**`limit_date` は判定に使わない**（期限切れでも `active`。ステージングでは有効会員 39名が該当。以前の記述は「期限切れ→`inactive`」だった）。**元の列は `is_valid` / `login_start_date` / `login_end_date` に残す** |
 | `sendmail_*_chk` ほか通知系 | **極性を反転**して `notification_optouts` へ（`channel` で PC / 携帯を分ける） |
 
 > **取り違え注意**
@@ -490,7 +490,7 @@ python -m migrator run --dry-run --section foundation
 
 - **冪等性**: 決定論 ULID と業務キーの UNIQUE（`tenants.slug`、`external_user_links` の `(tenant_id, external_system, external_id)`）で担保する
 - **投入前の確認**: `tenants` は **`name` に UNIQUE が無い**ため、`SELECT id, slug, name FROM tenants WHERE name = '<正式名称>'` で0件を確認してから INSERT する。詳細は [移行時の注意事項](review.md#移行時の注意事項)
-- **`external_system` の値**: `lw2` と `kiracari` のどちらかに**3か所（ETL / ブリッジ / テスト）を揃える**。食い違うと同じ会員が二重登録される
+- **`external_system` の値**: 移行ツールは **`lw2` 固定**（`users.EXTERNAL_SYSTEM`）。ブリッジ・テストも同じ値に揃える。食い違うと同じ会員が二重登録される
 - **投入前の検査**: 変換した直後に、移行先のスキーマ（`information_schema`）と突き合わせる。
   **NOT NULL で既定値の無い列を書いていない / UNIQUE が重複している（同じバッチの中・移行先の既存行の両方）/
   外部キーの参照先が無い**の3つを見る。**当たった行は移さず、`work_dir/not-migrated.csv` に出す。**
@@ -508,12 +508,13 @@ python -m migrator run --dry-run --section foundation
 | 対象 | なぜ移行できないか |
 |---|---|
 | `site` の DB 接続情報4列 | lw2 自身の DB への接続情報。**新環境は別サーバー・別 DB で、移しても機能しない。** 平文のため経路に乗せない |
+| `application_config.special_pass_word` / `kanri_db_name` | 平文のパスワードと、lw2 自身の DB 名。新環境では意味を持たない |
 | `user_login_log.input_password` | 入力パスワードの平文。**保存してよい場所が新環境に無い** |
 | `twostepverification_log` の `input_code` / `correct_code` | 認証コードの平文。同上 |
 | `twostepverification.verification_code` | 発行中の認証コード。**移した時点ですでに無効** |
 | `user_auth_token` / `password_reminder` | 発行中の一時トークン。cutover 後は新環境が発行し直す |
 
-> **上の4件（平文）は「移さない」ではなく「読み出さない」。** 抽出クエリで SELECT しないことをレビューで確認する。
+> **一時トークン以外（平文・接続情報・認証コード）は「移さない」ではなく「読み出さない」。** `FORBIDDEN_COLUMNS` が SELECT の前に弾く。
 
 **B. 方針として移行しないもの**
 
@@ -523,7 +524,19 @@ python -m migrator run --dry-run --section foundation
 | `user_login_log` / `user_login_log_monthly` / `twostepverification_log` | **純ログ**。受け皿はあるが移さず、cutover 後から記録を始める |
 | `edit_form_data` | **旧環境自身が3日で消している**（`EditFormDataModel::create()` が毎回 `DELETE ... regist_date <= NOW() - 3 DAY` を流す）。中身は管理画面の入力途中と `onetime_token`（**一回限りのトークン**）で、移した時点で無効 |
 | `user.user_img_file_name` / `*1` | プロフィール画像。**運営の判断で対象外**（列は使うが空で始める） |
+| `attribute_lesson` | 旧でも講座を結んでいない。属性はタグに一本化した（A11） |
 | `user.role_id` が NULL の会員 | **ロールが決まらないため移せない**（`users.role` は NOT NULL + FK）。ステージングでは `user_id=911` の1名。`zentai001` を `user_id=483` と共有する重複アカウントで、**受講0件・グループ0件・属性0件・一度もログインなし**。メールも57名が共有する `yoneda.mw@gmail.com`。移して困るデータが無いため対象外とする（2026-09-22 決定）。**本番ダンプでは該当者と件数を取り直す** |
+
+**現状は移していないもの**（決定ではなく実装が無い。2026-10-02 の確認。詳細は [review.md](review.md#現状は移していないもの実装が無い)）
+
+| 対象 | 状態 |
+|---|---|
+| `user_attached_info.personal_record_chk` / `line_entry_chk` | どの Step も読まない（`personal_record_chk` はステージングで87名に値あり） |
+| `user.sendmail_bbs_comment_pc_chk` / `_mobile_chk` | `notification_optouts` の Step が読む5列に入っていない |
+| `user_personal_no.regist_no` | `personal_no` だけを `users.member_no` に入れている（ステージングは 3,155名全員に値あり） |
+| `system_admin_role` | 読む実装が無い（ステージングの対象テナントは0行） |
+| `attribute.kiracari_user_chk` | `user_tags` に受け皿が無い |
+| `instructor_assignments.target_id`（`scope='course'`） | NULL のまま。講座の移行後に埋める Step が無い（`legacy_target_id` に旧 `lesson_id` は残る） |
 
 ### 3.5 検証
 
