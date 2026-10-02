@@ -292,7 +292,12 @@ def _plan_settings(row: dict) -> dict:
 
 
 class PlanCoursesStep(Step):
-    """商品と講座の対応（`payment_item_lesson`）を `plan_courses` に移す。"""
+    """商品と講座の対応（`payment_item_lesson`）を `plan_courses` に移す。
+
+    **削除済みの対応も移す**（`deleted_at`。2026-10-01 の方針）。新のアプリはまだ `deleted_at` を
+    読まないので、**商品から外した講座も購入で付与される**。同じ (商品, 講座) が積まれていれば
+    生きている行を優先して1行にする（`uk_plan_course`）。
+    """
 
     name = "billing.plan_courses"
     description = "商品と講座の対応を移す"
@@ -301,11 +306,32 @@ class PlanCoursesStep(Step):
     depends_on = ("billing.plans",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
+        course_items = {i for i, row in items(ctx).items() if int(row.get("item_type") or 0) == COURSE_ITEM}
+        # このテナントの講座と、移す共有講座。**ここに無い講座は移らない**（削除済みの対応は、講座そのものが
+        # 物理削除されていることがある。他テナントの講座を指す行もあり得るが、テナントで絞らずに
+        # 旧の講座を引くことはガードで禁じているので、どちらかは区別しない）
+        known = {int(r["lesson_id"]) for r in ctx.require_source().fetch_for_tenant("lesson", ("lesson_id",))}
+        links = ctx.require_source().fetch_joined(
+            "payment_item_lesson", ("item_id", "lesson_id", "del_chk", "update_date"),
+            parent="payment_item", on="c.item_id = p.item_id",
+        )
+        best: dict[tuple[int, int], dict] = {}
+        for link in links:
+            if int(link["item_id"]) not in course_items:
+                continue
+            key = (int(link["item_id"]), int(link["lesson_id"]))
+            if key[1] not in known:
+                self.drop("plan_courses", f"{key[0]}:{key[1]}", "旧データの不整合",
+                          f"講座（lesson_id={key[1]}）が移行の対象に無い（物理削除されているか、他テナントの講座）")
+                continue
+            alive = int(link.get("del_chk") or 0) == 0
+            held = best.get(key)
+            if held is None or (alive and not held["_alive"]):
+                best[key] = {**link, "_alive": alive}
         return [
-            {"item_id": item_id, "lesson_id": lesson_id}
-            for item_id, row in items(ctx).items()
-            if int(row.get("item_type") or 0) == COURSE_ITEM
-            for lesson_id in row["_lessons"]
+            {"item_id": k[0], "lesson_id": k[1],
+             "_deleted_at": None if v["_alive"] else convert(v.get("update_date"), ColumnKind.DATETIME)}
+            for k, v in sorted(best.items())
         ]
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
@@ -318,6 +344,7 @@ class PlanCoursesStep(Step):
                     "tenant_id": tenant_id,
                     "plan_id": ctx.ulid.for_row("payment_item", row["item_id"]),
                     "course_id": ctx.ulid.for_row("lesson", row["lesson_id"]),
+                    "deleted_at": row.get("_deleted_at"),
                 },
                 natural_key=("tenant_id", "plan_id", "course_id"),
                 source_key=f"{row['item_id']}:{row['lesson_id']}",

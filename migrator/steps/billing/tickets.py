@@ -128,7 +128,12 @@ def _ticket_limits(ctx: RunContext) -> list[dict]:
 
 
 class TicketTypeLessonsStep(Step):
-    """`ticket_limit_lesson` を `ticket_type_lessons` に移す。"""
+    """`ticket_limit_lesson` を `ticket_type_lessons` に移す。
+
+    **削除済みの対応も移す**（`deleted_at`。2026-10-01 の方針。新のアプリはまだ読まないので、
+    外したライブにもそのチケットが使える）。同じ組が積まれていれば生きている行を優先して1行にする。
+    必要枚数の種別の逆引き（`_ticket_limits`）は生きている行だけを見る。
+    """
 
     name = "billing.ticket_type_lessons"
     description = "チケット種別が使えるライブを移す"
@@ -137,7 +142,20 @@ class TicketTypeLessonsStep(Step):
     depends_on = ("billing.ticket_types",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        return _ticket_limits(ctx)
+        rows = ctx.require_source().fetch_joined(
+            "ticket_limit_lesson",
+            TICKET_LIMIT_COLUMNS + ("update_date",),
+            parent="ticket",
+            on="c.ticket_id = p.ticket_id",
+        )
+        best: dict[tuple[int, int], dict] = {}
+        for row in rows:
+            key = (int(row["ticket_id"]), int(row["live_lesson_id"]))
+            alive = int(row.get("del_chk") or 0) == 0
+            held = best.get(key)
+            if held is None or (alive and not held["_alive"]):
+                best[key] = {**row, "_alive": alive}
+        return [best[k] for k in sorted(best)]
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         tenant_id = ctx.tenant_id.value
@@ -149,6 +167,9 @@ class TicketTypeLessonsStep(Step):
                     # **参照先は `lessons`**（`live_lessons` ではない）
                     "lesson_id": _live_ulid(ctx, row["live_lesson_id"]),
                     "tenant_id": tenant_id,
+                    "deleted_at": (
+                        None if row["_alive"] else convert(row.get("update_date"), ColumnKind.DATETIME)
+                    ),
                     "created_at": convert(row.get("regist_date"), ColumnKind.DATETIME),
                 },
                 natural_key=("ticket_type_id", "lesson_id"),
@@ -220,22 +241,43 @@ class TicketRequirementsStep(Step):
         ]
 
 
-def reservations(ctx: RunContext) -> list[dict]:
-    """予約を読み、開催回とライブを添える。"""
+def reservations(ctx: RunContext, drop=None) -> list[dict]:
+    """予約を読み、開催回とライブを添える。`drop` を渡すと、移せない孤児を一覧に出す。"""
     source = ctx.require_source()
     dates = {
         int(r["live_lesson_date_id"]): r
         for r in source.fetch_for_tenant(
-            "live_lesson_date", ("live_lesson_date_id", "live_lesson_id", "live_lesson_date_from")
+            "live_lesson_date",
+            ("live_lesson_date_id", "live_lesson_id", "live_lesson_date_from", "mail_send_chk", "update_date"),
         )
     }
     rows: list[dict] = []
     for row in source.fetch_for_tenant("live_lesson_reserve", RESERVE_COLUMNS):
         date = dates.get(int(row["live_lesson_date_id"]))
         if date is None:
-            continue  # 孤児。開催回が物理削除されている
+            # 孤児。開催回が物理削除されている（予約は tenant_id を持つので、このテナントの行と分かる）
+            if drop:
+                drop("live_reservations", row["live_lesson_reserve_id"], "旧データの不整合",
+                     f"開催回（live_lesson_date_id={row['live_lesson_date_id']}）が物理削除されている")
+            continue
         rows.append({**row, "_date": date})
     return rows
+
+
+def _reminded_at(row: dict):
+    """送信済みの回の予約の、リマインドを送った日時（`reminded_at`）。送っていなければ None。
+
+    **予約より前にはしない。** 開催回の更新日時は回ごとに1つなので、リマインドを送った後に入った
+    予約では「予約より前に送った」ことになる。その予約には送っていないが、旧はもう送らない回なので
+    送信済みとして移し、日時は予約日時にそろえる。
+    """
+    if int(row["_date"].get("mail_send_chk") or 0) != 1:
+        return None
+    sent = convert(row["_date"].get("update_date"), ColumnKind.DATETIME)
+    reserved = convert(row.get("reserve_date"), ColumnKind.DATETIME)
+    if sent is None or reserved is None:
+        return sent or reserved
+    return max(sent, reserved)
 
 
 class ReservationsStep(Step):
@@ -260,7 +302,7 @@ class ReservationsStep(Step):
     depends_on = ("content.live_occurrences",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        return reservations(ctx)
+        return reservations(ctx, drop=self.drop)
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         from datetime import datetime
@@ -287,9 +329,11 @@ class ReservationsStep(Step):
                         "reserved_at": convert(row.get("reserve_date"), ColumnKind.DATETIME),
                         "canceled_at": convert(row.get("cancel_date"), ColumnKind.DATETIME),
                         "attended_at": convert(row.get("attendance_date"), ColumnKind.DATETIME),
-                        # **過去の開催回にリマインドは飛ばない**（バッチの窓が [now, now+24h)）。
-                        # cutover 直前に始まる回は旧の送信ログを見て埋める（未実装）
-                        "reminded_at": None,
+                        # **旧の開催回の `mail_send_chk` は「リマインド送信済み」の印**（旧のバッチは
+                        # `mail_send_chk = 0` の回に送り、送ったら 1 にする）。送信済みの回の予約は
+                        # 送信済みとして移し、切り替え直後に同じリマインドを送り直さない。
+                        # 送った時刻は旧に無いので、印を立てたときに更新される開催回の更新日時を使う
+                        "reminded_at": _reminded_at(row),
                         "verification_key": row.get("verification_key") or None,
                         "settings": json.dumps(
                             {
