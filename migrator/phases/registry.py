@@ -15,7 +15,7 @@ foundation.1   マスター      ← マスタ・テナント・テナント設�
 foundation.2   ユーザ
 content.1-4    オンデマンド講座 / テスト定義・課題定義 / アンケート定義 / ライブ講座
 enrollment.1-7 受講権限 / 学習履歴 / テスト結果 / 課題提出 / アンケート回答 / ライブ予約 / 修了証
-billing.1-3    チケット / 決済 / 帳票
+billing.1-4    チケット / 決済 / 帳票 / 自動割当
 support.1-7    LINE / クーポン / お知らせ / 問い合わせ / ファイル / 就業支援 / コミュニティ
 ```
 
@@ -27,6 +27,7 @@ from __future__ import annotations
 from ..errors import DependencyError, MigrationError
 from ..steps import auth_config, masters, org, tenant_config, user_related, users
 from ..steps.billing import extras as bl_extras
+from ..steps.billing import assign as bl_assign
 from ..steps.billing import payments as bl_payments
 from ..steps.billing import receipts as bl_receipts
 from ..steps.billing import tickets as bl_tickets
@@ -141,9 +142,12 @@ def build_sections() -> list[Section]:
                       steps=(bl_tickets.definitions() + bl_tickets.grants()
                              + bl_extras.allowances())),
                 Phase(2, "決済", "商品と、お金が動く申込を決済として移す",
-                      steps=bl_payments.build()),
+                      steps=bl_payments.build() + ct_live_courses.limit_item_history()),
                 Phase(3, "帳票", "領収書の設定・発行済みの領収書・規約の本文を移す",
                       steps=bl_receipts.build()),
+                # 受講（J04）のデータだが、きっかけの商品（tenant_plans）が billing.2 で入るので最後
+                Phase(4, "自動割当", "自動割当のルール・きっかけ・条件・付与・記録を移す",
+                      steps=bl_assign.build()),
             ],
         ),
         # --- 5 サポート機能 -------------------------------------------------

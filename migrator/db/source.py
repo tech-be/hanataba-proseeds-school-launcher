@@ -96,6 +96,10 @@ class SourceDatabase:
             UNION SELECT pil.lesson_id FROM payment_item_lesson pil
               JOIN payment_item p2 ON p2.item_id = pil.item_id WHERE p2.tenant_id = %s
             UNION SELECT ls.lesson_id FROM lesson_system ls WHERE ls.tenant_id = %s
+            UNION SELECT ai.entity_id FROM assign_item ai
+              WHERE ai.tenant_id = %s AND ai.item_type = 'lesson'
+            UNION SELECT ap.item_id FROM assign_payment_item ap
+              JOIN assign asg ON asg.assign_id = ap.assign_id WHERE asg.tenant_id = %s AND ap.item_type = 1
         )
     """
 
@@ -105,7 +109,8 @@ class SourceDatabase:
 
         **lw2 は講座をテナント間で共有できる**（実測161件）。このテナントの会員が
         受講権限・学習実績・属性の必須講座・商品で参照している分と、**テナントに公開した分**
-        （`lesson_system`）を移す。
+        （`lesson_system`）、**自動割当のきっかけ・付与で指している分**（`assign_payment_item` / `assign_item`。
+        2026-10-02 追加。拾わないと付与が存在しない講座を指したまま入る）を移す。
         公開されているだけで誰も参照していない講座も、旧では受講者に見えていた。
         **バッジ（`badge_item`）は経路に入れない。** 移行対象外なので、バッジからしか
         参照されていない共有講座を移す理由が無い（ステージング実測では該当 0 件）。
@@ -117,7 +122,7 @@ class SourceDatabase:
         **1回だけ引いて覚える。** `fetch_joined` が毎回呼ぶため。
         """
         if self._shared_lessons is None:
-            rows = self.fetch("lesson", self._SHARED_LESSON_SQL, (self._tenant_id,) * 5)
+            rows = self.fetch("lesson", self._SHARED_LESSON_SQL, (self._tenant_id,) * 7)
             self._shared_lessons = frozenset(int(r["lid"]) for r in rows)
         return self._shared_lessons
 

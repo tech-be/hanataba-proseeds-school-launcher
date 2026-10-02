@@ -20,6 +20,7 @@ from migrator.config import Config, TenantConfig
 from migrator.context import build_context
 from migrator.db.target import TargetDatabase
 from migrator.steps import org, tenant
+from migrator.steps.billing import assign
 from migrator.steps.content import lessons, live_lessons
 from migrator.steps.enrollment import certificates
 from tests.fakes import FakeSource
@@ -106,6 +107,25 @@ class TagTest(unittest.TestCase):
         self.assertEqual(rec.natural_key, ("user_id", "tag_id"))
 
 
+class AssignTest(unittest.TestCase):
+    def test_trigger_kind_follows_payment_trigger(self) -> None:
+        """**暫定の規則（P15）。** 商品のきっかけがあれば購入、無ければ会員登録。"""
+        ctx = make_ctx()
+        rows = [{"assign_id": 1, "login_chk": 1, "del_chk": 0, "_has_trigger": False},
+                {"assign_id": 9, "login_chk": 0, "del_chk": 1, "_has_trigger": True}]
+        first, second = assign.RulesStep().transform(ctx, rows)
+        self.assertEqual((first.values["trigger_kind"], first.values["login_only"]), ("registration", True))
+        self.assertEqual((second.values["trigger_kind"], second.values["active"]), ("purchase", False))
+        self.assertEqual(first.values["name"], "旧 自動割当 #1")
+
+    def test_grant_kinds(self) -> None:
+        ctx = make_ctx()
+        self.assertEqual(assign.grant_of(ctx, {"item_type": "lesson", "entity_id": 7}),
+                         ("course", ctx.ulid.for_row("lesson", 7)))
+        self.assertEqual(assign.grant_of(ctx, {"item_type": "news", "entity_id": 7})[0], "announcement")
+        self.assertIsNone(assign.grant_of(ctx, {"item_type": "unknown", "entity_id": 7}))
+
+
 class CoursePolicyTest(unittest.TestCase):
     def test_every_course_gets_a_policy(self) -> None:
         """**行が無い = 発行する** なので、設定の無い講座にも「発行しない」の行を入れる。"""
@@ -179,6 +199,29 @@ class FixedMisreadsTest(unittest.TestCase):
         self.assertTrue(results._suspended({"suspended_chk": 1}))
         self.assertFalse(results._suspended({"suspended_chk": 0}))
 
+    def test_sent_reminder_is_kept_as_sent(self) -> None:
+        """**`mail_send_chk` は「送信済み」の印。** 送信済みの回の予約は reminded_at を入れる。"""
+        from migrator.steps.billing import tickets
+
+        ctx = make_ctx()
+
+        def reserve(rid, sent):
+            return {"live_lesson_reserve_id": rid, "live_lesson_date_id": 7, "user_id": 9,
+                    "cancel_chk": 0, "attendance_chk": 0, "stop_chk": 0,
+                    "_date": {"live_lesson_date_from": datetime(2020, 1, 1), "mail_send_chk": sent,
+                              "update_date": datetime(2019, 12, 31, 9)}}
+        sent, unsent = tickets.ReservationsStep().transform(ctx, [reserve(1, 1), reserve(2, 0)])
+        self.assertIsNotNone(sent.values["reminded_at"])
+        self.assertIsNone(unsent.values["reminded_at"])
+
+    def test_reminder_is_never_before_the_reservation(self) -> None:
+        """**送ったあとに入った予約でも、予約より前に送ったことにしない。**"""
+        from migrator.steps.billing import tickets
+
+        row = {"reserve_date": datetime(2020, 1, 2, 9),
+               "_date": {"mail_send_chk": 1, "update_date": datetime(2020, 1, 1, 9)}}
+        self.assertEqual(tickets._reminded_at(row), tickets.convert(row["reserve_date"], tickets.ColumnKind.DATETIME))
+
 
 class KeepDeletedRowsTest(unittest.TestCase):
     """**移行対象外を除き、削除済みも含めてすべて移す**（2026-10-01 の方針）。"""
@@ -201,6 +244,28 @@ class KeepDeletedRowsTest(unittest.TestCase):
         out = {r["exclusion_date"]: r for r in ld._collapse(rows, ("live_lesson_id", "exclusion_date"))}
         self.assertIsNone(out["2023-01-13"]["_deleted_at"])
         self.assertIsNotNone(out["2023-02-01"]["_deleted_at"])
+
+    def test_trigger_kinds(self) -> None:
+        """**きっかけは全行移す。** レッスン → 講座、講座の商品 → プラン、それ以外の商品は旧 ID だけ。"""
+        ctx = make_ctx()
+        rows = [
+            {"assign_id": 1, "item_id": 7, "item_type": 1, "_course_plan": False},
+            {"assign_id": 1, "item_id": 8, "item_type": 0, "_course_plan": True},
+            {"assign_id": 1, "item_id": 9, "item_type": 0, "_course_plan": False},
+        ]
+        lesson, plan, other = assign.TriggersStep().transform(ctx, rows)
+        self.assertEqual(lesson.values["course_id"], ctx.ulid.for_row("lesson", 7))
+        self.assertEqual(plan.values["plan_id"], ctx.ulid.for_row("payment_item", 8))
+        self.assertEqual((other.values["course_id"], other.values["plan_id"], other.values["item_id"]), (None, None, 9))
+
+    def test_deleted_and_invalid_grants_are_kept(self) -> None:
+        ctx = make_ctx()
+        base = {"item_id": 1, "assign_id": 1, "item_type": "lesson", "entity_id": 7, "require_chk": 0,
+                "valid_chk": 0, "del_chk": 1, "update_date": datetime(2021, 6, 1, 12)}
+        [rec] = assign.GrantsStep().transform(ctx, [base])
+        self.assertFalse(rec.values["valid"])
+        self.assertIsNotNone(rec.values["deleted_at"])
+        self.assertEqual(rec.values["item_id"], 1)
 
     def test_deleted_survey_answer_is_not_answered(self) -> None:
         """**削除済みの回答は回答済みにしない**（旧は回答し直せた）。回答そのものは移す。"""

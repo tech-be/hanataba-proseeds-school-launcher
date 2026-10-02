@@ -205,6 +205,19 @@ ENROLLMENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
 
 #: 課金（4）の追加。チケット
 BILLING_SCHEMA: tuple[tuple[str, str | None], ...] = (
+    # 自動割当（旧 assign → タグの自動付与ルール。school-launcher 20260927105511 / 20260930044959）
+    ("tag_auto_assign_rules", "assign_id"),
+    ("tag_auto_assign_rule_triggers", None),
+    ("tag_auto_assign_rule_conditions", None),
+    ("tag_auto_assign_rule_grants", None),
+    # 削除済みも移す（2026-10-01。school-launcher 20261001085757）
+    ("tag_auto_assign_rule_triggers", "item_type"),
+    ("tag_auto_assign_rule_group_conditions", None),
+    ("tag_auto_assign_rule_grants", "deleted_at"),
+    ("plan_courses", "deleted_at"),
+    ("ticket_type_lessons", "deleted_at"),
+    ("live_lesson_limit_item_history", "live_lesson_id"),
+    ("tag_auto_assign_logs", None),
     ("ticket_types", "ticket_id"),
     ("ticket_types", "legacy_ticket_type"),
     ("ticket_grants", "starts_at"),

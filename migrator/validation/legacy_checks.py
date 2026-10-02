@@ -566,15 +566,26 @@ def billing_checks(env: Env) -> list[CheckResult]:
         and (np_[k]["interval_type"] == "month") == (li[k]["ext"] == 1)
         and np_[k]["status"] == "inactive")]
     check("商品の価格（税込）・継続かどうか・販売停止", not bad, _sample(bad) if bad else "")
-    lpc = {(r["item_id"], r["lesson_id"]) for r in src("payment_item_lesson", """
-        SELECT l.item_id, l.lesson_id FROM payment_item_lesson l JOIN payment_item i ON i.item_id = l.item_id
-        WHERE i.tenant_id = %s AND i.item_type = 0 AND l.del_chk = 0""", t)}
-    npc = {(r["pid"], r["cid"]) for r in dst("""
-        SELECT p.item_id pid, c.legacy_lesson_id cid FROM plan_courses x
+    # 削除済みの組も移す（2026-10-01）。同じ組が積まれていれば、生きている行が1つでもあれば生きた組
+    lpcd: dict = {}
+    for r in src("payment_item_lesson", """
+        SELECT l.item_id, l.lesson_id, l.del_chk FROM payment_item_lesson l JOIN payment_item i ON i.item_id = l.item_id
+        JOIN lesson c ON c.lesson_id = l.lesson_id AND c.tenant_id IN (i.tenant_id, 0)
+        WHERE i.tenant_id = %s AND i.item_type = 0""", t):
+        # 講座が物理削除された組・他テナントの講座を指す組は移せない（一覧に出る）。
+        # 共有講座（tenant_id = 0）は商品から指されていれば必ず移す（shared_lessons の経路）
+        k = (r["item_id"], r["lesson_id"])
+        lpcd[k] = lpcd.get(k, True) and int(r["del_chk"] or 0) == 1
+    lpc = set(lpcd)
+    npcd = {(r["pid"], r["cid"]): int(r["deleted"]) == 1 for r in dst("""
+        SELECT p.item_id pid, c.legacy_lesson_id cid, x.deleted_at IS NOT NULL deleted FROM plan_courses x
         JOIN tenant_plans p ON p.id = x.plan_id JOIN courses c ON c.id = x.course_id
         WHERE x.tenant_id = %s AND p.item_id IS NOT NULL""", d)}
-    check(f"商品と講座の組（旧 {len(lpc)} / 新 {len(npc)}）", lpc == npc,
+    npc = set(npcd)
+    check(f"商品と講座の組（削除済みを含む。旧 {len(lpc)} / 新 {len(npc)}）", lpc == npc,
           f"旧だけ {sorted(lpc - npc)[:3]} / 新だけ {sorted(npc - lpc)[:3]}" if lpc != npc else "")
+    bad = [k for k in lpc & npc if lpcd[k] != npcd[k]]
+    check("商品と講座の組の削除済み", not bad, _sample(bad) if bad else "")
 
     # 6. 受講と決済の結びつき
     auth: dict = defaultdict(set)
@@ -633,6 +644,39 @@ def billing_checks(env: Env) -> list[CheckResult]:
     check("チケットの台帳（行数と枚数）",
           int(ledger["n"] or 0) == int(nled["n"] or 0) and num(ledger["cost"]) == num(nled["cost"]),
           f"旧 {ledger['n']} 件 {ledger['cost'] or 0} 枚 / 新 {nled['n']} 行 {nled['cost'] or 0} 枚")
+
+    # 自動割当 → タグの自動付与ルール
+    la = {r["assign_id"] for r in src("assign", "SELECT assign_id FROM assign WHERE tenant_id = %s", t)}
+    na = {r["assign_id"] for r in dst(
+        "SELECT assign_id FROM tag_auto_assign_rules WHERE tenant_id = %s AND assign_id IS NOT NULL", d)}
+    check(f"自動割当のルール（旧 {len(la)} / 新 {len(na)}）", la == na,
+          f"旧だけ {sorted(la - na)[:3]} / 新だけ {sorted(na - la)[:3]}" if la != na else "")
+    lg = {r["assign_id"]: int(r["n"]) for r in src("assign_item", """
+        SELECT assign_id, COUNT(*) n FROM assign_item WHERE tenant_id = %s
+          AND item_type IN ('lesson', 'news', 'announce', 'coupon', 'recruit')
+        GROUP BY assign_id""", t)}
+    ng = {r["assign_id"]: int(r["n"]) for r in dst("""
+        SELECT r.assign_id, COUNT(*) n FROM tag_auto_assign_rule_grants g
+        JOIN tag_auto_assign_rules r ON r.id = g.rule_id WHERE r.tenant_id = %s GROUP BY r.assign_id""", d)}
+    check("自動割当で付与するもの（ルールごとの件数。削除・無効を含む）", lg == ng, f"旧 {lg} / 新 {ng}" if lg != ng else "")
+    def count(rows) -> int:
+        return int(rows[0]["n"]) if rows else 0
+
+    lt = count(src("assign_payment_item", """
+        SELECT COUNT(*) n FROM assign_payment_item c JOIN assign a ON a.assign_id = c.assign_id WHERE a.tenant_id = %s""", t))
+    nt_ = count(dst("""
+        SELECT COUNT(*) n FROM tag_auto_assign_rule_triggers g JOIN tag_auto_assign_rules r ON r.id = g.rule_id
+        WHERE r.tenant_id = %s""", d))
+    check(f"自動割当のきっかけ（旧 {lt} / 新 {nt_}）", lt == nt_)
+    # 旧の形のままの受け皿（全行）
+    for legacy, target, sql in (
+        # 除外日の全行はコンテンツで入れるので、コンテンツの照合（content_checks）で見る
+        ("live_lesson_limit_item", "live_lesson_limit_item_history",
+         "SELECT COUNT(*) n FROM live_lesson_limit_item c JOIN live_lesson p ON p.live_lesson_id = c.live_lesson_id WHERE p.tenant_id = %s"),
+    ):
+        ln = count(src(legacy, sql, t))
+        nn = count(dst(f"SELECT COUNT(*) n FROM {target} WHERE tenant_id = %s", d))
+        check(f"{legacy} の全行（削除済みを含む。旧 {ln} / 新 {nn}）", ln == nn)
     return out
 
 
