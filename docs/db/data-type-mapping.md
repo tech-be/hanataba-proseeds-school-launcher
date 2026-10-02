@@ -60,8 +60,8 @@ PDF 側の件数は PDF 冒頭の集計表と完全に一致する（95 / ◯50 
 | O01 | 講座 | `lesson`, `lesson_is_used`, `lesson_lesson_tag`, `lesson_system`, `lesson_tag` | `content_statuses`, `course_difficulties`, `courses` | ◯ | ◯ | L2 |  |
 | O02 | 講座カテゴリ | `lesson_cate` | `course_categories` | ◯ | ◯ | L2 | 受け皿は `course_categories` と `courses.category` |
 | O03 | 講座サムネ | （副）`lesson` | — | ◯ | ◯ | L2/L9 | 受け皿は `courses.thumbnail_url`（専用テーブルなし） |
-| O04 | 講義ユニット | `lecture`, `lecture_path`, `lecture_path_test`, `unit` | `lesson_types`, `lessons` | ◯ | ◯ | L2 | `unit`(type=0 見出し)は落として採番し直す |
-| O05 | 見出しブロック | （副）`unit` | — | X | X | — | btoc に階層見出しの概念が無い |
+| O04 | 講義ユニット | `lecture`, `lecture_path`, `lecture_path_test`, `unit` | `lesson_types`, `lessons` | ◯ | ◯ | L2 | `unit`(type=0 見出し)は `lessons` ではなく `course_chapters` に入れる（2026-09-30） |
+| O05 | 見出しブロック | （副）`unit` | `course_chapters` | X | **◯** | — | **2026-09-30 再判定。** 新に「講座の章」ができた（school-launcher 20260926190305） |
 | O06 | 講義動画（p-movie / 自前） | （副）`lecture` | `video_lessons` | ◯ | ◯ | L2/L9 | p-movie 22本はURL付替、自前21本は投入 |
 | O07 | 動画字幕（WebVTT） | — | — | X | X | — | 字幕の受け皿なし |
 | O08 | テスト定義 | `question`, `question_cate`, `sort_test_sub_question`, `test`, `test_sub`, `test_sub_question` | `quiz_options`, `quiz_question_types`, `quiz_questions`, `quizzes` | ◯ | ◯ | L2 | テストは `lessons.type='text'` + `quizzes` |
@@ -75,7 +75,7 @@ PDF 側の件数は PDF 冒頭の集計表と完全に一致する（95 / ◯50 
 | O16 | お知らせ添付アンケート | （副）`news_user`, `enquete_answer` | — | X | X | — | お知らせに紐づくアンケート回答の受け皿なし（545件） |
 | O17 | レポート添付アンケート | （副）`enquete_answer` | — | X | X | — | レポートに紐づくアンケート回答の受け皿なし（611件） |
 | O18 | 課題（定義・提出・添削） | `report`, `report_path`, `user_learning_report` | `assignments`, `submission_feedbacks`, `submission_status_events`, `submissions` | ◯ | ◯ | L2/L4 |  |
-| O19 | 課題の提出ファイル | （副）`user_learning_report` | — | ◯ | ◯ | L9 | 受け皿は `submissions.object_key`（1提出1ファイル） |
+| O19 | 課題の提出ファイル | （副）`user_learning_report` | — | ◯ | ◯ | L9 | 旧 `eval_*` は添削者が付けたファイル。受け皿は `submission_feedback_files`（5本を行に展開。2026-09-30） |
 | O20 | 講座資料ユニット | （副）`unit` | — | ◯ | ◯ | L2 | 受け皿は `lessons.type='text'`（専用テーブルなし） |
 | O21 | 教材添付・ライブラリ | `lesson_attached_file`, `lesson_attached_file_attribute`, `lesson_attached_file_group`, `unit_attached_file`, `unit_attached_file_attribute`, `unit_attached_file_group`, `document_file_detail`, `drive`, `drive_group` | `library_audience_types`, `library_downloads`, `library_folder_course_targets`, `library_folder_user_targets`, `library_folders`, `library_material_kinds`, `library_materials` | ◯ | ◯ | L8/L9 | recademy 実測 3 件のみ |
 | O22 | ユニット前提条件 | `unit_precondition` | — | X | X | — |  |

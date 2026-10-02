@@ -40,6 +40,20 @@ learningware-kiracari の `docs/db/lw2/tables/*.md` にある **342テーブル�
 | 一時 | 8 | セッション・集計用の一時テーブル（`php_session` / `temp_*` / `tmp_*`） |
 | 純ログ | 7 | `lw2-migration-tables.md` の A 区分と一致するもの |
 
+### 未分類 67 件の移行区分
+
+**上の「区分」はデータ種の分類軸（PDF の8区分）で、移行計画の区分（01〜06）とは別。** 未分類の表を
+移行計画のどこで扱うかを、2026-09-30 に全件仕分けた。**どこにも載っていない未分類の表は無い。**
+
+| 移行の区分 | 件数 | 表 | 扱い |
+|---|---:|---|---|
+| 01 基盤 | 11 | `account_setting` / `application_config` / `login_setting` / `registration_setting` / `top_parts_setting` / `function_default_tenant` / `function_admin_tenant` / `function_admin_role` | テナントの設定として `tenants.settings` に移す（[基盤 review](01-foundation/review.md#テナントの設定2026-09-30-に仕分け)） |
+| 〃 | | `country_master` / `pref_master` / `translate_master` | 移さないが、会員・ロールを移すときの読み替えに使う |
+| 05 サポート機能（移す） | 6 | `personal_record_advice` / `follow` / `community_cate` / `config_closing_date` / `accounting_user` / `accounting_user_detail` | S6〜S8。**実装済み** |
+| 05 サポート機能（受け皿なし・未実装） | 10 | `like_user` / `personal_record_open_status` / `personal_record_detail_open_status` / `user_content_viewed` / `content_master` / `discussion` / `discussion_board` / `discussion_board_comment` / `user_learning_discussion` / `user_learning_discussion_alert` | S6・S7。ポートフォリオ・掲示板の本体と一緒に決める |
+| 05 サポート機能（移さない） | 30 | ログ7・一時データ6・システムのマスタ5・画面の機能の定義4・バッチの予定2・画面の個人設定2・`summary_user_learning_test`・lw2 に表が無いもの3 | S9 その他（[05 breakdown](05-support/breakdown.md#s9-その他仕分けていなかった表のうち移さないもの)） |
+| 06 対象外 | 10 | `user_approver`（X1 外部研修の承認者） / `calc_param` / `entire_test_result` / `entire_question_result` / `category_question_result` / `user_test_result` / `temp_calc_user` / `temp_test_result` / `temp_test_calc_result` / `temp_question_result` | `user_approver` は X1、それ以外は X2 模試と一緒に保留（E63） |
+
 ## 全342件
 
 | テーブル | 区分 | データ種 | 副データ種 | BC | lw2区分 | ローカルデータ数 | A·B·C | 根拠 |
