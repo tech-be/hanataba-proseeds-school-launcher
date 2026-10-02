@@ -4,11 +4,14 @@
 [migration-spec.md](../../migration-spec.md)、突き合わせは [review.md](review.md)、
 追加するスキーマは [schema-additions.md](schema-additions.md)。
 
-> **3フェーズとも実装済み**（2026-09-28）。`billing.1` チケット（6 Step）、`billing.2` 決済（5 Step）、
-> `billing.3` 帳票（3 Step）。**決済・帳票は暫定の規則で作ってある**（1-3。運営の回答で差し替える）。
+> **4フェーズとも実装済み。** `billing.1` チケット（6 Step）、`billing.2` 決済（6 Step。5 Step ＋ ライブを予約できる商品の全行
+> `billing.live_limit_item_history`）、`billing.3` 帳票（3 Step）、`billing.4` 自動割当（6 Step）。
+> **決済・帳票・自動割当のきっかけは暫定の規則で作ってある**（1-3。運営の回答で差し替える）。
 
-> **追加スキーマ（A1〜A8）は school-launcher の `20260928132756_lw2_billing_additions.sql`**
-> （ブランチ `feat/lw2-billing-schema`）。当たっていないと `--section billing` はスキーマ確認で止まる。
+> **追加スキーマは school-launcher の4本**: A1〜A8 の `20260928132756_lw2_billing_additions.sql`（ブランチ `feat/lw2-billing-schema`）、
+> 自動割当の表の `20260927105511`、`tag_auto_assign_rules.assign_id` の `20260930044959`、削除済みの対応・
+> 自動割当の列・予約できる商品の全行の `20261001085757`（[schema-additions.md](schema-additions.md) の冒頭）。
+> **どれかが当たっていないと `--section billing` はスキーマ確認で止まる**（`migrator/steps/schema.py` の `BILLING_SCHEMA`）。
 
 > **コンテンツ（2）が先。** `ticket_type_lessons` と `live_lesson_ticket_requirements` が
 > コンテンツで作るライブの `lessons` を参照する。
@@ -34,8 +37,8 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 
 | # | 内容 | ステージング | いまの動き |
 |---:|---|---:|---|
-| 14 | 種別が無いチケット残高 | 3件 | 移さない。**その残高で予約した9件は台帳に書けず、キャンセルしてもチケットが戻らない** |
-| 15 | 使い切ったチケット残高（0枚） | 2件 | 移さない（この残高で予約したものは無い） |
+| 14 | 種別が無いチケット残高 | 3件 | 移さない（種別が無いので、もともとどの予約の戻し先にもならない。1件は `ticket_num = 0` で #15 にも当たる） |
+| 15 | 使い切ったチケット残高（0枚） | 2件 | 移さない。**その残高で予約した9件は台帳に書けず、キャンセルしてもチケットが戻らない**（会員 3181 の種別 2 の残高。`chk_tg_qty` を緩めれば9件とも書ける） |
 | 17 | チケットが要るのに種別を引けないライブ | 1件 | **チケット不要のライブとして移る** |
 | 旧11 | 会員が物理削除された申込（[旧データの不整合 #11](../constraint-violations.md)） | 11件 | 決済として移らない（`payments.user_id` の外部キー）。明細（`subscription_payments`）10件も連鎖する |
 
@@ -64,9 +67,10 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | P9 | 継続課金・分割商品 | `learner_subscriptions` / `installment_plans` は作らない。初回の申込だけ決済にする | lw2 に毎月の課金の行が無く、新の必須 ID（Stripe）も無い。**J-Payment の継続課金の止め方は確認事項 D4** | [D4](../open-questions.md#d-cutover-の運用で決めておきたいこと) |
 | P10 | 受講との結びつき | `enrollments.provider_payment_id` に、畳んだ権限のうち**決済として移す最も新しい申込**の決済 ID | 返金で受講を取り消す処理と、修了証の金額印字がこの値で決済を引く | 聞かない（新システムの返金・修了証の処理のための結びつけ。利用者に見えない） |
 | P11 | 領収書 | `receipt_log` → `receipts`。決済ごとに `issue_no` 1..n（旧の番号は `receipt_log_id`）。取引日は入金日（lw2 の `real_payment_date`） | lw2 はダウンロードのたびに1行 | [D9](../open-questions.md#d-cutover-の運用で決めておきたいこと) |
-| P12 | 規約の本文 | `tenant_legal_documents`（A8）。空の本文は移さない。URL・表題の上書きも同じ表 | 受け皿を追加して受ける。**アプリはまだ読まない**（→ D6） | [D6](../open-questions.md#d-cutover-の運用で決めておきたいこと) |
+| P12 | 規約の本文 | `tenant_legal_documents`（A8）。**本文が空で、外部 URL の上書きも無いものは移さない**（本文が空でも URL の上書きがあれば、本文 NULL・`external_url` ありで移す）。URL・表題の上書き（`payment_infomation` の `*_chk = 1` のもの）も同じ表 | 受け皿を追加して受ける。**アプリはまだ読まない**（→ D6） | [D6](../open-questions.md#d-cutover-の運用で決めておきたいこと) |
 | P13 | 決済の設定（`payment_infomation`） | `tenants.settings.lw2_payment` | 既存の JSON 列で受けられる | 聞かない（設定の写し。新の決済処理は読まない） |
 | P14 | 消費税の一覧（`tax`） | 移さない | 設定画面の選択肢で、取引の税計算に使っていない | 聞かない（取引の税計算に使っていない一覧） |
+| P15 | 自動割当の発動のきっかけ | 旧 `assign` → `tag_auto_assign_rules`。商品のきっかけ（`assign_payment_item`）があるルールは `purchase`、無いルールは `registration`。削除済みのルールは `active = FALSE` で残す | 旧は会員の登録・購入・編集のたびに動いた。新は「購入」か「会員登録」のどちらか一方で発動する | [E13](../open-questions.md#e-切り替え後の機能で決めておきたいこと) |
 
 ### 1-4. 本番ダンプ受領後に確認すること
 
@@ -98,16 +102,20 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 ```
 [前提]       区分1 基盤（users）
              区分2 コンテンツ（lessons — ライブぶん）
+             区分3 受講（live_reservations — enrollment.6）
                 ↓
-[migration]  A1 ticket_types.ticket_id / legacy_ticket_type、ticket_grants.starts_at
-             A2 monthly_ticket_allowances
+[migration]  20260928132756（A1〜A8）/ 20260927105511 / 20260930044959 / 20261001085757
                 ↓
 billing.1    ticket_types → ticket_type_lessons → live_lesson_ticket_requirements
              → ticket_grants → ticket_ledger_entries → monthly_ticket_allowances
                 ↓
 billing.2    tenant_plans → plan_courses → payments
              → course_purchase_payments / subscription_payments
+             → live_lesson_limit_item_history（講座の商品なら plan_id を持つので tenant_plans の後）
 billing.3    receipt_settings → receipts（決済に紐づくので後）→ tenant_legal_documents
+billing.4    tag_auto_assign_rules → tag_auto_assign_rule_triggers → tag_auto_assign_rule_conditions
+             → tag_auto_assign_rule_group_conditions → tag_auto_assign_rule_grants → tag_auto_assign_logs
+             （きっかけが tenant_plans を指すので billing.2 の後）
 ```
 
 > **台帳（`ticket_ledger_entries`）は受講（3）のライブ予約を参照する。** 予約が先。
@@ -116,7 +124,7 @@ billing.3    receipt_settings → receipts（決済に紐づくので後）→ t
 ### 2-2. 実行手順
 
 ```bash
-# 0. 追加スキーマを当てる（school-launcher 側。20260928132756_lw2_billing_additions.sql）
+# 0. 追加スキーマを当てる（school-launcher 側。20260928132756 / 20260927105511 / 20260930044959 / 20261001085757）
 
 # 1. 前提の区分を入れる（台帳が予約を参照するので受講まで）
 .venv/bin/python -m migrator run --section foundation --section content --section enrollment
@@ -135,7 +143,8 @@ billing.3    receipt_settings → receipts（決済に紐づくので後）→ t
 
 | 旧テーブル | 絞り込みの経路 |
 |---|---|
-| `ticket` / `user_ticket` | `tenant_id` を持つ |
+| `ticket` | `tenant_id` を持つ |
+| `user_ticket` / `month_user_ticket` | **`tenant_id` を持たない。** 親の `user` → `tenant_id`（`fetch_joined`） |
 | `ticket_limit_lesson` | `ticket` → `tenant_id` |
 | `payment_item_lesson` | `payment_item.tenant_id` |
 | `payment_application_item` | `payment_application.tenant_id` |
@@ -147,8 +156,13 @@ billing.3    receipt_settings → receipts（決済に紐づくので後）→ t
 
 - `ticket_types.legacy_ticket_type` は旧 `ticket.ticket_type`。**`user_ticket_log` が参照するのはこの値**
   （`ticket_id` ではない）。履歴を移さなくても後から突き合わせられるように残す
+- `ticket_types.deprecated_at`（`del_chk = 1` のとき）は旧の `regist_date`（旧に削除日時が無い）。
+  `ticket_type_lessons.deleted_at` は旧の `update_date`。**削除済みの `ticket_limit_lesson` も移す**（同じ組が積まれていれば生きている行を優先して1行）
 - **必要枚数の種別は `ticket_limit_lesson` から逆引きする。** 旧はライブ側に種別を持たない。
+  **逆引きは生きている行（`del_chk = 0`）だけを見る。**
   **引けないライブは行を作らず、チケット不要として移る**（警告ログを出す。#17）
+- **1つのライブに種別が2つ以上つながっている場合は、読んだ順の最初の1つを黙って使う**（`setdefault`。警告は出さない。
+  `live_lesson_ticket_requirements` の PK が `lesson_id` 単独なので1種別しか持てない）。ステージングは該当なし
 - **残高1行 = 付与1行。** 旧 `user_ticket.ticket_num` は引かれたあとの残高なので、
   `quantity` と `remaining_quantity` に同じ値を入れ、`note` に「lw2 移行時点の残高」と書く。
   `source` は `manual`。`expires_at` は終了日なので日の終わり（23:59:59）を補う
@@ -156,8 +170,12 @@ billing.3    receipt_settings → receipts（決済に紐づくので後）→ t
   席を占有する予約（`reserved` / `attended` / `no_show`）1 件につき `consumed` を 1 行作る
   （`quantity_delta` は必要枚数の負）。**欠席（`no_show`）も占有する**。
   **`remaining_quantity` は減らさない** — 旧の残高が既に引かれたあとの値なので、引くと二重に減る
-- **戻し先の付与が移らない予約は台帳行を作れない**（ステージングで9件。すべて #14 の種別が無い残高で予約したもの）。
-  その予約はキャンセルしてもチケットが戻らない
+- **戻し先の付与は (会員, 種別) で引き、同じ組に付与が2行以上あれば読んだ順の最初の1行に付ける。**
+  種別が無い残高と0枚の残高は戻し先にしない
+- **戻し先の付与が移らない予約は台帳行を作れない**（ステージングで9件。すべて会員 3181 がライブ `live_lesson_id = 5`
+  （種別 2 が要る）を予約したもので、その会員の種別 2 の残高が `ticket_num = 0` — **#15 の使い切った残高**）。
+  その予約はキャンセルしてもチケットが戻らない。**#15 の CHECK を緩めれば9件とも書ける。#14 の残高に種別を割り当てても戻らない**
+- `monthly_ticket_allowances.deleted_at`（`del_chk = 1` のとき）も旧の `regist_date`
 - **月次配布**（`month_user_ticket`）は `monthly_ticket_allowances` に移す。`target_month` は書式を変えない。
   旧の `application_id` は同じ名前の列 `monthly_ticket_allowances.application_id` に旧の値のまま置く（`payments.application_id` と同じ値）
 
@@ -165,6 +183,10 @@ billing.3    receipt_settings → receipts（決済に紐づくので後）→ t
 
 - 商品は講座の商品（`item_type = 0`）だけ `tenant_plans` に移す。**`price` / `first_price` は税込**
   （コメントの「税抜」は誤り）。新の列に無い設定（試用・受講期間・自動解約・支払日など）は `settings`
+- **削除済みの商品も移す。** `inactive` の商品として入り、`settings.legacy.deleted = true` で区別する（`tenant_plans` に `deleted_at` は入れない）
+- `plan_courses` は削除済みの対応も移し、`deleted_at` は旧の `update_date`（同じ組が積まれていれば生きている行を優先して1行）。
+  **講座が移行の対象に無い組は移さない**（`out/not-migrated.csv` に「旧データの不整合」で出る）
+- **P5 の講座の数は、生きている（`del_chk = 0`）`payment_item_lesson` だけで数える**
 - 申込（`payment_application`）は**申込フォームの個人情報と `password` を読まない**。会員は `users` に移っている
 - 種類・状態・決済代行は P5〜P7。解約・分割回数（**`split_payment_number = 1` は一括**）・クーポン・
   税の情報（**`payment_application.tax` は常に0で使わない**）・J-Payment の ID は `settings`
@@ -190,6 +212,12 @@ billing.3    receipt_settings → receipts（決済に紐づくので後）→ t
 | `course_purchase_payments` / `subscription_payments` | `(payment_id)` |
 | `receipt_settings` | `(tenant_id)` |
 | `tenant_legal_documents` | `(tenant_id, kind, language_code)` |
+| `live_lesson_limit_item_history` | `(id)`（旧に主キーが無い。`(live_lesson_id, item_id, regist_date, 同じ組の通し番号)` から決定論 ULID） |
+| `tag_auto_assign_rules` | `(tenant_id, assign_id)` |
+| `tag_auto_assign_rule_triggers` | `(id)`（`(assign_id, item_type, item_id)` から決定論 ULID） |
+| `tag_auto_assign_rule_conditions` / `tag_auto_assign_rule_group_conditions` | `(rule_id, tag_id)` / `(rule_id, group_id)` |
+| `tag_auto_assign_rule_grants` | `(rule_id, grant_kind, target_id)` |
+| `tag_auto_assign_logs` | `(id)`（`assign_log_id` から決定論 ULID） |
 
 ### 3.4 移行の対象外
 
@@ -203,21 +231,25 @@ billing.3    receipt_settings → receipts（決済に紐づくので後）→ t
 | 無料・チケット払い・支払い不要の申込 | 114 | 決済にしない（P3 / P4） |
 | 継続課金・分割の毎月の課金 | — | **lw2 に行が無い**（J-Payment が持つ） |
 | 消費税の一覧（`tax`） | 1 | P14 |
+| 商品の分類（`payment_item_cate` / `payment_item_item_cate`） | 3 / 7 | 現状は移していない（実装が無い。2026-10-02 の確認） |
+| 申込と受講の古い対応表（`payment_application_set_user_learning_lesson`） | 27 | 現状は移していない（実装が無い。2026-10-02 の確認） |
+| チケット商品・ライブ商品（`payment_item.item_type` 1 / 2 / 3） | 21（2 / 1 / 18） | `tenant_plans` に移さない（P2）。決済の `settings` に商品の情報を残す |
+| 講座が移行の対象に無い商品と講座の組（`payment_item_lesson`） | 1 | 講座が物理削除されている（`item_id = 1293`、`lesson_id = 2100034443`、削除済みの対応）。`plan_courses` に移さず `out/not-migrated.csv` に出る |
 
 ### 3.5 検証
 
 - `verify --section billing` が OK になること。**2段で見る。**
   - 照合: 移行元から作り直した行と全列で突き合わせる（移行先 = 変換結果）
-  - **旧 DB との突き合わせ**（34 項目）: 旧 DB から独立に出した件数・金額・日付・本文と比べる（`migrator/validation/legacy_checks.py`）。変換の規則そのものの誤りはここで出る
+  - **旧 DB との突き合わせ**（`migrator/validation/legacy_checks.py` の `billing_checks`）: 旧 DB から独立に出した件数・金額・日付・本文と比べる。支払い方法 × 状態の組ごとの件数・金額（組の数はデータで変わる）に、状態・会員ごとの金額・総額・種類・領収書・商品・商品と講座の組・受講との結びつき・規約の本文・チケットの残枚数と台帳・自動割当の項目を足したもの。変換の規則そのものの誤りはここで出る
 - 再実行で 0 行（冪等）
 - `out/not-migrated.csv` の件数と理由が、1-2 の #14 / #15 と矛盾しないこと
-- 台帳を作れなかった予約の件数（警告ログ）が、#14 / #15 の残高で予約した件数と合うこと（ステージングは #14 で9件）
+- 台帳を作れなかった予約の件数（警告ログ）が、#14 / #15 の残高で予約した件数と合うこと（ステージングは #15 で9件）
 
 ---
 
 ## 未確定として残っているもの
 
-- **1-3 の暫定対応 P1〜P14。** 運営の回答（確認事項 D4〜D9）で差し替える
+- **1-3 の暫定対応 P1〜P15。** 運営の回答（確認事項 D4〜D9 / E13）で差し替える
 - チケットの #14 / #15 / #17、会員が物理削除された申込（旧データの不整合 #11）（→ [制約に当たって移らない行](../constraint-violations.md)）
 - `certificates.product_id`（受講 A6）は未解決。**決済は移ったが、修了証が商品を指す規則は未実装**
 - `monthly_ticket_allowances.application_id` を決済に結ぶのも未実装（旧 ID のまま。`payments.application_id` で引ける）
