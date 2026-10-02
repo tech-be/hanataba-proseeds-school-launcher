@@ -32,9 +32,9 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 
 ### 1-4. 本番ダンプ受領後に確認すること
 
-- **振替予約**（`live_lesson_reserve.change_reserve_id` / `base_reserve_id`）。ステージング実測0件。**あれば `live_reservations` に列を足す**
+- **振替予約**（`live_lesson_reserve.change_reserve_id` / `base_reserve_id`）。ステージング実測0件。値は `live_reservations.settings` に残している。**多ければ列を足すかを決める**
 - **受講権限の重複の実態**。ステージングは 6,966行 → 4,289組（2,677行が重複）。本番で桁が変わるなら畳み方を再検討する
-- **`user_learning_unit` の重複**（実測 76件）と `suspend_data` の形式（実測 3,147件）
+- **`user_learning_unit` の重複**（ステージング 153組 495行。新しい1行を残し、342行は一覧に出さずに捨てる）と `suspend_data` の形式（実測 4,630件）
 
 ### 1-5. ステージングダンプでの実測（2026-09-18 取得）
 
@@ -70,16 +70,19 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
              A1〜A7（テスト結果・課題提出・アンケート回答・ライブ予約・修了証）
                 ↓
 enrollment.1 受講権限        payment_item_lesson_authority → enrollments
+             user（全会員）                → enrollments（ライブの受け皿講座。lw2 に元データ無し）
 enrollment.2 学習履歴        user_learning_unit            → lesson_progress
 enrollment.3 テスト結果      user_learning_test            → quiz_attempts → quiz_answers
                                                            → quiz_answer_selected_options
-enrollment.4 課題提出        user_learning_report          → submissions → submission_files
-                                                           → submission_feedbacks
+enrollment.4 課題提出        user_learning_report          → submissions → submission_feedbacks
+                                                           → submission_feedback_files（添削のファイル）
 enrollment.5 アンケート回答  enquete_answer                → survey_responses → survey_answers
                                                            → survey_answer_selected_options
+                                                           → survey_submission_log（回答済み）
 enrollment.6 ライブ予約      live_lesson_reserve           → live_reservations
              live_lesson_review                            → live_lesson_reviews
-enrollment.7 修了証          config_certificate            → certificate_settings
+enrollment.7 修了証          lesson.certificate_id         → course_certificate_policies
+             config_certificate + certificate_no → certificate_settings（serial_next）
              user_certificate                              → certificates → certificate_events
 ```
 
@@ -107,7 +110,7 @@ cd -
 ```
 
 `cleanupDemoData`（`btoc-backend/cmd/seed/main.go`）に **`live_lesson_reviews` と
-`submission_files`** を足すこと。`tenants` を参照するので `make check-seed-cleanup` が要求する。
+`submission_files`**（2026-09-30 からは `submission_feedback_files` も）を足すこと。`tenants` を参照するので `make check-seed-cleanup` が要求する。
 
 ---
 
@@ -119,11 +122,13 @@ cd -
 
 | 旧テーブル | 絞り込みの経路 |
 |---|---|
-| `payment_item_lesson_authority` | `payment_item.tenant_id` |
-| `user_learning_unit` | `user_learning_lesson` → `lesson.tenant_id`（`fetch_joined(via=...)`） |
-| `user_learning_lesson` | `lesson.tenant_id` |
-| `enquete_answer` | `enquete` → `unit` → `lesson.tenant_id` |
-| `live_lesson_reserve` | `live_lesson_date` → `live_lesson.tenant_id` |
+| `payment_item_lesson_authority` | `user.tenant_id`。`payment_item` / `payment_application` は LEFT JOIN で添える（商品で絞ると `item_id` が NULL の付与が落ちる） |
+| `user_learning_unit` | `user_learning_lesson` → `user.tenant_id`（`fetch_joined(via=...)`。講座側で絞ると共有講座を通じて他テナントの会員を拾う） |
+| `user_learning_lesson` | `user.tenant_id` |
+| `user_learning_test` / `user_learning_test_sub` / `user_learning_report` | `user_learning_unit` → `user_learning_lesson` → `user.tenant_id` |
+| `enquete_answer` | `enquete.tenant_id`（共有アンケートを含む）。会員は `entity_id` → `user_learning_unit` から引く |
+| `live_lesson_reserve` | 自身の `tenant_id`。開催回（`live_lesson_date`）が引けない行は一覧に出す |
+| `user_certificate` | `user.tenant_id` |
 
 ### 3.2 変換（transform）
 
@@ -141,7 +146,16 @@ cd -
   `PaymentAuthorityModel` の INSERT 5か所で定数が入るだけで UPDATE されない
 - `source` は、畳んだ行のどれかが**商品に紐づけば `purchase`**、どれも紐づかなければ **`admin`**
   （`item_id` が NULL の付与。`purchase` にすると売上集計に乗る）。`manual` という値は存在しない
-- `no_limit_chk = 1` なら `expires_at = NULL`。元の値は `settings` に残す
+- `no_limit_chk = 1` が1行でもあれば `expires_at = NULL`。`settings` には畳んだ結果の `unlimited`（真偽値）だけを残す。
+  **旧の `no_limit_chk` / `payment_no_limit_chk` / `payment_authority_end_date` の値そのものは現状は残していない**
+  （`payment_*` の2列は読むが書かない。実装が無い。2026-10-02 の確認）。`authority_end_date` の元の値は、
+  未解約の自動継続の組だけ `settings.legacy_authority_end_dates` に残す。`edit_date` / `edit_user` は読んでいない
+- `completed_at` は**現状は埋めていない**（常に NULL）。`user_learning_lesson.lesson_complete_date`
+  （ステージング 258件）を読む実装が無い（2026-10-02 の確認）
+- `provider_payment_id` は、畳んだ行のうち決済として移す申込の最も新しいものの決済 ID（課金 04 の暫定の規則 P10）。`subscription_id` は NULL
+- **ライブの受け皿講座には全会員を受講登録する**（`enrollment.live_host_enrollments`、2026-09-24 決定）。
+  lw2 に元データが無い行で、`user` の全行（ステージング 3,155名。削除済みの会員 503名を含む）を
+  `source = 'admin'` / `status = 'active'` / 期限なしで入れる。受け皿講座を作らないテナントでは作らない
 - **期限切れはそのまま移す。** 実測で 1,874組中 1,603組（86%）が失効済みだが、旧環境でも開けない。**期限を延ばさない**
 
 **学習履歴（3-2）**
@@ -150,8 +164,9 @@ cd -
   （実測で両者は完全に一致する）
 - `progress_status` は**ユニット種別と対にして残す**（例: `quiz:2`）。
   種別ごとに同じ数値の意味が違うため、値だけでは復元できない
-- `suspend_data` は動画の再生位置として解釈できるときだけ `last_position` に入れ、
-  それ以外は `settings` に原文で残す
+- **`last_position` は常に NULL。** `suspend_data` は `settings` に原文で残す（動画の再生位置として解釈することはしていない）
+- **(会員, ユニット) の重複は `update_date`（無ければ `complete_date`）の新しい1行だけを残す。**
+  残りは一覧に出さずに捨てる（ステージング 153組 495行 → 342行）
 
 **ID の採番**は共通仕様どおり `ulid.for_row(旧テーブル名, 旧キー)`。
 畳んだ行（受講権限）は **`(user_id, lesson_id)` の組をキーにする** — 行 ID では畳めない。
@@ -172,6 +187,23 @@ cd -
 | `user_learning_unit_log` | 33,998 | 純ログ |
 | テスト中断・再開の3テーブル | 約300万 | 受験中の作業データ（採点時に本体へコピーされる） |
 
+#### 一覧に出ずに移らない行
+
+`out/not-migrated.csv` には出ないが、移行ツールが黙って飛ばす行がある（2026-10-02 の確認）。
+
+| 対象 | 扱い | ステージング |
+|---|---|---:|
+| `user_learning_unit` の重複（同じ会員・同じユニット） | 新しい1行だけを残す | 342行 |
+| `user_learning_test_sub` のうち出題条件（`test_sub_type_id = 2`）の問題、または固定出題から一意に引けない問題 | `quiz_answers` を作らない | 50件 |
+| `user_learning_report` のうち、`user_learning_unit` / `user_learning_lesson` が引けない行 | 提出を作らない | — |
+| `enquete_answer` のうち `entity_type_id` が 1（お知らせ）/ 3（レポート）の行 | 回答を作らない | 152件 |
+| `enquete_answer.answer` の JSON が壊れている行、`answer_<数字>` 以外のキー、設問が引けないキー | 設問別回答を作らない | — |
+| `user_certificate` のうち `certificate_type = 2`（商品単位） | 移さない | 0件 |
+| `user_certificate` のうち `user_learning_lesson` が引けない行 | 移さない（ログに警告だけ出す） | 0件 |
+
+**削除済みの受験・提出は区別せずに移す。** `user_learning_test.del_chk` / `user_learning_report.del_chk` は使っておらず、
+`quiz_attempts` / `submissions` に削除の印を書いていない（ステージングはどちらも0件）。
+
 ### 3.5 検証
 
 - `verify --section enrollment` が OK になること。**移行元から作り直した行と全列で突き合わせる**ので、
@@ -186,4 +218,4 @@ cd -
 
 - **無料講座の受講登録**（→ [確認事項](../open-questions.md)）。**3-1 の Step は権限側だけで書ける**ので着手は止まらない
 - **講義の `progress_status` の意味**（定数ファイルに定義が無い）
-- `certificates.product_id` は課金（4）の移行後に埋める
+- `certificates.product_id` は課金（4）の移行後に埋める（現状は移行ツールが書かない）
