@@ -14,8 +14,9 @@
 | `NN-<区分>/review.md` | **突き合わせ**。内訳の中分類を単位に、テーブル・カラム・型・データの性質の4観点で移行可否を検証したもの |
 | `NN-<区分>/migration-spec.md` | **移行仕様**。突き合わせの結論を実装の手順に落としたもの。登録前の確認事項（運営判断）／登録順／移行仕様 |
 | `NN-<区分>/schema-additions.md` | **マイグレーション対象**（**新環境に足すものがある区分だけ**）。DDL を当てる順序・旧列との対応・ロールバックの注意つきで並べたもの |
+| `NN-<区分>/features.md` | **機能の差分**。その区分のデータを使う機能を1つずつ挙げ、機能の有無・参照データ・振る舞い・権限の新旧差分を書いたもの |
 
-> **3つの役割分担。** 内訳は「何があるか」、突き合わせは「何が問題でどう直すか」、移行仕様は「どの順で、どう流すか」。**区分をまたぐ共通規則**（抽出の絞り込み / ULID / 日時 / 文字コード / 冪等性）は [移行ツール仕様書（共通）](../migration-spec.md) に置き、区分の仕様には**その区分固有のことだけ**を書く。
+> **3つの役割分担。** 内訳は「何があるか」、突き合わせは「何が問題でどう直すか」、移行仕様は「どの順で、どう流すか」。**機能の差分は「移したデータを新の機能がどう使うか」**で、データは移っても機能が読んでいなければ効かないことをここで拾う。**区分をまたぐ共通規則**（抽出の絞り込み / ULID / 日時 / 文字コード / 冪等性）は [移行ツール仕様書（共通）](../migration-spec.md) に置き、区分の仕様には**その区分固有のことだけ**を書く。
 
 **`review.md` の findings の表は `| 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |`**（旧のみの形は新カラム列なし）。「内容」は**問題点だけ**、「修正方法」は**どう直すかだけ**を書き、同じことを二度書かない。修正方法は動詞で始める。**まだ決まっていないものは `未決:` で始める** — その件数がそのまま実装前に閉じるべき論点の数になる。
 
@@ -32,7 +33,7 @@
 
 内訳を先に作り、その中分類を見出しにして突き合わせを書く。**片方だけを更新しない** — テーブルの割り当てを変えたら両方を直す。
 
-ひな形は [00-template/](00-template/breakdown.md)（[breakdown.md](00-template/breakdown.md) / [review.md](00-template/review.md) / [migration-spec.md](00-template/migration-spec.md) / [schema-additions.md](00-template/schema-additions.md)）。**ディレクトリごとコピーして使う。**
+ひな形は [00-template/](00-template/breakdown.md)（[breakdown.md](00-template/breakdown.md) / [review.md](00-template/review.md) / [migration-spec.md](00-template/migration-spec.md) / [schema-additions.md](00-template/schema-additions.md) / [features.md](00-template/features.md)）。**ディレクトリごとコピーして使う。**
 
 > **集計する側の注意。** `00-template` は区分ではないので、区分一覧にも件数の集計にも含めない（`docs/db/0[1-8]-*/` で絞る）。またひな形の記入例は**コードフェンスの中**にあるので、行を数えるときは**フェンス内を読み飛ばす**こと。
 
@@ -76,18 +77,40 @@ A/B/C の判定そのものは棚卸し作成者の見解で機械的な基準�
 
 ## 区分ごとのセット
 
-> **運営に確認したいことは [open-questions.md](open-questions.md) に1枚でまとめてある。** 各区分の `migration-spec.md` の 1-1 から、**回答が要るものだけ**を抜き出したもの（QA表への転記用）。
+> **運営に確認したいことは [open-questions.md](open-questions.md) に1枚でまとめてある。** 各区分の `migration-spec.md` の 1-1 と `features.md` の未決から、**回答が要るものだけ**を抜き出したもの（QA表への転記用）。
 >
 > **制約に当たって移らなかった行は [constraint-violations.md](constraint-violations.md)。** NOT NULL / UNIQUE / CHECK ごとに、何が当たっているかを `out/not-migrated.csv` から集計したもの（移行担当用）。
 
-| 区分 | 内訳 | 突き合わせ | 移行仕様 | 項目 |
-|---|---|---|---|---|
-| 01 基盤 | [breakdown](01-foundation/breakdown.md) | [review](01-foundation/review.md) | [spec](01-foundation/migration-spec.md) | マスター / ユーザ |
-| 02 コンテンツ | [breakdown](02-content/breakdown.md) | [review](02-content/review.md) | [spec](02-content/migration-spec.md) | オンデマンド講座 / テスト定義・課題定義 / アンケート定義 / ライブ講座 |
-| 03 受講 | [breakdown](03-enrollment/breakdown.md) | [review](03-enrollment/review.md) | [spec](03-enrollment/migration-spec.md) | 受講権限 / 学習履歴 / テスト結果 / 課題提出 / アンケート回答 / ライブ予約 / 修了証 |
-| 04 課金 | [breakdown](04-billing/breakdown.md) | [review](04-billing/review.md) | [spec](04-billing/migration-spec.md) | チケット / 決済 / 帳票 |
-| 05 サポート機能 | [breakdown](05-support/breakdown.md) | [review](05-support/review.md) | [spec](05-support/migration-spec.md) | LINE / クーポン / お知らせ / 問い合わせ / ファイル / 就業支援 / コミュニティ |
-| 06 対象外 | [breakdown](06-out-of-scope/breakdown.md) | [review](06-out-of-scope/review.md) | **不要** | 移行しない |
+| 区分 | 内訳 | 突き合わせ | 移行仕様 | 機能の差分 | 項目 |
+|---|---|---|---|---|---|
+| 01 基盤 | [breakdown](01-foundation/breakdown.md) | [review](01-foundation/review.md) | [spec](01-foundation/migration-spec.md) | [features](01-foundation/features.md) | マスター / ユーザ |
+| 02 コンテンツ | [breakdown](02-content/breakdown.md) | [review](02-content/review.md) | [spec](02-content/migration-spec.md) | [features](02-content/features.md) | オンデマンド講座 / テスト定義・課題定義 / アンケート定義 / ライブ講座 |
+| 03 受講 | [breakdown](03-enrollment/breakdown.md) | [review](03-enrollment/review.md) | [spec](03-enrollment/migration-spec.md) | [features](03-enrollment/features.md) | 受講権限 / 学習履歴 / テスト結果 / 課題提出 / アンケート回答 / ライブ予約 / 修了証 |
+| 04 課金 | [breakdown](04-billing/breakdown.md) | [review](04-billing/review.md) | [spec](04-billing/migration-spec.md) | [features](04-billing/features.md) | チケット / 決済 / 帳票 |
+| 05 サポート機能 | [breakdown](05-support/breakdown.md) | [review](05-support/review.md) | [spec](05-support/migration-spec.md) | [features](05-support/features.md) | LINE / クーポン / お知らせ / 問い合わせ / ファイル / 就業支援 / コミュニティ / 利用料の集計 |
+| 06 対象外 | [breakdown](06-out-of-scope/breakdown.md) | [review](06-out-of-scope/review.md) | **不要** | [features](06-out-of-scope/features.md) | 移行しない |
+
+### school-launcher の lw2 移行の migration（2026-10-02 時点）
+
+詳しい中身は各区分の `schema-additions.md`。**移行の直前に全部当てる**（各区分の migration-spec のフェーズ0）。
+`run` の前に移行先を作り直す（`make reseed`）ので、ローカル DB の適用状況は作り直しで追いつく。
+
+| migration | 区分 | 状態 |
+|---|---|---|
+| `20260922070746`〜`20260922070755`、`20260924022809_lw2_foundation_additions` | 01 | `hanataba_dev` にマージ済み |
+| `20260924022810_lw2_content_additions`、`20260926190305_create_course_chapters` | 02 | 同上 |
+| `20260924054151_lw2_enrollment_additions` | 03 | 同上（PR #139） |
+| `20260927105511_user_tags_and_auto_assign_rules`（新システムの機能。タグ・自動付与ルール） | 01・04 | 同上 |
+| `20260928072918_align_lw2_roles_and_lesson_types` | 01・02 | 同上 |
+| `20260928132756_lw2_billing_additions` | 04 | 同上（PR #139） |
+| `20260929091539` / `20260929102209` / `20260930044959`（旧 ID の列を旧列名にする） | 01〜04 | 同上 |
+| career `009_rename_career_history_legacy_id`（職務経歴の旧 ID。移行ツールは career に書かない） | 05 | 同上 |
+| `20260930052453_lw2_support_additions` | 05（03 の添削のファイルを同居） | **`feat/lw2-support-schema` の上で未追跡** |
+| `20261001085757_lw2_keep_deleted_rows`（削除済みも移すための列・表） | 01〜05 | **同上** |
+
+> school-launcher 側の都合で入った lw2 関連の migration（メールアドレスを任意にする `20260928061152`、
+> 問題カテゴリの統合 `20260928082433`、初回ログイン時のパスワード変更 `20260928175059` など）は、
+> 移行ツールが前提にしていないので、区分の文書には載せていない。
 
 > **区分は移行計画の5グループ。** `既存機能と新システムの保有.docx.pdf` の8区分は
 > **データ種の分類軸**として [data-type-mapping.md](data-type-mapping.md) に残してあり、
