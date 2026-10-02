@@ -1,12 +1,12 @@
-"""ondemand.6 — 受講者の実績（テスト受験・アンケート回答・課題提出）。
+"""enrollment.3〜5 — 受講者の実績（テスト受験・課題提出・アンケート回答）。
 
 **会員は3段たどらないと分からない。** lw2 の実績は
 `user_learning_lesson`（会員×講座）→ `user_learning_unit`（会員×ユニット）→
 `user_learning_test` / `user_learning_report` とぶら下がっていて、
 **実績テーブル自身は `user_id` も `tenant_id` も持たない**。
 
-**新環境の実績は `enrollments` を参照しない**ので、受講区分（04）の移行を待たずに移せる。
-必要な参照先は `users`（基盤）と `quizzes` / `survey_lessons` / `assignments`（フェーズ4・5）だけ。
+**新環境の実績は `enrollments` を参照しない。** 受講権限（enrollment.1）とは独立で、
+必要な参照先は `users`（基盤）と `quizzes` / `survey_lessons` / `assignments`（content.2・3）だけ。
 
 **設問別の回答は、出題条件（`test_sub_type_id = 2`）ぶんが移らない。**
 `user_learning_test_sub` は `question_id` しか持たず、どの大問から出た問題かを記録していない。
@@ -222,7 +222,7 @@ class QuizAttemptsStep(Step):
         return records
 
 
-def _answer_rows(ctx: RunContext) -> list[dict]:
+def _answer_rows(ctx: RunContext, drop=None) -> list[dict]:
     """設問別の回答に、対応する `quiz_questions` の ULID を添える。
 
     **`user_learning_test_sub` はどの大問から出た問題かを持たない。**
@@ -283,10 +283,18 @@ def _answer_rows(ctx: RunContext) -> list[dict]:
     ):
         attempt = attempts.get(int(answer["user_learning_test_id"]))
         if attempt is None:
+            # 受験そのものが移らない（テストの定義が物理削除など。受験の行は一覧に出ている）
+            if drop:
+                drop("quiz_answers", answer["user_learning_test_sub_id"], "旧データの不整合",
+                     f"受験（user_learning_test_id={answer['user_learning_test_id']}）が移らない")
             continue
         link = fixed.get((int(attempt["_test_id"]), int(answer["question_id"])))
         if link is None:
-            continue  # 条件出題ぶん、または引き当てが一意でない
+            # 条件出題ぶん（問題がバンクから選ばれ、quiz_questions に行が無い）、または引き当てが一意でない
+            if drop:
+                drop("quiz_answers", answer["user_learning_test_sub_id"], "受け皿なし",
+                     "条件出題の問題、または固定出題の引き当てが一意でない（quiz_questions に行が無い）")
+            continue
         rows.append({**answer, "_attempt": attempt, "_link": link})
     return rows
 
@@ -301,7 +309,7 @@ class QuizAnswersStep(Step):
     depends_on = ("enrollment.quiz_attempts",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        rows = _answer_rows(ctx)
+        rows = _answer_rows(ctx, drop=self.drop)
         ctx.logger.info("設問別の回答: %d 件を引き当てた", len(rows))
         return rows
 
@@ -336,7 +344,8 @@ class QuizAnswerSelectedOptionsStep(Step):
     """選んだ選択肢を `quiz_answer_selected_options` に展開する。
 
     **`question_answer` はパイプ区切りの選択肢番号**（正解列 `question.answer` と同じ形式）。
-    記述式は選択肢を持たないので展開しない。
+    問題の種別は見ず、**数字だけの区切りを選択肢番号として展開する**（数字でない部分は捨てる）。
+    記述式の回答も数字だけなら選択肢として展開される。
     """
 
     name = "enrollment.quiz_answer_selected_options"
@@ -388,7 +397,8 @@ def _responses(ctx: RunContext, drop=None) -> list[dict]:
 
     **ユニット以外は回答先のレッスンが決まらない**（`survey_responses.lesson_id` は
     `survey_lessons` への FK で NOT NULL）。`entity_type` / `entity_id` の列は
-    追加してあるが、**レッスンに紐づかない回答は移せない**。
+    追加してあるが、**レッスンに紐づかない回答は `survey_responses` には移せない**
+    （お知らせ・レポートの回答は受け皿が無く、現状は移していない。一覧にも出ない）。
     """
     source = ctx.require_source()
     units = _learning_units(ctx)
@@ -411,7 +421,8 @@ def _responses(ctx: RunContext, drop=None) -> list[dict]:
         if learning_unit is None:
             if drop:
                 drop("survey_responses", answer["enquete_answer_id"], "旧データの不整合",
-                     "回答した学習の行（user_learning_unit）が物理削除されている")
+                     "回答した学習の行（user_learning_unit）を、このテナントの会員の行として引けない"
+                     "（物理削除されているか、共有のアンケートへの他テナントの会員の回答）")
             continue
         # 同じアンケートを複数ユニットが参照している場合、**回答したユニットの複製**を選ぶ
         target = next(
@@ -633,7 +644,7 @@ class SubmissionsStep(Step):
     """`user_learning_report` を `submissions` に移す。
 
     **未提出（`submit_date` が NULL）は移らない。** `submissions.submitted_at` は
-    NOT NULL のままにすると決めたため（2026-09-23）。ステージング実測で 116件中5件。
+    NOT NULL のままにすると決めたため（2026-09-23）。ステージング実測で 228件中13件。
     """
 
     name = "enrollment.submissions"

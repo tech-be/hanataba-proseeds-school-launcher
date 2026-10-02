@@ -348,5 +348,17 @@ class KeepDeletedRowsTest(unittest.TestCase):
         self.assertEqual(rec.values["submitted_at"].year, 2020)
 
 
+class RemainingLegacyValuesTest(unittest.TestCase):
+    """2026-10-02 に、移していないのに文書に無かった値のうち、受け皿の要らないものを移すようにした。"""
+
+    def test_live_distribution_files(self) -> None:
+        settings = json.loads(live_lessons._settings({
+            "save_file_name1": "a.pdf", "disp_file_name1": "資料A.pdf",
+            "save_file_name2": "", "save_file_name3": "c.pdf"}))
+        self.assertEqual([(f["slot"], f["disp_file_name"]) for f in settings["files"]],
+                         [(1, "資料A.pdf"), (3, "c.pdf")])
+
+
+
 if __name__ == "__main__":
     unittest.main()

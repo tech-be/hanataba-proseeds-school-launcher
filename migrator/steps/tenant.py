@@ -1,4 +1,4 @@
-"""フェーズ1 — `tenants` の1行。
+"""foundation.1 — `tenants` の1行。
 
 **移行全体の起点。** ここで採番した `tenants.id` が全テーブルの `tenant_id` になる。
 
@@ -202,6 +202,9 @@ LOGIN_SETTING_COLUMNS = (
     "first_login_chk", "first_login_message",
 )
 REGISTRATION_SETTING_COLUMNS = ("message", "image1", "image2", "image3", "regist_date", "update_date")
+#: ライブの設定（`config_live_lesson`。主キーは `tenant_id`）。キャンセルの締切はコンテンツ（開催回）でも使う
+LIVE_CONFIG_COLUMNS = ("valid_chk", "ticket_cancel_chk", "ticket_cancel_day", "ticket_cancel_time",
+                       "regist_date", "update_date")
 TOP_PARTS_COLUMNS = (
     "top_parts_setting_id", "top_parts_code", "data_type", "col", "row", "title_chk",
     "data_num", "param1", "param2", "del_chk", "regist_date",
@@ -234,6 +237,8 @@ def _tenant_settings(ctx: RunContext) -> dict:
                             key=lambda r: int(r.get("data_type") or 0)) or None,
         "lw2_registration": one("registration_setting", REGISTRATION_SETTING_COLUMNS),
         "lw2_top_parts": many("top_parts_setting", TOP_PARTS_COLUMNS) or None,
+        # ライブの機能の有効・無効（`valid_chk`）を含む行全体（2026-10-02）
+        "lw2_live": one("config_live_lesson", LIVE_CONFIG_COLUMNS),
         "lw2_functions": {
             "menu": many("function_default_tenant", FUNCTION_DEFAULT_COLUMNS),
             "admin_tenant": many("function_admin_tenant", FUNCTION_ADMIN_TENANT_COLUMNS),
@@ -250,7 +255,7 @@ def _settings(
 ) -> str:
     """旧 `site` の運用値を `tenants.settings` に入れる（A3）。
 
-    **新環境に対応する機能が無くても移す**（[移行の原則](../../docs/00-template/review.md)の1）。
+    **新環境に対応する機能が無くても移す**（[移行の原則](../../docs/db/00-template/review.md)の1）。
     値が無い列は入れない — 空のキーを並べても読む側が判断できない。
 
     - `service`  … サービス名・説明・提供期間・サイト URL
@@ -415,7 +420,7 @@ class TenantStep(Step):
 
 
 def created_at_ms(value: object) -> int | None:
-    """旧 `regist_date` を ULID の時刻部（ms）にする。フェーズ1と bootstrap で同じ値を使う。"""
+    """旧 `regist_date` を ULID の時刻部（ms）にする。foundation.1 と bootstrap で同じ値を使う。"""
     from datetime import datetime
 
     if not isinstance(value, datetime):

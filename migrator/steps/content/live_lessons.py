@@ -1,4 +1,4 @@
-"""live.3 / live.4 — ライブ本体（旧 `live_lesson`）と開催回（旧 `live_lesson_date`）。
+"""content.4 — ライブ本体（旧 `live_lesson`）と開催回（旧 `live_lesson_date`）。
 
 **`lessons.unit_id`（旧 ID）は使わない。** その列はオンデマンドが `unit.unit_id` で使っており、
 ステージング実測で **18件中11件**がライブの ID と衝突する。旧 ID は
@@ -43,6 +43,13 @@ LIVE_LESSON_COLUMNS = (
     "item_ticket_price",
     "detail_tag_head",
     "detail_tag_body",
+    # 配布ファイル（最大3本。ファイルの実体は L9 の移送で運ぶ）
+    "save_file_name1",
+    "disp_file_name1",
+    "save_file_name2",
+    "disp_file_name2",
+    "save_file_name3",
+    "disp_file_name3",
     "regist_user_id",
     "update_user_id",
     "regist_date",
@@ -243,6 +250,13 @@ def _settings(row: dict) -> str:
             "send_mobile_chk": bool(int(row.get("send_mobile_chk") or 0)),
             "public_chk": bool(int(row.get("public_chk") or 0)),
             "img_file_name": row.get("img_file_name"),
+            # 配布ファイル（並びを保つ。空の枠は詰める）
+            "files": [
+                {"slot": slot, "save_file_name": row.get(f"save_file_name{slot}"),
+                 "disp_file_name": row.get(f"disp_file_name{slot}") or row.get(f"save_file_name{slot}")}
+                for slot in (1, 2, 3)
+                if (row.get(f"save_file_name{slot}") or "").strip()
+            ],
             "regist_user_id": row.get("regist_user_id"),
             "update_user_id": row.get("update_user_id"),
             # **元の講師。** courses.instructor_id は講座単位なので、案によっては畳まれる

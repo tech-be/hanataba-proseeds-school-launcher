@@ -290,8 +290,11 @@ class CourseTagsStep(Step):
     """`lesson_tag` を `course_tags` に移す。
 
     **`category` では代用できない。** カテゴリは1講座に1件だが、タグは複数付く
-    （実測 19 タグ / 59 割当）。削除済み（`del_chk=1`）のタグも移す —
+    （実測 19 タグ / 割当は ReCADemy の講座 39・共有講座 13）。削除済み（`del_chk=1`）のタグも移す —
     割当が残っている以上、名前が引けないと割当が意味を失う。
+
+    **共有のタグ（`tenant_id = 0`）も移す**（2026-10-02）。移す講座（共有講座を含む）の割当が
+    指していれば、このテナントのタグとして入れる。拾わないと割当が外部キーで落ちる（実測 3 タグ / 9 割当）。
     """
 
     name = "content.course_tags"
@@ -301,7 +304,21 @@ class CourseTagsStep(Step):
     depends_on = ("tenant",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        return ctx.require_source().fetch_for_tenant("lesson_tag", TAG_COLUMNS)
+        source = ctx.require_source()
+        rows = source.fetch_for_tenant("lesson_tag", TAG_COLUMNS)
+        own = {int(r["lesson_tag_id"]) for r in rows}
+        # 移す講座の割当が指すタグ（講座で絞る）。このテナントのものは上で読んでいる
+        for tag in source.fetch_joined(
+            "lesson_tag",
+            TAG_COLUMNS,
+            parent="lesson",
+            on="x.lesson_id = p.lesson_id",
+            via=[("lesson_lesson_tag", "x", "c.lesson_tag_id = x.lesson_tag_id")],
+        ):
+            if int(tag["lesson_tag_id"]) not in own and int(tag.get("tenant_id") or 0) == 0:
+                own.add(int(tag["lesson_tag_id"]))
+                rows.append(tag)
+        return rows
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         tenant_id = ctx.tenant_id.value
