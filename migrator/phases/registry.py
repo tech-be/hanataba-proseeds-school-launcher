@@ -119,9 +119,9 @@ def build_sections() -> list[Section]:
                       steps=en_progress.build()),
                 Phase(3, "テスト結果", "受験・設問別回答・選んだ選択肢を移す",
                       steps=en_results.quizzes()),
-                Phase(4, "課題提出", "提出・提出ファイル・添削を移す",
+                Phase(4, "課題提出", "提出・添削・添削のファイルを移す",
                       steps=en_results.submissions()),
-                Phase(5, "アンケート回答", "回答の見出しと設問別回答を移す",
+                Phase(5, "アンケート回答", "回答の見出し・設問別回答・回答済みの記録を移す",
                       steps=en_results.surveys()),
                 # 予約はチケット定義（billing.1）のあと。台帳が予約を参照する
                 Phase(6, "ライブ予約", "予約とライブレビューを移す",

@@ -426,6 +426,20 @@ def enrollment_checks(env: Env) -> list[CheckResult]:
     c.coverage("修了証", {k: f"{v['user_id']}:{v['entity_id']}" for k, v in certs.items()}, set(nce),
                env.skipped("certificates"))
     c.values("修了証の番号", [(k, certs[k]["certificate_no"] or 0, nce[k]) for k in certs if k in nce])
+
+    # 講座ごとの修了証の発行方針。**行が無い = 発行する** なので、移した全講座に行があること
+    npol = {r["lid"]: r["issue"] for r in env.dst("""
+        SELECT c.legacy_lesson_id lid, p.issue FROM courses c
+        LEFT JOIN course_certificate_policies p ON p.course_id = c.id
+        WHERE c.tenant_id = %s AND c.legacy_lesson_id IS NOT NULL""", d)}
+    marks, ids = _in(npol)
+    lcert = {r["lesson_id"]: int(r["certificate_id"] or 0) != 0 for r in env.src(
+        "lesson", f"SELECT lesson_id, certificate_id FROM lesson WHERE tenant_id IN (%s, 0) AND lesson_id IN ({marks})",
+        t + ids)} if npol else {}
+    c("修了証の発行方針: 移した講座すべてに行がある", all(v is not None for v in npol.values()),
+      _sample([k for k, v in npol.items() if v is None]))
+    c.values("修了証を発行するか（旧の certificate_id の有無）",
+             [(k, int(lcert[k]), int(bool(npol[k]))) for k in npol if k in lcert and npol[k] is not None])
     return c.results
 
 
