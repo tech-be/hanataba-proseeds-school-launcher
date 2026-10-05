@@ -55,9 +55,10 @@
 
 | データ | 旧（テーブル.列） | 新（テーブル.列） | 旧で使う | 新で使う | 差分 |
 |---|---|---|:--:|:--:|---|
-| ログイン ID | `user.login_id` | `users.login_id` | ◯ | — | 新はメールアドレスでログインする |
+| ログイン ID | `user.login_id` | `users.login_id` | ◯ | — | 新はメールアドレスでログインする。削除済み会員は NULL で移す |
 | メールアドレス | `user.mail_add` | `users.email` | — | ◯ | 旧はログインに使っていない |
 | パスワード | `user.password`（3DES） | `users.password_hash`（bcrypt） | ◯ | ◯ | 移行時に入れ替え済み |
+| パスワード変更の要求 | — | `users.must_change_password` | — | ◯ | 移した会員は全員 TRUE。初回ログインで変更を求める |
 | 削除・状態 | `user.del_chk` | `users.status` | ◯ | ◯ | 新は `active` だけを通す |
 | 有効フラグ | `user.valid_chk` | `users.is_valid` | ◯ | — | 新は読まない |
 | ログイン期間 | `user.entry_date` / `user.limit_date` | `users.login_start_date` / `users.login_end_date` | ◯ | — | 新は読まない |

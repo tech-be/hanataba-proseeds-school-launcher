@@ -238,6 +238,16 @@ class PreflightRoleMapTest(unittest.TestCase):
         ctx = self._ctx([{"user_id": 1, "role_id": 7}], [{"role_id": 7}])
         self.assertTrue(_role_map(ctx).ok)
 
+    def test_deleted_members_login_id_is_not_counted_as_duplicate(self) -> None:
+        """削除済みの会員は `login_id` を NULL で入れるので、重複に数えない。"""
+        from migrator.validation.preflight import _unique_conflicts
+
+        live = {"user_id": 1, "login_id": "taro", "del_chk": 0}
+        ctx = self._ctx([live, {"user_id": 2, "login_id": "taro", "del_chk": 1}], [])
+        self.assertIn("無し", _unique_conflicts(ctx).detail)
+        ctx = self._ctx([live, {"user_id": 3, "login_id": "taro", "del_chk": 0}], [])
+        self.assertIn("1 組重複", _unique_conflicts(ctx).detail)
+
     def test_null_role_id_is_reported(self) -> None:
         """**ロールが未設定の会員は既定値に倒さない。**
 

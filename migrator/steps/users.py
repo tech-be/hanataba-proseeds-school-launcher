@@ -8,6 +8,9 @@
 - 誕生日は3列（`birth_year` / `birth_month` / `birth_day`）
 - `del_chk` / `valid_chk` は `status` に畳まず、`is_valid` と期間列を併せて残す
 - プロフィール画像は**移さない**（運営の判断。列は空で始める）
+- 削除済み（`del_chk=1`）の会員は `login_id` を NULL で入れる（2026-10-02 決定）
+- 移す会員はすべて `must_change_password = TRUE`（初回ログインでパスワードを変えてもらう）。
+  新システムの既存会員は書き換えない（投入は既存行を飛ばす）
 """
 
 from __future__ import annotations
@@ -143,7 +146,8 @@ class UsersStep(Step):
                         # 付与実績を持っており（`BadgeApi` は /tenant/{id}/user/{id}/badges）、
                         # これが無いと新環境から「誰のバッジか」を引けない（A24）
                         "user_id": int(row["user_id"]),
-                        "login_id": row.get("login_id"),
+                        # **削除済みの会員は NULL。** それ以外は旧の値のまま（2026-10-02 決定）
+                        "login_id": None if _deleted(row) else row.get("login_id"),
                         "email": email,
                         "mobile_email": row.get("mobile_mail_add"),
                         # 3DES 復号 → bcrypt。入れられないものは空になる（下で警告）
@@ -183,6 +187,9 @@ class UsersStep(Step):
                         "last_login_at": convert(row.get("recent_login_date"), ColumnKind.DATETIME),
                         "last_access_at": convert(row.get("recent_access_time"), ColumnKind.DATETIME),
                         "total_login_count": int(row.get("total_login_count") or 0),
+                        # 旧のパスワードは新の基準を満たさないものが多い。初回ログインで変えてもらう
+                        # （運営回答 2026-09-19。列は school-launcher の 20260928175059）
+                        "must_change_password": True,
                         "password_changed_at": convert_date(
                             row.get("password_change_date"), ColumnKind.DATE
                         ),
@@ -281,13 +288,18 @@ def _valid(row: dict) -> bool:
     return True if value is None else int(value) == 1
 
 
+def _deleted(row: dict) -> bool:
+    """`del_chk = 1`（削除済み）か。"""
+    return int(row.get("del_chk") or 0) == 1
+
+
 def _status_of(row: dict) -> str:
     """`del_chk` / `valid_chk` / 期間から `users.status` を決める。
 
     **元の列は残す**（`is_valid` / `login_start_date` / `login_end_date`）。
     status はあくまで判定結果で、ここに畳むわけではない。
     """
-    if int(row.get("del_chk") or 0) == 1:
+    if _deleted(row):
         return "deleted"
     if not _valid(row):
         return "inactive"

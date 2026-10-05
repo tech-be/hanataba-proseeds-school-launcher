@@ -187,7 +187,7 @@ python -m unittest discover -s tests
 | --- | --- |
 | [移行ツール仕様書（共通）](docs/migration-spec.md) | **実装の入口。** 区分をまたぐ登録順と、全区分に共通する抽出・変換・投入の規則 |
 | [docs/db/](docs/db/README.md) | **DB ドキュメント一式の入口。** 構成の規約と、区分ごとのセットへの索引 |
-| [基盤のマイグレーション対象](docs/db/01-foundation/schema-additions.md) | 新環境に足す DDL 一覧（必須49件 / 計画4件）。当てる順序とロールバックの注意つき |
+| [基盤のマイグレーション対象](docs/db/01-foundation/schema-additions.md) | 新環境に足す DDL 一覧（必須50件 / 計画4件）。当てる順序とロールバックの注意つき |
 | [データ種別 旧⇔新テーブル対照表](docs/db/data-type-mapping.md) | 95データ種ごとの旧テーブル・新テーブル・◯X判定・ETL段 |
 | [旧環境テーブル逆引き](docs/db/legacy-table-coverage.md) | lw2 全342テーブル → データ種（未分類の理由つき） |
 | [新環境テーブル逆引き](docs/db/new-table-coverage.md) | school-launcher 全256テーブル → データ種（新規機能の切り分けつき） |

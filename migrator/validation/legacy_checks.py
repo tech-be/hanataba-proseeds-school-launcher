@@ -134,7 +134,7 @@ def foundation_checks(env: Env) -> list[CheckResult]:
         FROM user WHERE tenant_id = %s""", t)}
     nu = {r["user_id"]: r for r in env.dst("""
         SELECT user_id, login_id, role, name_last, name_first, name_kana_last, name_kana_first,
-               email, phone, birth_year, birth_month, birth_day, status
+               email, phone, birth_year, birth_month, birth_day, status, must_change_password
         FROM users WHERE tenant_id = %s AND user_id IS NOT NULL""", d)}
     c.coverage("会員", {k: k for k in lu}, set(nu), env.skipped("users"))
     both = [k for k in lu if k in nu]
@@ -144,7 +144,11 @@ def foundation_checks(env: Env) -> list[CheckResult]:
     c.values("会員のメール・ログインID・電話", [
         (k, a, b) for k in both for a, b in (
             ((lu[k]["mail_add"] or "").strip() or None, nu[k]["email"]),
-            (lu[k]["login_id"], nu[k]["login_id"]), (lu[k]["tel"], nu[k]["phone"]))])
+            # 削除済みの会員は login_id を NULL で入れる（2026-10-02 決定）
+            (None if int(lu[k]["del_chk"] or 0) == 1 else lu[k]["login_id"], nu[k]["login_id"]),
+            (lu[k]["tel"], nu[k]["phone"]))])
+    c.values("移した会員はパスワードの変更を求める（must_change_password）",
+             [(k, 1, int(nu[k]["must_change_password"])) for k in both])
     c.values("会員の生年月日（年・月・日の3列）", [
         (k, _ymd(lu[k]["birth_date"]), (nu[k]["birth_year"], nu[k]["birth_month"], nu[k]["birth_day"]))
         for k in both])

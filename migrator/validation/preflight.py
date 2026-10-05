@@ -126,9 +126,12 @@ def _unique_conflicts(ctx: RunContext) -> CheckResult:
     source = ctx.require_source()
     problems = []
     for column, target, index in UNIQUE_SOURCES:
-        rows = source.fetch_for_tenant("user", ("user_id", column))
+        rows = source.fetch_for_tenant("user", ("user_id", column, "del_chk"))
         counts: dict[str, list[int]] = {}
         for row in rows:
+            # **削除済みの会員は数えない。** `login_id` を NULL で入れる（`steps/users.py`）
+            if int(row.get("del_chk") or 0) == 1:
+                continue
             value = row.get(column)
             if value is None or str(value).strip() == "":
                 continue

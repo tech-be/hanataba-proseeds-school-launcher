@@ -474,8 +474,8 @@
 |---|---|---|
 | `user_id` | `external_user_links.external_id` ＋ **`users.user_id`（追加）** | `users.id` は ULID で新採番。旧 ID は対応表と `users.user_id`（A24。外部のバッジシステムが旧 ID で引く）の両方に残す |
 | `tenant_id` | `users.tenant_id` | recademy の ULID 定数 |
-| `login_id` varchar(100) utf8_bin | **`users.login_id`（追加）** | **新はログイン識別子が `email` だけで、`login_id` の受け皿が無い。** 大文字小文字を区別する照合順 (`utf8_bin`) なので、そのまま移すなら照合順も合わせる |
-| `password` | `users.password_hash` | **3DES 復号 → bcrypt 再ハッシュ**（`migrator/core/passwords.py`）。鍵は環境変数 `LW2_CRYPT_KEY` |
+| `login_id` varchar(100) utf8_bin | **`users.login_id`（追加）** | **新はログイン識別子が `email` だけで、`login_id` の受け皿が無い。** 大文字小文字を区別する照合順 (`utf8_bin`) なので、そのまま移すなら照合順も合わせる。**削除済み会員（`del_chk=1`）は NULL で入れる**（2026-10-02 決定。ステージング 503名） |
+| `password` | `users.password_hash` | **3DES 復号 → bcrypt 再ハッシュ**（`migrator/core/passwords.py`）。鍵は環境変数 `LW2_CRYPT_KEY`。移した会員は全員 **`users.must_change_password = TRUE`**（初回ログインで変更を求める） |
 | `role_id` | `users.role` | [ロール対応表](#ロール対応表)で8値を1対1 |
 | `name_sei` / `name_mei` | **`users.name_last` / `name_first`（追加）** | `name` は連結した表示用として生成 |
 | `kana_sei` / `kana_mei` | **`users.name_kana_last` / `name_kana_first`（追加）** | A12 |

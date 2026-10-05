@@ -183,6 +183,20 @@ class UsersStepTest(unittest.TestCase):
         records = UsersStep().transform(self.ctx, [{**USER_ROW, "role_id": None}])
         self.assertIsNone(records[0].values["role"])
 
+    def test_deleted_member_has_no_login_id(self) -> None:
+        """**削除済みの会員は `login_id` を NULL で入れる**（2026-10-02 決定）。生きている会員は旧のまま。"""
+        [deleted] = UsersStep().transform(self.ctx, [{**USER_ROW, "del_chk": 1}])
+        self.assertIsNone(deleted.values["login_id"])
+        self.assertEqual(deleted.values["status"], "deleted")
+        self.assertEqual(self.records[0].values["login_id"], "taro")
+
+    def test_migrated_members_must_change_password(self) -> None:
+        """移す会員は削除済み・無効も含めて全員、初回ログインでパスワードの変更を求める。"""
+        rows = [USER_ROW, {**USER_ROW, "user_id": 102, "del_chk": 1},
+                {**USER_ROW, "user_id": 103, "valid_chk": 0}]
+        records = UsersStep().transform(self.ctx, rows)
+        self.assertEqual([r.values["must_change_password"] for r in records], [True, True, True])
+
     def test_source_key_is_the_legacy_id(self) -> None:
         """移さなかった行の一覧で「誰が」を出すために、旧 `user_id` を持たせる。"""
         records = UsersStep().transform(self.ctx, [USER_ROW])

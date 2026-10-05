@@ -28,7 +28,7 @@
 
 | 区別 | 意味 | 欠けているとどうなるか |
 |---|---|---|
-| **必須** | Step が**実際に書き込む先**。**49 件** | `common.0` で止まる。移行できない |
+| **必須** | Step が**実際に書き込む先**。**50 件**（lw2 移行で足したもののほか、school-launcher 側で足した `users.must_change_password`（`20260928175059`）を含む） | `common.0` で止まる。移行できない |
 | **計画** | **移行では使わない**もの。**4 件**（追加するものとしては下の「計画」の2つ） | 止まらない。`doctor` が残作業として出す |
 
 > **「計画」は先送りではない。** 移行で使うものはすべて必須に入れてある。
@@ -704,7 +704,7 @@ python -m migrator run --phase common.0   # 必須が1件でも欠けていれ�
 `doctor` の出力（適用後）:
 
 ```
-[OK  ] 追加スキーマ（移行に必須 49 件）: すべて入っている
+[OK  ] 追加スキーマ（移行に必須 50 件）: すべて入っている
 [TODO] 追加スキーマ（移行では使わない）: 3 件未適用: login_history.input_login_id,
        login_history.logged_out_at, login_history.session_id。移行は止まらないが、
        cutover 後に失敗ログインを記録できない
@@ -713,7 +713,7 @@ python -m migrator run --phase common.0   # 必須が1件でも欠けていれ�
 計画のうち**未適用のものだけ**が `TODO` で出る（`OK` とは混ぜない）。`user_two_factor_secrets` は
 適用済みのため出ない。
 
-移行ツールを動かさずに school-launcher 側だけで確かめるなら、`REQUIRED_SCHEMA` の 49 組を
+移行ツールを動かさずに school-launcher 側だけで確かめるなら、`REQUIRED_SCHEMA` の 50 組を
 `information_schema` に当てる（`doctor` と同じ判定で、legacy DB への接続が要らない）。
 
 ### school-launcher 側で表を足したときの注意

@@ -48,7 +48,8 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | 固定電話と携帯電話 | **別の列で持つ**（`phone` / `mobile_phone`）。1列に畳まない |
 | 住所 | **郵便番号 / 都道府県 / 市区町村 / 番地・建物名の4項目 × 2組**で移す |
 | 国籍・海外住所 | **`user_addresses` の `kind='foreign'` で移す**（A12）。`nationality` / `country` は**コードなので `country_master` で国名に展開**する（`AR` → アルゼンチン）。選択肢に無い値は `*_another` の自由入力をそのまま使う |
-| パスワード | **3DES 復号 → bcrypt 再ハッシュを移行ツールで行う。** 新環境と同じ `$2a$` / コスト10。**会員にパスワード再設定を求めない。** 旧の秘密鍵は**環境変数 `LW2_CRYPT_KEY`**（設定ファイルに書かない）。平文はログにも例外にも出さない。復号できないもの・旧が空のものは**空のハッシュ（`''`）で入れ、件数と会員 ID を警告に出す**（その会員はログインできない状態で移る）。ステージングで旧が空なのは `user_id=911` の1名だけで、この会員は `role_id` が NULL のため**そもそも移らない**（下の「`role_id` が NULL の会員」）。移った会員にパスワードが空の者はいない |
+| パスワード | **3DES 復号 → bcrypt 再ハッシュを移行ツールで行う。** 新環境と同じ `$2a$` / コスト10。**移した会員は全員 `must_change_password = TRUE` で入れ、初回ログイン時にパスワードを変えてもらう**（運営回答 2026-09-19。列は school-launcher の `20260928175059_add_must_change_password_to_users.sql`。新システムの既存会員には触れない）。 旧の秘密鍵は**環境変数 `LW2_CRYPT_KEY`**（設定ファイルに書かない）。平文はログにも例外にも出さない。復号できないもの・旧が空のものは**空のハッシュ（`''`）で入れ、件数と会員 ID を警告に出す**（その会員はログインできない状態で移る）。ステージングで旧が空なのは `user_id=911` の1名だけで、この会員は `role_id` が NULL のため**そもそも移らない**（下の「`role_id` が NULL の会員」）。移った会員にパスワードが空の者はいない |
+| 削除済み会員のログイン ID | **`del_chk=1` の会員は `users.login_id` を NULL で入れる**（2026-10-02 決定）。ステージングで503名（全員がログイン ID を持つ）。移行する会員だけが対象で、新システムの既存会員には触れない |
 | ロールの対応表 | **実データで確定。** 1=`system_admin` / 2=`tenant_admin` / 3=`facility_manager`（削除済み）/ 4=`company_manager` / 5=`instructor` / 6=`group_manager` / 7=`learner` / 8=`supporter`（削除済み）。**表示名は `translate_master` から、並び順は `role_index` から**（`role_id` と食い違う） |
 | 追加ロールの権限 | **移行としては問題なし。** 移したロール文字列（`system_admin` 17名 / `company_manager` 56名 / `group_manager` 20名）に新環境のコードが対応していないことは**把握済み**。権限をどう実装するかは移行とは別の判断で、[追加一覧の「変更が必要な機能」](review.md#新環境に追加するテーブルカラム)に置く |
 | プロフィール項目の分類 | **`profile_cate` を `tenant_profile_item_categories` に移す**（項目より先）。`profile_cate_id=0` は「分類なし」で NULL |
@@ -458,7 +459,7 @@ python -m migrator run --dry-run --section foundation
 | 形式 | `user.line_id`（`U` 始まり33文字か） | 外れたものは `line_links` に入れず一覧を渡す（**`support.1` の変換時に警告**） |
 | コード値の網羅 | `user.role_id` と `role_master` の全行 | ロール対応表に無い値が無いこと。`role_id` が NULL の会員は件数を出して通す（移行しない）。**`pref_id` / `sex_type` / `blood_type` は検査していない**（`pref_id` は `pref_master` で展開し、`sex_type` / `blood_type` はコード値のまま入れる） |
 | 復号 | `user.password` を200件試す | 鍵が違っても例外にならず**意味のない文字列**が返る。半数以上失敗なら鍵違いとして止める |
-| 一意性 | `user.login_id` | 新環境の UNIQUE に当たる重複を**再ハッシュ（数分）の前に**出す |
+| 一意性 | `user.login_id` | 新環境の UNIQUE に当たる重複を**再ハッシュ（数分）の前に**出す。**削除済み会員は NULL で入れるので数えない** |
 | 初期状態 | 移行先の `tenants` | 対象テナントが未登録で、シードが入っていること。**前の移行の残りが混ざると件数の照合が意味を失う** |
 | テーブルの実在 | Step が読む旧テーブル全件 | lw2 は個別 SQL でテーブルを足すことがあり、環境で構成が揃わない。**読みに行って落ちる前に、まとめて名前を出す** |
 
@@ -479,6 +480,8 @@ python -m migrator run --dry-run --section foundation
 | `user.birth_date` | `birth_year` / `birth_month` / `birth_day` に分解（時刻部は捨てる。全件 `00:00:00`） |
 | `user.role_id` が NULL | **既定値に倒さず、停止もしない。** `users.role` を NULL のまま投入前の制約検査に当て、NOT NULL 違反としてその会員を `out/not-migrated.csv` に出す（移らない） |
 | `user.del_chk` / `valid_chk` / `limit_date` | `status` は判定結果で、`del_chk=1`→`deleted` / `valid_chk=0`→`inactive` / それ以外→`active`。**`limit_date` は判定に使わない**（期限切れでも `active`。ステージングでは有効会員 39名が該当。以前の記述は「期限切れ→`inactive`」だった）。**元の列は `is_valid` / `login_start_date` / `login_end_date` に残す** |
+| `user.login_id` → `users.login_id` | **`del_chk=1`（削除済み）は NULL。** それ以外はそのまま入れる（2026-10-02 決定） |
+| `users.must_change_password` | **移す会員はすべて TRUE**（初回ログインでパスワードの変更を求める）。新システムの既存会員は書き換えない（投入は既存行を飛ばす） |
 | `sendmail_*_chk` ほか通知系 | **極性を反転**して `notification_optouts` へ（`channel` で PC / 携帯を分ける） |
 
 > **取り違え注意**
@@ -548,6 +551,8 @@ python -m migrator run --dry-run --section foundation
 | ロールの分布 | `users.role` ごとの人数を出し、運営に確認してもらう（ステージング実測は [1-5](#1-5-ステージングダンプでの実測2026-09-22-実施)） |
 | `platform_admin` が0件か | 1件でもあれば停止して原因を追う |
 | メールの一意性 | `UNIQUE (tenant_id, email)` 違反が出ないこと。**移さなかった会員の件数**を `not-migrated.csv` と突き合わせる |
+| 削除済み会員のログイン ID | `del_chk=1` の会員の `users.login_id` がすべて NULL で、それ以外は旧と一致すること（`verify`） |
+| パスワード変更の要求 | 移した会員の `must_change_password` がすべて TRUE であること（`verify`） |
 | 通知設定の極性 | 数名分を lw2 と突き合わせ、**真逆になっていない**ことを確認する |
 
 ---

@@ -64,6 +64,8 @@ REQUIRED_SCHEMA: tuple[tuple[str, str | None], ...] = (
     ("users", "is_valid"),
     ("users", "is_new"),
     ("users", "is_career_counselor"),
+    # school-launcher 側で足した列（20260928175059）。移す会員はすべて TRUE
+    ("users", "must_change_password"),
     # A22 / A23 実装して判明した不足分
     ("users", "language_code"),
     ("tenant_field_defaults", None),
