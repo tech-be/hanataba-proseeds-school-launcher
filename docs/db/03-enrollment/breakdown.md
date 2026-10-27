@@ -48,8 +48,8 @@
 
 | 旧テーブル | 新テーブル | データ種 | lw2区分 | ローカルデータ数 | A·B·C | 説明 | 移行の注意 |
 |---|---|---|---|---:|:--:|---|---|
-| `user_learning_unit` | `lesson_progress` | J02 ユニット進捗 | データ | 19,009 | C | ユニットごとの学習状況（ステージング実測 13,008 行） | **`progress_status` はユニット種別ごとに意味が変わる**（同じ `2` がテストなら「受験中」、アンケートなら「回答済」）。新は `last_position` / `completed_at` の2列しかない。**`last_position` は常に NULL**（`suspend_data` は `settings` に原文で残す）。**同じ (会員, ユニット) の重複は `update_date` の新しい1行だけを残し、残りは一覧に出さずに捨てる**（ステージング 153組 495行 → 342行を捨てる） |
-| `user_learning_lesson` | —（`enrollments.completed_at` に入れる想定だった） | J03 講座進捗 | データ | 35,532 | C | 講座ごとの学習状況（ステージング実測 34,510 行 / 33,912 組） | **母集合にはしない。** 33,912 組のうち 31,445 組は権限行を持たない。無料講座は旧環境でも権限行を持たないのが正常（`LessonModel::1363` は「権限がある **OR** 有料講座でない」の2分岐）。**修了日（`lesson_complete_date`）は現状は移していない**（実装が無く、`enrollments.completed_at` は常に NULL。修了日のある行はステージング 258件。2026-10-02 の確認） |
+| `user_learning_unit` | `lesson_progress` | J02 ユニット進捗 | データ | 19,009 | C | ユニットごとの学習状況（ステージング実測 13,008 行） | **`progress_status` はユニット種別ごとに意味が変わる**（同じ `2` がテストなら「受験中」、アンケートなら「回答済」）。新は `last_position` / `completed_at` の2列しかない。**`last_position` は常に NULL**（`suspend_data` は `settings` に原文で残す）。**同じ (会員, ユニット) の重複は、削除されていない受講の行を優先し `update_date` の新しい1行だけを残し、残りは一覧に出さずに捨てる**（ステージング 153組 495行 → 342行を捨てる）。**管理者が削除した受講の記録の下の行は移さない**（一覧に出す。2,239 行）  |
+| `user_learning_lesson` | `enrollments.completed_at`（修了日） | J03 講座進捗 | データ | 35,532 | C | 講座ごとの学習状況（ステージング実測 34,510 行 / 33,912 組） | **母集合にはしない。** 33,912 組のうち 31,445 組は権限行を持たない。無料講座は旧環境でも権限行を持たないのが正常（`LessonModel::1363` は「権限がある **OR** 有料講座でない」の2分岐）。**修了日（`lesson_complete_date`）は `enrollments.completed_at` に入れる**（削除されていない受講の行だけ。移行仕様 0-2 Q1） |
 | `user_learning_unit_log` | — | J02 ユニット進捗 | イベント・履歴 | 33,998 | C | 進捗の更新履歴 | **受け皿なし。** 純ログとして移さない |
 | `user_lesson_session` | — | J02 ユニット進捗 | データ | 267,639 | C | ユニット画面の一時値（CSRF トークンなど）。実測 1,860件 | **一時データなので移さない** |
 | `summary_finish_unit_num` | — | J02 ユニット進捗 | データ | 1 | C | 講座ごとの完了ユニット数の集計。実測0件 | **移さない。** 進捗から作り直せる集計 |
@@ -120,13 +120,13 @@
 
 ## E11 自動割当
 
-**実装済み**（`billing.4`。きっかけの商品 `tenant_plans` が課金の2で入るため、フェーズは課金の最後に置いた）。
+**実装済み**（`billing.4`。旧の商品にまつわる記録と並べて、フェーズは課金の最後に置いた。2026-10-23 から、商品のきっかけの `plan_id` は NULL）。
 発動の規則は [課金 migration-spec P15](../04-billing/migration-spec.md)。
 
 | 旧テーブル | 新テーブル | データ種 | lw2区分 | ローカルデータ数 | A·B·C | 説明 | 移行の注意 |
 |---|---|---|---|---:|:--:|---|---|
 | `assign` | `tag_auto_assign_rules` | J04 購入時自動割当 | データ | 603 | C | 自動割当のルール。実測9件 | 名前が無いので「旧 自動割当 #id」。削除済みは `active = FALSE` |
-| `assign_payment_item` | `tag_auto_assign_rule_triggers` | J04 購入時自動割当 | 中間 | 843 | C | きっかけの商品。実測1件 | 全行移す。講座の商品 → `plan_id`、レッスン（`item_type = 1`）→ `course_id`、チケット・ライブの商品は旧の商品 ID（`item_id`）だけ |
+| `assign_payment_item` | `tag_auto_assign_rule_triggers` | J04 購入時自動割当 | 中間 | 843 | C | きっかけの商品。実測1件 | 全行移す。講座の商品 → `learning_path_id`（コース。2026-10-24。B7）、レッスン（`item_type = 1`）→ `course_id`、チケット・ライブの商品は旧の商品 ID（`item_id`）だけ |
 | `assign_attribute` | `tag_auto_assign_rule_conditions` | J05 自動割当の条件 | 中間 | 202 | C | 条件の属性。実測3件 | 属性はタグとして移している（基盤） |
 | `assign_group` | `tag_auto_assign_rule_group_conditions`（2026-10-01 新設） | J05 自動割当の条件 | 中間 | 6 | C | 条件のグループ。実測0件 | **新のアプリはまだ読まない。** グループで絞っていたルールも新では全員に効く（ルールは旧の状態のまま有効） |
 | `assign_item` | `tag_auto_assign_rule_grants` | J04 購入時自動割当 | データ | 888 | C | 付与するもの（講座・お知らせ・クーポン・求人）。実測13件 | 削除・無効も移す（`deleted_at` / `valid`。新はまだ読まない）。お知らせ・クーポンは 05 で移す予定の決定論 ULID を入れる |

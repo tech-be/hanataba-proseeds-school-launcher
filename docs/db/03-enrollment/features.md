@@ -59,6 +59,7 @@
 | 受講期間 | `user_learning_lesson.lesson_start_date` / `lesson_end_date` | `enrollments.enrolled_at` / `expires_at` | ◯ | ◯ | どちらも「終了日が無ければ無期限」 |
 | 取り消し | `payment_item_lesson_authority.del_chk` | `enrollments.status = 'revoked'` | ◯ | △ | 新は `active` 以外を開かせないので効く。ただし買い直しも止まる |
 | 権限の設定 | `payment_item_lesson_authority` の `cancel_chk` / `no_limit_chk` / `remote_chk` など | `enrollments.settings` | ◯ | — | 新は読まない。`no_limit_chk` は畳んだ `unlimited` だけを残す（`payment_no_limit_chk` / `payment_authority_end_date` は移していない） |
+| コースの購入・割り当て | `payment_item_lesson_authority`（商品あり。`authority_key` ごと） | `learning_path_enrollments` / `learning_path_enrollment_courses`（2026-10-22 から） | ◯ | ◯ | 新はコースの購入・割り当て・取り消しに使う。リモートPC の可否は「コースの購入の `remote_pc_enabled` AND コースの設定」（受講登録が `via_learning_path` のとき） |
 | 有料ユニット | `unit.payment_unit` ＋ `payment_item_lesson_authority` | — | ◯ | — | 新は講座単位でしか開閉しない |
 
 #### 差分
@@ -190,7 +191,7 @@
 
 | 種類 | 深刻度 | 内容 | 対応 |
 |---|:--:|---|---|
-| 振る舞い | 中 | 旧で開催の変更により止められた予約（`host_canceled`、ステージング2件）が、管理画面で状態が空欄になり、予約し直せない。出欠は付けられてしまう。旧は受講者が別の回に振り替えられた | 新で `host_canceled` を扱う（A5） |
+| 振る舞い | 中 | 旧で開催の変更により止められた予約（`host_canceled`、ステージング2件）が、管理画面で状態が空欄になり、予約し直せない。出欠は付けられてしまう。旧は受講者が別の回に振り替えられた | ~~新で `host_canceled` を扱う（A5）~~ **`canceled` で入れ、`settings.stop_chk` で区別する**（新のアプリは直さない。移行仕様 0-2 Q13） |
 | 振る舞い | 中 | 旧は受講者が参加 URL を開くと自動で出席になった。新は講師が出欠を付ける | 未決: 運営に、出席を自動で記録する必要があるかを確認する（[E32](../open-questions.md#e-切り替え後の機能で決めておきたいこと)） |
 | 振る舞い | 低 | 旧のキャンセル期限は画面でボタンを隠すだけだった。新はサーバーでも止める | 対応不要。新の方が正しい |
 
@@ -242,7 +243,7 @@
 | データ | 旧（テーブル.列） | 新（テーブル.列） | 旧で使う | 新で使う | 差分 |
 |---|---|---|:--:|:--:|---|
 | ルール | `assign` | `tag_auto_assign_rules`（`assign_id`） | ◯ | ◯ | 名前は「旧 自動割当 #ID」 |
-| きっかけの商品 | `assign_payment_item` | `…_rule_triggers.plan_id` / `course_id` / `item_id` | ◯ | ◯ | 全行移す（2026-10-01）。講座の商品 → `plan_id`、レッスン → `course_id`、それ以外の商品は旧の `item_id` だけ |
+| きっかけの商品 | `assign_payment_item` | `…_rule_triggers.learning_path_id` / `course_id` / `item_id` | ◯ | ◯ | 全行移す（2026-10-01）。講座の商品 → `learning_path_id`（コース。2026-10-24。B7）、レッスン → `course_id`、それ以外の商品は旧の `item_id` だけ |
 | 条件の属性 | `assign_attribute` | `…_rule_conditions`（タグ） | ◯ | ◯ | — |
 | 条件のグループ | `assign_group` | `tag_auto_assign_rule_group_conditions`（2026-10-01） | ◯ | — | 移しているが新は読まない。グループで絞ったルールも全員に効く（ステージングは0件） |
 | 付与するもの | `assign_item` | `…_rule_grants` | ◯ | ◯ | お知らせ・クーポンは 05 で移す予定の ID を先に入れている |

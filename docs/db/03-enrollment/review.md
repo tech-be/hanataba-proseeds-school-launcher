@@ -14,6 +14,24 @@
 
 ## E1 受講権限
 
+### `payment_item_lesson_authority`（商品あり）→ `learning_path_enrollments` / `learning_path_enrollment_courses`
+
+ステージング実測 3,684 行（商品あり）→ 2,351 件（旧の購入・付与ごと）／ 渡した講座 3,677 件
+
+**2026-10-22 に足した。** school-launcher はコース（`learning_paths`）＝旧の販売商品とし、購入・割り当てを1行ずつ持つようになった
+（`20261012014810` / `20261019004848` / `20261019042710` / `20261012174140`）。講座を受けられるかは今までどおり `enrollments` で決まり、
+コースの購入は「どの商品で・いつまで・リモートPC を使えるか」と、取り消したときにどの講座を戻すかに使う。
+
+| 旧 | 新 | 観点 | 深刻度 | 内容 | 修正方法 |
+|---|---|---|:--:|---|---|
+| `authority_key` | 1行の単位 | **性質** | 中 | 旧は購入・付与のたびに会員1人・商品1つのキーを振り、講座ごとに権限の行を作る（`PaymentAuthorityModel`）。ステージングでは商品ありの行すべてにキーがある | **キーごとに1行**（2,351 件）。キーの無い行は (会員, 商品, 申込) で代える |
+| `application_id` / `payment_application.payment_type` | `source` / `payment_id` | 性質 | 中 | 申込の無い権限は管理者が商品単位で付与したもの（旧の「購入権限（定額商品単位）」。3,510 行） | 申込なし → `admin`、無料（0 / 4）だけ → `free`、それ以外 → `purchase`。**決済として移した申込だけ `payment_id` を結ぶ**。決済は `billing.2` で入るので、**この Step も `billing.2` で流す** |
+| `del_chk` / 自動継続の解約 | `status` | 性質 | 中 | 新の値は `active` / `refunded` / `revoked`。旧に返金の概念は無い | 取り消しは 購入・無料 → `refunded`、管理者の付与 → `revoked`（2026-10-22 決定）。期限切れは状態にしない |
+| `authority_start_date` / `authority_end_date` ほか | `enrolled_at` / `expires_at` | 型 | 中 | `expires_at` は `datetime(3)`（受講登録は `timestamp`） | 受講登録と同じ規則（`rights.fold_period`）で、UTC を明示して書く |
+| `remote_chk` | `remote_pc_enabled` | — | — | 購入した時点の商品の「リモートPC の利用」 | 生きている行のどれかが 1 なら TRUE |
+| `lesson_id`（キーの中の講座） | `learning_path_enrollment_courses` | 性質 | 低 | 渡した講座の記録。`prev_*` は旧に対応が無い | 削除済みの権限の講座も入れる。直接付与もある組は `prev_recorded = TRUE` と直接付与の状態・期限（移行仕様 0-2 Q3） |
+
+
 ### `payment_item_lesson_authority` → `enrollments`
 
 `payment_item_lesson_authority` (18列) → `enrollments` (11列) ／ ローカルデータ数 7,462 / C ／ ステージング実測 6,966件（4,289組）
@@ -24,15 +42,15 @@
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
 | `(user_id, item_id, lesson_id)` | `(user_id, course_id)` | **性質** | **高** | **粒度が違う。** 旧は商品×講座で、同じ商品が複数講座を売り、同じ講座が複数商品から売られる。ステージング実測 6,966 行が 4,289 組に重なる | **lw2 自身の解決規則に従う。** `LessonModel::1804` の受講可否判定が `GROUP BY user_id, lesson_id` で畳み、期限は `MAX()` を取っている。**同じ規則で寄せる**（独自に決めない） |
-| `cancel_chk` tinyint | — | **性質** | **高** | **名前に反してキャンセルフラグではない。** 全 INSERT 箇所（`PaymentAuthorityModel` の5か所）で**作成時に定数を書き込んでおり、UPDATE する箇所が存在しない**。実測は全行で 1=3,116 / 0=3,850（商品に紐づく行 3,684行に限ると 1=3,064 / 0=620）で、「どの購入経路で作られたか」を表す | **`status = 'canceled'` に写さない。** 受講可否は `del_chk = 0` と期間で決まる。元の値は A8 の `settings` に残す |
-| `payment_item.is_auto_extension` ＋ `payment_application.is_cancel` | `status` / `expires_at` | **性質** | **高** | **自動継続の権限は期限を見ない。** lw2 の判定は `PA.is_cancel IS NULL` だけで（`PaymentModel:383`）、`authority_end_date` が過去でも受講できる。**権限行だけを読むと、いま受講できている人を失効扱いにする**（ステージングで未解約の自動継続は 331組。うち 228組は自動継続の権限行の期限が 2026-09-18 時点で過去） | **商品のモードと申込の解約状態を一緒に読む。** 未解約の自動継続は `status = 'active'` / `expires_at = NULL`、全部解約済みなら `revoked`（`expired` ではない）。元の期限は A8 の `settings` に残す |
+| `cancel_chk` tinyint | — | **性質** | **高** | **名前に反して取り消しではない。毎月の自動延長の対象から外す印。** 買い切りなどは作成時から 1 で、自動継続は解約されると毎日のバッチ（`AuthorityCheckBatch` の `updateCancelChk`）が 1 にする（2026-10-23 に読み直した。以前は「UPDATE する箇所が無い」と書いていたが誤り）。実測は全行で 1=3,116 / 0=3,850（商品に紐づく行 3,684行に限ると 1=3,064 / 0=620） | **`status = 'canceled'` に写さない。** 受講可否は `del_chk = 0` と期間で決まる。元の値は A8 の `settings` に残す |
+| `payment_item.is_auto_extension` ＋ `payment_application.is_cancel` | `status` / `expires_at` | **性質** | **高** | **自動継続も期限で切れる。** 旧の受講可否は `authority_end_date >= 今日`（`LessonModel::1363`）で、自動継続の期限は毎日のバッチ（`AuthorityCheckBatch` → `updateAuthrityExtendList`）が、解約されていない権限を1か月ずつ延ばしている。`PaymentModel:383`（`PA.is_cancel IS NULL`）は申込の一覧の「ご利用中」の条件で、受講可否ではない（2026-10-23 に読み直した）。ステージングで未解約の自動継続は 331組で、うち 103組は申込があり期限が 2026-09-19〜10-15、228組は申込が無く期限が 2022-11 のまま延長されていない | **期限はほかと同じに写す**（2026-10-23。以前は未解約の自動継続を無期限にしていた。sync-issues B6）。全部解約済みなら `revoked`（`expired` ではない）。自動継続だったことは A8 の `settings.subscription` に残す |
 | `del_chk` | `status` | 性質 | 中 | **これが実質の取り消し。** 実測 828行。削除済みの行を含む組は 493組で、**全行が削除済みの組は 362組** | 畳んだ組の**全行が** `del_chk = 1` なら `status = 'revoked'`（1行でも生きていれば生きている行で判定する）。ほかに自動継続の全解約 12組も `revoked` になり、ステージングで計 374組。**`canceled` という値は無い**（`enrollment_statuses` は `active` / `expired` / `refunded` の3値だったので、A10 で `revoked` を足した） |
 | `authority_start_date` | `enrolled_at` | 型 | 低 | 開始日。実測 NULL 0件 | そのまま移す |
 | `authority_end_date` / `payment_authority_end_date` | `expires_at` **1列** | 性質 | 中 | **2つの期限が1列に畳まれる。** 実測はどちらも NULL 0件 | 受講期限は `authority_end_date`（畳んだ行の最大）。**`payment_authority_end_date` は現状は移していない**（読むが書かない。実装が無い。2026-10-02 の確認）。`authority_end_date` の元の値も、未解約の自動継続の組だけ `settings.legacy_authority_end_dates` に残している |
 | `authority_end_date`（100年後） | `expires_at` **TIMESTAMP** | **性質** | **高** | **`TIMESTAMP` の上限は 2038-01-19。** 旧は無期限を100年後の日付で表しており（実測 最大 2126-09-16、2038超が 151件）、**そのまま入れると実 INSERT で `Incorrect datetime value` になる** | **無期限（NULL）に寄せ、元の日付を A8 の `settings` に残す。** 110件は `no_limit_chk` も立っているが、残り 41件は立っていない（最短でも 2049-12-01 で実質無期限） |
-| `no_limit_chk` / `payment_no_limit_chk` | — | カラム | 中 | **無期限フラグ。** 実測それぞれ 110件。`expires_at` に NULL を入れるだけでは「無期限」と「未設定」が区別できない | **`expires_at` は無期限なら NULL。** `settings` には畳んだ結果の `unlimited`（真偽値。`no_limit_chk`・未解約の自動継続・2038超の期限のどれかで TRUE）だけを残す。**旧の `no_limit_chk` / `payment_no_limit_chk` の値そのものは現状は残していない**（`payment_no_limit_chk` は読むが使わない。実装が無い。2026-10-02 の確認） |
-| `remote_chk` | — | カラム | 低 | リモート PC の利用可否（実測 39件）。リモート PC は [コンテンツ C4](../02-content/review.md#c4-リモート-pc) 側 | A8 の `settings` に残す |
-| `item_id` | — | **性質** | **高** | **どの商品で買ったかが落ちる。** 新環境に商品の概念があるのは課金（4）で、`enrollments.provider_payment_id` は決済 ID であって商品ではない | A8 の `settings` に旧 `item_id` を残し、**課金（4）の移行後に紐付け直す** |
+| `no_limit_chk` / `payment_no_limit_chk` | — | カラム | 中 | **無期限フラグ。** 実測それぞれ 110件。`expires_at` に NULL を入れるだけでは「無期限」と「未設定」が区別できない | **`expires_at` は無期限なら NULL。** `settings` には畳んだ結果の `unlimited`（真偽値。`no_limit_chk`・2038超の期限のどちらかで TRUE。未解約の自動継続は 2026-10-23 から期限を写すので TRUE にしない）だけを残す。**旧の `no_limit_chk` / `payment_no_limit_chk` の値そのものは現状は残していない**（`payment_no_limit_chk` は読むが使わない。実装が無い。2026-10-02 の確認） |
+| `remote_chk` | `learning_path_enrollments.remote_pc_enabled` | カラム | 低 | リモート PC の利用可否（実測 39件）。リモート PC は [コンテンツ C4](../02-content/review.md#c4-リモート-pc) 側 | A8 の `settings` に残す。**2026-10-22 から、コースの購入の `remote_pc_enabled`（購入した時点の商品の設定）にも入れる**（school-launcher `20261012174140`）。新の判定は「コースの購入の値 AND コースの設定」で、旧（権限 AND 商品）と同じ |
+| `item_id` | `learning_path_enrollments.learning_path_id`、`enrollments.via_learning_path` | **性質** | **高** | **どの商品で買ったかが落ちる。** 新環境に商品の概念があるのは課金（4）で、`enrollments.provider_payment_id` は決済 ID であって商品ではない | A8 の `settings` に旧 `item_id` を残す。**2026-10-22 から、コース（＝旧の商品）の購入・割り当てとして `learning_path_enrollments` に入れる**（[下の節](#payment_item_lesson_authority商品あり--learning_path_enrollments--learning_path_enrollment_courses)）。商品を経た権限を含む組の受講登録は `via_learning_path = TRUE` |
 | `item_id` **NULL** | `source` | **性質** | **高** | **商品に紐づかない権限が 3,282行（2,306組、全体の47%）ある。** `authority_key` も `application_id` も空で、購入を経ずに直接入った付与。開始日・終了日は入っており、lw2 の受講可否判定（`LessonModel::1804`）は商品を見ないので**他と同じに扱われている** | **`payment_item` を INNER JOIN で絞ると丸ごと落ちる。** テナントの絞り込みは `user` 側で行い、商品は LEFT JOIN で添える。`source` は `admin`（管理者付与）にする |
 | `application_id` | — | カラム | 低 | 申込との紐付け。ステージング実測 NULL 6,792 / 6,966（97%） | A8 の `settings.legacy_application_ids` に残す |
 | `authority_key` / `edit_date` / `edit_user` | — | カラム | 低 | 付与のキーと編集者 | `authority_key` は A8 の `settings.legacy_authority_keys` に残す。**`edit_date` / `edit_user` は現状は移していない**（読んでいない。実装が無い。2026-10-02 の確認） |
@@ -65,7 +83,7 @@
 |---|---|---|:--:|---|---|
 | `(user_id, lesson_id)` | `(user_id, course_id)` | **性質** | **高** | **学習実績の大半は「無料講座」で、権限行を持たないのが旧環境でも正常。** `LessonModel::1363` の受講可否は「権限がある **OR** その講座が有料ユニットを持たない／表示中の商品で売られていない」の2分岐で、**実測 235講座のうち権限が要るのは 71件だけ**。学習実績 33,912組のうち 31,445組は権限行を持たない（無料講座ぶんの内訳は数え直していない）。無料講座は旧環境でも権限行が無いのが正常 | **母集合は権限側（`payment_item_lesson_authority`）。** 学習実績は `enrollments` の母集合にしない。ただし**無料講座 164件は新環境では `enrollments` が無いと開けない**ので、扱いを 1-1 で決める |
 | `lesson_start_date` / `lesson_end_date` | `enrolled_at` / `expires_at` | 性質 | 中 | 学習の開始・終了で、権限の期間とは別物 | **使わない**（母集合は権限側）。無料講座ぶんを作る場合だけ `enrolled_at` に使う |
-| `lesson_complete_date` | `completed_at` | 型 | 低 | 講座の修了日。ステージング実測 258件 | **現状は移していない**（`lesson_complete_date` を読む実装が無く、`enrollments.completed_at` は常に NULL。2026-10-02 の確認）。当初は該当する組の `completed_at` に入れる想定だった |
+| `lesson_complete_date` | `completed_at` | 型 | 低 | 講座の修了日。ステージング実測 258件 | **削除されていない受講の行の修了日を `enrollments.completed_at` に入れる**（移行仕様 0-2 Q1。2026-10-26） |
 | `finish_unit_num` / `finish_unit_percent` / `finish_unit_duration` | — | カラム | 中 | **講座単位の進捗率が落ちる。** 新環境は `lesson_progress`（ユニット単位）から都度計算する作り | 都度計算できるので**移さない**。ただし旧の値と一致しない可能性があるので、cutover 後に照合する |
 | `total_learning_count` / `recent_learning_time` / `recent_learning_unit_id` | — | カラム | 低 | 学習回数・最終学習日時・最後に見たユニット | A9 の `lesson_progress` 側に最終学習日時の受け皿が無い。**`settings` を持たない表**なので、要るなら列を足す |
 | `require_chk` / `skill_unit_tab_status` / `block_open_status` | — | カラム | 低 | 必須受講フラグ・タブ状態・ブロック開放状態 | **UI の状態**。移さない |
@@ -103,7 +121,7 @@
 | `complete_date` | `completed_at` | 型 | 低 | 修了日時 | 上記のとおり |
 | `score` | — | カラム | 低 | ユニットの得点。実測は 13,008件中 14件のみ | **テストの得点は E3 の `quiz_attempts.score` が持つ。** 突き合わせ用に A9 の `settings.legacy_score` にだけ残す |
 | `suspend_data` | `last_position` | 性質 | 中 | **SCORM の中断データ。** 実測 4,630件。新の `last_position` は動画の再生位置を想定した列で、形式が違う | **`last_position` には入れない（常に NULL）。** A9 の `settings.suspend_data` に原文で残す |
-| `del_chk` | — | カラム | 低 | 実測 198件 | **削除済みも移す**（[移行の原則](../00-template/review.md#移行の原則)の1）。A9 の `deleted_at` に写す |
+| `del_chk` | — | カラム | 低 | 実測 198件 | ユニットの削除は `deleted_at`（値は `unit.update_date`）。**管理者が削除した受講の記録（`user_learning_lesson.del_chk = 1`）の下の行は移さない**（新は `deleted_at` を読まず完了に数える。アンケートの回答があるものは残す。移行仕様 0-2 Q5） |
 | `(user_id, unit_id)` | UNIQUE | 性質 | 中 | ステージング実測で 153組 495行が重複する（同じ会員・同じユニットに複数行） | **UNIQUE は緩めない。** `update_date`（無ければ `complete_date`）の新しい1行だけを残す。**捨てた 342行は一覧に出ない**（黙って捨てている） |
 | `user_learning_unit_log` | — | 性質 | 低 | 進捗の更新履歴（19,009 → 33,998行） | **純ログとして移さない**（→ [対象外 B](#b-方針として移行しないもの)） |
 
@@ -435,7 +453,7 @@
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
 | `certificate_type` = 2（商品単位） | — | **性質** | **高** | **`certificates.course_id` が NOT NULL なのでコース単位のみ。** 商品単位の修了証（O26）を作れない | **`course_id` は NULL 可にしない**（緩めない方針）。**商品単位の修了証は移らない**（ステージング0件。本番で件数を数える）。`product_id` の列だけは追加し、コース単位の修了証に商品を紐づけられるようにする（→ A6）。**移行ツールは `product_id` を書かない** |
-| `certificate_no` | `serial_no` + `serial_text` varchar(64) **NOT NULL** | 性質 | 中 | `serial_text` が旧に無い | **`serial_text` は旧の番号を文字列にしただけ**（`str(certificate_no)`。書式は付けない）。`serial_no` は旧の番号 |
+| `certificate_no` | `serial_no` + `serial_text` varchar(64) **NOT NULL** | 性質 | 中 | `serial_text` が旧に無い | **`serial_text` は `No.` ＋発行日＋番号**（旧の表示の形。書式 `date_prefixed`。移行仕様 0-2 Q7）。`serial_no` は旧の番号 |
 | — | `layout_code` **NOT NULL** + FK | カラム | 中 | 旧に対応なし | **移行ツールは書かない。** 表の既定値（`simple`）が入る |
 | — | `period_start` / `period_end` / `amount_excl_tax` / `amount_currency` / `subject_name` | カラム | 中 | 旧 `user_certificate` に無い | **現状は移していない**（どの列も書かない。実装が無い。2026-10-02 の確認）。当初は `enrollments` と `payments` から引いて埋める想定だった |
 | `revoked_at` / `revoked_by` / `revoke_reason_code` | — | カラム | 低 | 旧に失効の概念が無い | NULL でよい。対応不要 |
@@ -463,7 +481,7 @@
 | （ルールの名前が無い） | `name` NOT NULL | 性質 | 低 | 新はルールに名前を持つ | 「旧 自動割当 #id」を入れる。記録（`rule_name`）も同じ規則 |
 | 発動の場面 | `trigger_kind` | **性質** | 中 | 旧は会員登録・購入・会員の編集のたびに動いた。新は購入か会員登録のどちらか | **暫定の規則（P15）。** きっかけの商品があれば `purchase`、無ければ `registration` |
 | `login_chk` / `del_chk` | `login_only` / `active` | — | — | — | 削除済みは `active = FALSE` で残す（削除の列が無い） |
-| `assign_payment_item.item_id` / `item_type` | `plan_id` / `course_id` / `item_id` / `item_type` | 性質 | 中 | 旧のきっかけは「商品」（0）と「レッスン」（1）。講座の商品だけが `tenant_plans` に移っている | 全行移す（2026-10-01）。レッスン → `course_id`、講座の商品 → `plan_id`、それ以外の商品は旧 ID だけ。**ルールは旧の状態のまま有効**（新でそのきっかけに当たらない購入では発動しない） |
+| `assign_payment_item.item_id` / `item_type` | `learning_path_id` / `course_id` / `item_id` / `item_type` | 性質 | 中 | 旧のきっかけは「商品」（0）と「レッスン」（1）。2026-10-23 から、旧の商品は `tenant_plans` に移さない（コースとして 02 で移す）。2026-10-24 に school-launcher がきっかけにコース（`learning_path_id`）を足した（未マージ） | 全行移す（2026-10-01）。レッスン → `course_id`、**講座の商品 → `learning_path_id`**（入っていないコースは結ばない）、チケット・ライブの商品は旧 ID（`item_id`）だけ。`plan_id` は NULL。**ルールは旧の状態のまま有効**で、コースの購入（有料・後から入金・0 円）で動く（[sync-issues の B7](../school-launcher-sync-issues.md)） |
 
 **まとめ**: 受け皿が無い列 — / 高 0 件
 
@@ -511,7 +529,7 @@
 | **A2** | `quiz_answers.is_correct` / `option_order` / `sort_no` / `pre_question_pass` | `question_pass` / `option_order` ほか | ・**当時の正誤を表示に使う**（採点基準を変えても過去が変わらないように）<br>・選択肢の表示順が無いと**回答の再現ができない** |
 | **A3** | `submission_feedback_files`（添削のファイルを行に展開。2026-09-30 に `submission_files` から改めた）/ `submissions.score` / `settings` / `submission_feedbacks.question_comments` | `eval_disp_file_name1..5` / `eval_save_file_name1..5` / `report_question_comment` | ・**5本 → 1本に畳むと2本目以降が消える**（ステージング実測で添削のファイルがある提出は 228件中5件、2本目以降を使うものは0件）<br>・添削が無い提出のスコアを `submissions` 側で持つ<br>・設問ごとの添削コメントの表示 |
 | **A4** | `survey_responses.entity_type` / `entity_id` / `suspended` | `enquete_answer.entity_type_id` 1/2/3 ＋ `suspended_chk` | ・中断状態を移す先<br>・**これだけでは type 1/3 は移せない**（`lesson_id` が NOT NULL）。行き先は受け皿の設計から決め直す |
-| **A5** | `live_reservations.verification_key` / `settings` ／ `live_reservation_statuses` に `host_canceled` | `verification_key` / `cancel_chk` + `attendance_chk` + `stop_chk` + `recent_access_date` | ・出席確認（QR・コード入力）<br>・**`stop_chk`（開催側の中止）を `canceled` に入れない。** 受講者都合のキャンセルとして記録される<br>・**振替予約（`change_reserve_id` / `base_reserve_id`）は実測0件**。値は `settings` に残している |
+| **A5** | `live_reservations.verification_key` / `settings` ／ `live_reservation_statuses` に `host_canceled` | `verification_key` / `cancel_chk` + `attendance_chk` + `stop_chk` + `recent_access_date` | ・出席確認（QR・コード入力）<br>・**`stop_chk`（開催側の中止）は `canceled` にし、`settings.stop_chk` で区別する**（新の画面が `host_canceled` を扱えない。移行仕様 0-2 Q13。2026-10-26 に変えた）<br>・**振替予約（`change_reserve_id` / `base_reserve_id`）は実測0件**。値は `settings` に残している |
 | ~~**A11**~~ | ~~`badge_definitions`（バッジの定義）~~ | `badge_item` | **取り下げ**（2026-09-28 バッジは移行対象外） |
 | **A6** | `certificates.product_id` | `payment_item` | ・**`product_id` に FK は張らない**（課金 4-2 が未移行）<br>・**移行ツールは書かない**（`ENROLLMENT_SCHEMA` にも無い）。課金（4-2）の移行後に埋める |
 | **A7** | `live_lesson_reviews`（ライブ単位のレビュー） | `live_lesson_review`（実測3件） | ・**`course_reviews` はコース単位**なので、受け皿 course に付けると**全ライブのレビューが1つの course に混ざる**<br>・`tenants` を RESTRICT で参照するので `cleanupDemoData` に列挙が要る |

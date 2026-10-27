@@ -3,13 +3,20 @@
 [突き合わせ](review.md#新環境に追加するテーブルカラム) の追加一覧を、**school-launcher に当てる migration の単位**に落としたもの。
 
 - **当てる先**: `school-launcher/btoc-backend/db/migrations/`（goose 形式。雛形は `make migrate-create`）
-- **実物**（2026-10-02 時点）:
+- **実物**（2026-10-22 時点。school-launcher `hanataba_dev` の `26fc5be9`。下の表はどれもマージ済み）:
 
   | migration | 中身 |
   |---|---|
-  | `20260924054151_lw2_enrollment_additions.sql` | 0〜7（`feat/lw2-enrollment-schema` で作り、`hanataba_dev` に PR #135 でマージ済み） |
-  | `20260930052453_lw2_support_additions.sql`（`feat/lw2-support-schema` にコミット・push 済み） | 2 の `submission_feedback_files`（05 の migration に同居） |
-  | `20261001085757_lw2_keep_deleted_rows.sql`（2026-10-01。`feat/lw2-support-schema` にコミット・push 済み） | 8 `survey_responses.deleted_at` |
+  | `20260924054151_lw2_enrollment_additions.sql` | 0〜7（PR #135） |
+  | `20260930052453_lw2_support_additions.sql` | 2 の `submission_feedback_files`（05 の migration に同居） |
+  | `20261001085757_lw2_keep_deleted_rows.sql`（2026-10-01） | 8 `survey_responses.deleted_at` |
+- **school-launcher 側が足した受け皿で、移行ツールが書き込むもの**（2026-10-22 から。`common.0` の必須に入れてある）:
+
+  | migration | 移行ツールが書く列・表 |
+  |---|---|
+  | `20261012014810_learning_path_purchase.sql` / `20261019004848_learning_path_enrollment_admin_grant.sql` | `learning_path_enrollments`（コースの購入・割り当て。**課金の `billing.2` で流す**ので、必須は課金の区分に入れてある） |
+  | `20261019042710_learning_path_enrollment_courses.sql` | `learning_path_enrollment_courses`（同上） |
+  | `20261012174140_align_remote_pc_eligibility_with_lw2.sql` | `enrollments.via_learning_path`（受講の必須）、`learning_path_enrollments.remote_pc_enabled`（課金の必須） |
 - **当てる時期**: **移行直前**（[migration-spec](migration-spec.md) のフェーズ0）
 - **確認**: `python -m migrator doctor` — この区分が未適用なら `[TODO]` で出る
 
@@ -74,9 +81,9 @@ ALTER TABLE lesson_progress
     ADD COLUMN deleted_at      DATETIME(3) NULL;   -- 旧 del_chk = 1
 ```
 
-> **`cancel_chk` を `status = 'canceled'` に写さない。** 名前に反してキャンセルフラグではない。
-> `PaymentAuthorityModel` の INSERT 5か所すべてが**作成時に定数を書き込んでおり、
-> UPDATE する箇所が存在しない**。実測の 1=3,116 / 0=3,850（商品に紐づく行に限ると 1=3,064 / 0=620）は購入経路の違いを表す。
+> **`cancel_chk` を `status = 'canceled'` に写さない。** 名前に反して取り消しではなく、
+> **毎月の自動延長の対象から外す印**（買い切りなどは作成時から 1、自動継続は解約後に毎日のバッチが 1 にする）。
+> 受講できるかは期限で決まる。実測は 1=3,116 / 0=3,850（商品に紐づく行に限ると 1=3,064 / 0=620）。
 > **実質の取り消しは `del_chk`**（実測 828件）。
 
 > **無期限は `expires_at = NULL` で表す。** ただし「無期限」と「未設定」が区別できなくなるので、
@@ -233,7 +240,7 @@ ALTER TABLE live_reservations
 | `verification_key` | `verification_key` varchar(200) NOT NULL | **出席確認に使う照合値**（QR・コード入力）。実測は全件32文字。**パスワードや認証コードの平文ではないので読んでよい** |
 | `settings` | `cancel_chk` / `attendance_chk` / `stop_chk` / `recent_access_date` / `change_reserve_id` / `base_reserve_id` | **`status` に畳んだ元の値を残す。** 3フラグの組み合わせは `status` の4〜5値では表しきれない |
 
-あわせて `live_reservation_statuses` に **`host_canceled`** を足す（主催側の中止。`status` の FK 先）。
+あわせて `live_reservation_statuses` に **`host_canceled`** を足す（主催側の中止。`status` の FK 先）。**2026-10-26 から移行では使わない**（新の画面が扱えないので `canceled` ＋ `settings.stop_chk` で入れる。移行仕様 0-2 Q13）。
 
 > **`uk_lr_occurrence_user` は外さない。** 旧の重複（実測4組8行）は
 > **どれを残すかを運営が決める**（[migration-spec](migration-spec.md) の確認事項）。
