@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
+
 from ...context import RunContext
 from ...core.datetimes import ColumnKind, convert
 from ...core.records import Record
@@ -35,6 +37,16 @@ CERTIFICATE_TYPE_COURSE = 1
 
 #: テナントの連番カウンタ。**次に払い出す番号**を1行だけ持つ
 CERTIFICATE_NO_COLUMNS = ("tenant_id", "certificate_no", "regist_date")
+
+
+#: 新の番号の書式（`certificate_serial_formats`）。旧の表示と同じ「接頭辞 + 発行日 + 連番」
+SERIAL_FORMAT = "date_prefixed"
+
+
+def serial_text(number: object, issued: object) -> str:
+    """`No.` ＋発行日（JST、`YYYYMMDD`）＋番号。旧の日時は JST の naive。桁埋めはしない（旧と同じ）。"""
+    day = issued.strftime("%Y%m%d") if isinstance(issued, (datetime, date)) else ""
+    return f"No.{day}{int(number or 0)}"
 
 
 class CertificateSettingsStep(Step):
@@ -85,6 +97,9 @@ class CertificateSettingsStep(Step):
                     # 旧 `certificate_no` は「次に払い出す番号」そのもの
                     # （`ConfigCertificateModel::updateCertificateNo` が採番後に +1 して書く）
                     **({"serial_next": row["_serial_next"]} if row.get("_serial_next") else {}),
+                    # **旧の番号の書式**（`'No.' . date('Ymd') . $certificateNo`。`LessonController:3773`）。
+                    # 新の `date_prefixed` が同じ形（03 移行仕様 0-2 Q7）
+                    "serial_format": SERIAL_FORMAT,
                     "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
                 },
                 natural_key=("tenant_id",),
@@ -158,8 +173,9 @@ class CertificatesStep(Step):
                     # 講座 ID と取り違えると、参照先の無い `course_id` になって全件落ちる
                     "course_id": ctx.ulid.for_row("lesson", row["_lesson_id"]),
                     "serial_no": int(row.get("certificate_no") or 0),
-                    # **NOT NULL。** 旧は整数なので文字列にして入れる（書式は後から適用）
-                    "serial_text": str(row.get("certificate_no") or ""),
+                    # **NOT NULL。** 旧は表示した日の日付で `No.` ＋日付＋番号を出していて、決まった文字列が
+                    # 無い。新の `date_prefixed` に合わせて**発行日**（JST）で作る（03 移行仕様 0-2 Q7）
+                    "serial_text": serial_text(row.get("certificate_no"), row.get("regist_date")),
                     # **NOT NULL。** 発行時点の値を凍結する列。設定が無ければテナント名
                     "issuer_name": row["_issuer"],
                     "message": row["_message"],

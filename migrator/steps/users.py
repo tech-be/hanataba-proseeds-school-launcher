@@ -8,15 +8,18 @@
 - 誕生日は3列（`birth_year` / `birth_month` / `birth_day`）
 - `del_chk` / `valid_chk` は `status` に畳まず、`is_valid` と期間列を併せて残す
 - プロフィール画像は**移さない**（運営の判断。列は空で始める）
-- 削除済み（`del_chk=1`）の会員は `login_id` を NULL で入れる（2026-10-02 決定）
+- 削除済み（`del_chk=1`）の会員は `login_id` と `email` を NULL で入れる（2026-10-02 / 2026-10-26 決定）
+- 旧でログインできない会員（ロックアウト中・利用期間の外）は `status = inactive`（2026-10-26 決定）
 - 移す会員はすべて `must_change_password = TRUE`（初回ログインでパスワードを変えてもらう）。
   新システムの既存会員は書き換えない（投入は既存行を飛ばす）
 """
 
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta, timezone
+
 from ..context import RunContext
-from ..core.datetimes import ColumnKind, DateBoundary, convert, convert_date, split_date
+from ..core.datetimes import ColumnKind, DateBoundary, convert, convert_date, is_zero_date, split_date
 from ..core.records import Record
 from ..core.text import LengthCheck, find_over_length, join_name
 from ..errors import PreflightError
@@ -64,8 +67,6 @@ USER_COLUMNS = (
 
 LENGTH_CHECKS = (LengthCheck("tel", 32), LengthCheck("mobile_tel", 32))
 
-#: 会員の一意 ID（U2）。`users.member_no` に入れる
-PERSONAL_NO_COLUMNS = ("user_id", "personal_no")
 #: 会員の付属情報（U1）。`career_counselor_chk` は**ロールではなくフラグ**
 ATTACHED_INFO_COLUMNS = ("user_id", "career_counselor_chk")
 #: 会員の既定言語（A22）。国籍・海外住所と同じ `user_nationality_info` にある
@@ -93,12 +94,6 @@ class UsersStep(Step):
 
         # 別テーブルにある会員の列をここで合流させる。
         # **UPDATE を後から流さない** — 1行を1回の INSERT で完成させる
-        personal = {
-            int(r["user_id"]): r.get("personal_no")
-            for r in source.fetch_joined(
-                "user_personal_no", PERSONAL_NO_COLUMNS, parent="user", on="c.user_id = p.user_id"
-            )
-        }
         counselor = {
             int(r["user_id"]): r.get("career_counselor_chk")
             for r in source.fetch_joined(
@@ -113,7 +108,6 @@ class UsersStep(Step):
         }
         for row in rows:
             key = int(row["user_id"])
-            row["_member_no"] = personal.get(key)
             row["_career_counselor"] = counselor.get(key)
             # 空文字は「未設定」。NULL にして新環境の既定（テナント → 既定ロケール）に任せる
             row["_language"] = (languages.get(key) or "").strip() or None
@@ -130,10 +124,12 @@ class UsersStep(Step):
         # 旧の 3DES を復号して bcrypt に入れ替える。**鍵が無ければここで止まる**
         passwords = ctx.password_migration()
         rows = sorted(rows, key=lambda r: int(r["user_id"]))
+        today = _today_jst()
 
         for row in rows:
             name = join_name(row.get("name_sei"), row.get("name_mei"))
-            email = (row.get("mail_add") or "").strip() or None
+            # **削除済みの会員のメールは NULL**（2026-10-26 決定）。残すと、そのアドレスで新しく登録できない
+            email = None if _deleted(row) else ((row.get("mail_add") or "").strip() or None)
 
             year, month, day = split_date(row.get("birth_date"))
             records.append(
@@ -169,10 +165,9 @@ class UsersStep(Step):
                         "birth_month": month,
                         "birth_day": day,
                         "role": _role_of(row, role_map),
-                        "status": _status_of(row),
+                        "status": _status_of(row, today),
                         "is_valid": _valid(row),
                         "is_new": bool(row.get("new_user_chk")),
-                        "member_no": row.get("_member_no"),
                         # **ロールに畳まない。** 旧は role_id=6 に付く追加フラグ
                         "is_career_counselor": bool(row.get("_career_counselor")),
                         "avatar_url": None,  # 画像は移行対象外
@@ -201,7 +196,9 @@ class UsersStep(Step):
                         "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
                         "updated_at": convert(row.get("update_date"), ColumnKind.TIMESTAMP),
                     },
-                    natural_key=("tenant_id", "email"),
+                    # **旧の会員 ID で見分ける。** メールは NULL の会員がいる（メールの無い会員・削除済み）ので、
+                    # メールで見分けると流し直しで同じ会員を入れ直そうとする
+                    natural_key=("tenant_id", "user_id"),
                     source_key=int(row["user_id"]),
                 )
             )
@@ -293,15 +290,46 @@ def _deleted(row: dict) -> bool:
     return int(row.get("del_chk") or 0) == 1
 
 
-def _status_of(row: dict) -> str:
-    """`del_chk` / `valid_chk` / 期間から `users.status` を決める。
+JST = timezone(timedelta(hours=9))
 
-    **元の列は残す**（`is_valid` / `login_start_date` / `login_end_date`）。
-    status はあくまで判定結果で、ここに畳むわけではない。
+
+def _today_jst() -> date:
+    """判定に使う「今日」（日本時間）。**移行を流した日で決まる**ので、cutover の直前に流し直す。"""
+    return datetime.now(JST).date()
+
+
+def _as_date(value) -> date | None:
+    if value is None or is_zero_date(value):
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    return value if isinstance(value, date) else None
+
+
+def can_log_in(row: dict, today: date) -> bool:
+    """旧でログインできるか（旧 `AuthModel.class.php:149-154` と同じ条件）。
+
+    ロックアウト中・利用開始日が空か未来・利用終了日の翌日 0 時を過ぎた会員はログインできない。
+    """
+    if int(row.get("is_lockout") or 0) == 1:
+        return False
+    entry = _as_date(row.get("entry_date"))
+    if entry is None or entry > today:
+        return False
+    limit = _as_date(row.get("limit_date"))
+    return limit is None or limit >= today
+
+
+def _status_of(row: dict, today: date) -> str:
+    """`del_chk` / `valid_chk` / 期間・ロックアウトから `users.status` を決める。
+
+    **新は `status` だけでログインの可否を決める**（`is_valid`・期間・ロックアウトの列は読まない）。
+    旧でログインできない会員を active で入れると、新ではログインできてしまうので inactive にする
+    （2026-10-26 決定）。**元の列は残す**（`is_valid` / `login_start_date` / `login_end_date` / `is_lockout`）。
     """
     if _deleted(row):
         return "deleted"
-    if not _valid(row):
+    if not _valid(row) or not can_log_in(row, today):
         return "inactive"
     return "active"
 

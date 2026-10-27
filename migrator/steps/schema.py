@@ -34,13 +34,17 @@ REQUIRED_SCHEMA: tuple[tuple[str, str | None], ...] = (
     # A24 会員・テナントの旧 ID
     ("users", "user_id"),
     ("tenants", "tenant_id"),
-    # A12 会員の氏名・会員番号
+    # A12 会員の氏名
     ("users", "name_last"),
     ("users", "name_first"),
     ("users", "name_kana_last"),
     ("users", "name_kana_first"),
-    ("users", "member_no"),
     ("user_addresses", None),
+    # 会員の個別番号（school-launcher 20261016030602。`users.member_no` は使わなくなった）。
+    # LINE ログインのシークレットの種類（20261015021737。行の追加）はこれより前に当たるので、
+    # この表があれば入っている
+    ("user_personal_numbers", None),
+    ("scout_display_types", None),
     # A14 ログイン状態（畳まず同じ粒度で持つ）
     ("users", "is_lockout"),
     ("users", "failed_login_started_at"),
@@ -93,6 +97,9 @@ REQUIRED_SCHEMA: tuple[tuple[str, str | None], ...] = (
 #: **school-launcher の `*_lw2_content_additions.sql` と1対1で対応させる。**
 #: ここに書き漏らすと `common.0` の存在確認を素通りして、実 INSERT で初めて落ちる。
 CONTENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
+    # 削除済みのアンケートの設問・ページ（2026-10-26。school-launcher 20261026120001。作業ブランチ）
+    ("survey_questions", "deleted_at"),
+    ("survey_pages", "deleted_at"),
     # A3 カテゴリ
     ("course_categories", "image_url"),
     ("course_categories", "created_by"),
@@ -164,6 +171,18 @@ CONTENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
     # 削除済みも移す（2026-10-01。school-launcher 20261001085757）
     ("live_lesson_group_targets", "deleted_at"),
     ("live_lesson_exclusion_date_history", "live_lesson_id"),
+    # school-launcher 側が足した受け皿（2026-10-22 に追従）
+    ("lessons", "deleted_at"),  # 20261021082002。新アプリはレッスンを deleted_at IS NULL で絞る
+    ("video_lessons", "video_source"),  # 20261008112033
+    ("live_lesson_reservation_policies", None),  # 20261013093100
+    ("tenant_course_categories", None),  # 20261020001030
+    ("course_category_links", None),
+    # コース（旧の販売商品。20261009113244 / 20261013001351）
+    ("learning_paths", "price"),
+    ("learning_paths", "access_period_unit"),
+    ("learning_paths", "remote_pc_enabled"),
+    ("learning_paths", "listed"),
+    ("learning_paths", "sequential"),
 )
 
 #: 区分ごとの必須スキーマ。**その区分を流すときだけ確認する**
@@ -174,12 +193,17 @@ CONTENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
 ENROLLMENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
     # 講座ごとの修了証の発行方針（既存の表。設定の無い講座は issue = FALSE で入れる）
     ("course_certificate_policies", None),
+    # 修了証の番号の書式（旧と同じ `No.` ＋発行日＋番号。03 移行仕様 0-2 Q7）
+    ("certificate_settings", "serial_format"),
     # 受講権限（A8）
     ("enrollments", "settings"),
+    # コースの購入で作った受講登録か（school-launcher 20261012174140。2026-10-22 に追従）
+    ("enrollments", "via_learning_path"),
     # 学習履歴（A9）
     ("lesson_progress", "progress_status"),
     ("lesson_progress", "settings"),
     ("lesson_progress", "deleted_at"),
+    ("lesson_progress", "updated_at"),
     # テスト結果
     ("quiz_attempts", "passed"),
     ("quiz_attempts", "duration_sec"),
@@ -208,6 +232,14 @@ ENROLLMENT_SCHEMA: tuple[tuple[str, str | None], ...] = (
 
 #: 課金（4）の追加。チケット
 BILLING_SCHEMA: tuple[tuple[str, str | None], ...] = (
+    # コースの購入・割り当て（受講 03 のデータだが、決済の後の billing.2 で流す。2026-10-22。
+    # school-launcher 20261012014810 / 20261019004848 / 20261019042710 / 20261012174140）
+    ("learning_path_enrollments", "remote_pc_enabled"),
+    ("learning_path_enrollment_courses", None),
+    # 直接付与もある組の元の状態（03 移行仕様 0-2 Q3）
+    ("learning_path_enrollment_courses", "prev_recorded"),
+    # コースの購入の決済の種類と明細（school-launcher 20261012014810）
+    ("learning_path_purchase_payments", None),
     # 自動割当（旧 assign → タグの自動付与ルール。school-launcher 20260927105511 / 20260930044959）
     ("tag_auto_assign_rules", "assign_id"),
     ("tag_auto_assign_rule_triggers", None),
@@ -215,9 +247,10 @@ BILLING_SCHEMA: tuple[tuple[str, str | None], ...] = (
     ("tag_auto_assign_rule_grants", None),
     # 削除済みも移す（2026-10-01。school-launcher 20261001085757）
     ("tag_auto_assign_rule_triggers", "item_type"),
+    # きっかけにコースの購入を足す（2026-10-23。school-launcher 20261023075332。sync-issues B7）
+    ("tag_auto_assign_rule_triggers", "learning_path_id"),
     ("tag_auto_assign_rule_group_conditions", None),
     ("tag_auto_assign_rule_grants", "deleted_at"),
-    ("plan_courses", "deleted_at"),
     ("ticket_type_lessons", "deleted_at"),
     ("live_lesson_limit_item_history", "live_lesson_id"),
     ("tag_auto_assign_logs", None),
@@ -226,11 +259,11 @@ BILLING_SCHEMA: tuple[tuple[str, str | None], ...] = (
     ("ticket_grants", "starts_at"),
     ("monthly_ticket_allowances", None),
     # 決済（A3 / A4）と帳票（A7 / A8）。school-launcher 20260928132756
-    ("tenant_plans", "item_id"),
-    ("tenant_plans", "settings"),
     ("payments", "application_id"),
     ("payments", "settings"),
     ("receipts", "receipt_log_id"),
+    # 旧の領収書の期間と番号（school-launcher 20261026120002。04 移行仕様 0-2 Q9）
+    ("receipts", "settings"),
     ("tenant_legal_documents", None),
 )
 
@@ -254,6 +287,33 @@ SUPPORT_SCHEMA: tuple[tuple[str, str | None], ...] = (
     ("admin_notes", "updated_by"),
     # 削除済みも移す（2026-10-01。school-launcher 20261001085757）
     ("admin_notes", "deleted_at"),
+    # 未実装だった移行（2026-10-26。docs/db/05-support/migration-spec.md 0 章）
+    ("announcements", "reply_type"),
+    ("announcements", "line_body"),  # 20261020083044
+    ("announcement_replies", None),
+    ("announcement_reply_comments", None),
+    ("coupons", "validity_type"),
+    ("coupons", "visible_to_learners"),
+    ("coupons", "audience_type"),
+    ("coupon_user_targets", None),
+    ("inquiry_categories", "notify_course_admins"),
+    ("inquiries", "deleted_at"),  # 20261026120000（作業ブランチ feat/lw2-migration-rework）
+    ("tenant_email_templates", None),
+    ("tenant_line_templates", None),  # 20261020083042
+    ("discussion_posts", "status"),
+)
+
+#: **career の DB**（別の DB）に要るもの。support の区分を流すときに確かめる
+CAREER_SCHEMA: tuple[tuple[str, str | None], ...] = (
+    # 就活プロフィール（career 20261016084938 / 20261016084939）
+    ("learner_career_profiles", "employment_status"),
+    ("learner_career_profiles", "desired_employment_types"),
+    ("learner_desired_prefectures", None),
+    ("companies", None),
+    ("advisors", None),
+    ("availability_slots", None),
+    ("interviews", None),
+    ("interview_records", None),
 )
 
 #: **キーは `Phase.key` の接頭辞と一致させること。** `SchemaCheckStep.run()` が
@@ -281,21 +341,22 @@ PLANNED_SCHEMA: tuple[tuple[str, str | None, str], ...] = (
 )
 
 
-def missing(ctx: RunContext, entries) -> list[str]:
+def missing(ctx: RunContext, entries, target=None) -> list[str]:
     """入っていないものを返す。接続が無いときは空（確認できないため）。"""
-    if ctx.target.connectionless:
+    target = target or ctx.target
+    if target.connectionless:
         return []
     out = []
     for entry in entries:
         table, column = entry[0], entry[1]
         if column is None:
-            rows = ctx.target.query(
+            rows = target.query(
                 "SELECT 1 FROM information_schema.tables "
                 "WHERE table_schema = DATABASE() AND table_name = %s LIMIT 1",
                 (table,),
             )
         else:
-            rows = ctx.target.query(
+            rows = target.query(
                 "SELECT 1 FROM information_schema.columns "
                 "WHERE table_schema = DATABASE() AND table_name = %s AND column_name = %s LIMIT 1",
                 (table, column),
@@ -327,6 +388,15 @@ class SchemaCheckStep(SchemaStep):
                 + ", ".join(lacking)
                 + "。該当区分の schema-additions.md の migration を先に当てる"
             )
+        if "support" in sections:
+            # **career は別の DB。** 接続が無ければ support の区分は流せない
+            lacking = missing(ctx, CAREER_SCHEMA, ctx.target_for("career"))
+            if lacking:
+                raise PreflightError(
+                    "career の DB に必要なスキーマが入っていない: "
+                    + ", ".join(lacking)
+                    + "。career-backend の migration を先に当てる"
+                )
         result.note(f"必須 {len(entries)} 件を確認（区分: {', '.join(sorted(sections)) or '全部'}）")
         planned = missing(ctx, PLANNED_SCHEMA)
         if planned:

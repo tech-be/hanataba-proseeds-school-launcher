@@ -43,6 +43,15 @@ NON_USER_KEY_STEPS: frozenset[str] = frozenset({
     "support.advice_notes",
     "support.scout_follows",
     "support.usage_snapshot_users",
+    # 2026-10-26 に足した移行（キーは問い合わせ・返信・企業・面談・投稿の旧 ID）
+    "support.inquiries",
+    "support.news_replies",
+    "support.news_reply_comments",
+    "support.companies",
+    "support.interviews",
+    "support.interview_slots",
+    "support.interview_records",
+    "support.discussion_posts",
 })
 
 
@@ -188,3 +197,24 @@ def classify(exclusions: list[Exclusion], live_users: set[str]) -> list[Task]:
 
     order = {SQL: 0, OVERRIDE: 1, REVIEW: 2, NONE: 3}
     return sorted(buckets.values(), key=lambda t: (order[t.how], -len(t.keys)))
+
+
+def login_id_collisions(users: dict[str, dict]) -> list[str]:
+    """**ログイン ID が、別の会員のメールと同じ文字列**の会員（旧 user_id。削除済みは除く）。
+
+    新のログインは、入れた文字をまずメール（大文字小文字を区別しない）で探し、無ければログイン ID で探す。
+    なので、この会員はログイン ID でログインできない（確認事項 D12。2026-10-26）。移行は止めない。
+    """
+    owners: dict[str, set[str]] = {}
+    for key, row in users.items():
+        mail = str(row.get("mail_add") or "").strip().lower()
+        if mail:
+            owners.setdefault(mail, set()).add(key)
+    out = []
+    for key, row in users.items():
+        if int(row.get("del_chk") or 0) == 1:
+            continue
+        login = str(row.get("login_id") or "").strip().lower()
+        if login and owners.get(login, set()) - {key}:
+            out.append(key)
+    return sorted(out, key=int)

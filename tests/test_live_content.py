@@ -114,8 +114,10 @@ class ReservationStatusTest(unittest.TestCase):
         row = {"cancel_chk": 0, "attendance_chk": 0, "stop_chk": 0, **flags}
         return lv_tickets._status(row, starts, now)
 
-    def test_host_cancel_is_not_a_learner_cancel(self) -> None:
-        self.assertEqual(self._status(True, stop_chk=1), "host_canceled")
+    def test_host_cancel_is_canceled(self) -> None:
+        """**新の画面は `host_canceled` を扱えない。** `canceled` にし、`settings.stop_chk` で区別する（03 Q13）。"""
+        self.assertEqual(self._status(True, stop_chk=1), "canceled")
+        self.assertEqual(self._status(False, stop_chk=1), "canceled")
 
     def test_learner_cancel(self) -> None:
         self.assertEqual(self._status(True, cancel_chk=1), "canceled")
@@ -136,7 +138,6 @@ class ReservationStatusTest(unittest.TestCase):
         """
         self.assertIn("no_show", lv_tickets.HOLDS_SEAT)
         self.assertNotIn("canceled", lv_tickets.HOLDS_SEAT)
-        self.assertNotIn("host_canceled", lv_tickets.HOLDS_SEAT)
 
 
 class TicketTest(unittest.TestCase):

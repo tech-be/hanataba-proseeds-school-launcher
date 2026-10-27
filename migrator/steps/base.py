@@ -32,6 +32,8 @@ class Step(ABC):
     description: str = ""
     #: **実行した時刻で値が決まる列。** 照合（`verify`）では値ではなく有無だけを見る
     volatile_columns: tuple[str, ...] = ()
+    #: 投入先の DB。**`career` は求人・面談・就活プロフィールの別の DB**（`ctx.target_for`）
+    database: str = "btoc"
 
     def __init__(self) -> None:
         if not self.name:
@@ -48,7 +50,7 @@ class Step(ABC):
 
     def load(self, ctx: RunContext, records: list[Record]) -> int:
         """投入する。既定では自然キーで重複を避けてまとめて INSERT する。"""
-        return ctx.target.insert_many(records)
+        return ctx.target_for(self.database).insert_many(records)
 
     # --- 抽出で落とした行 ----------------------------------------------------
     def drop(self, table: str, key: object, reason: str, detail: str = "") -> None:
@@ -92,8 +94,9 @@ class Step(ABC):
         # 実行されないので、ここで見ないと違反は本番まで見つからない。
         # 当たった行は**移さず**一覧に出す（値を作り替えて通すことはしない）
         if records:
+            target = ctx.target_for(self.database)
             records, violations = constraints.filter_valid(
-                records, ctx.schema_reader().get(records[0].table), ctx.target
+                records, ctx.schema_reader(target).get(records[0].table), target
             )
             if violations:
                 result.excluded += len(violations)

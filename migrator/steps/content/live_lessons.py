@@ -79,8 +79,12 @@ CONFIG_COLUMNS = ("tenant_id", "valid_chk", "ticket_cancel_chk", "ticket_cancel_
 LESSON_TYPES = {0: "オンラインレッスン", 1: "教室レッスン"}
 
 
+#: ライブのレッスンの並び順の始まり。ユニット（1 からの通し番号）より必ず後ろに来るようにする
+LIVE_ORDER_BASE = 100000
+
+
 def occurrences(ctx: RunContext) -> list[dict]:
-    """開催回を読む。**削除済みも移す**（`deleted_at` で表す）。"""
+    """開催回を読む（削除済みを含む。移すのは削除されていない回だけ → `OccurrencesStep`）。"""
     return ctx.require_source().fetch_for_tenant("live_lesson_date", LIVE_LESSON_DATE_COLUMNS)
 
 
@@ -132,6 +136,16 @@ class LiveLessonsStep(Step):
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         tenant_id = ctx.tenant_id.value
         records: list[Record] = []
+        # **講座の中でユニットの後ろに、重ならない番号で並べる**（2026-10-26。02 の移行仕様 0-3 の Q4）。
+        # ユニットは 1 からの通し番号（`lessons.course_order`）。旧はライブをユニットと別の画面に出していた
+        by_course: dict[object, list[dict]] = {}
+        for row in rows:
+            by_course.setdefault(row["_course"], []).append(row)
+        order: dict[int, int] = {}
+        for lives in by_course.values():
+            ranked = sorted(lives, key=lambda r: (int(r.get("sort_no") or 0), int(r["live_lesson_id"])))
+            for number, live in enumerate(ranked, start=1):
+                order[int(live["live_lesson_id"])] = LIVE_ORDER_BASE + number
         for row in rows:
             records.append(
                 Record(
@@ -147,7 +161,13 @@ class LiveLessonsStep(Step):
                         "description": row.get("live_lesson_detail"),
                         "type": "live",
                         "status": _status(row),
-                        "sort_order": int(row.get("sort_no") or 0),
+                        # **新アプリはレッスンを `deleted_at IS NULL` で絞る**（school-launcher 20261021082002）
+                        "deleted_at": (
+                            convert(row.get("update_date"), ColumnKind.DATETIME)
+                            if int(row.get("del_chk") or 0) == 1
+                            else None
+                        ),
+                        "sort_order": order[int(row["live_lesson_id"])],
                         "is_preview": False,
                         "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
                     },
@@ -273,11 +293,90 @@ def _settings(row: dict) -> str:
     )
 
 
+class ReservationPoliciesStep(Step):
+    """ライブごとの予約・キャンセルの期限を `live_lesson_reservation_policies` に移す（2026-10-22）。
+
+    新システムは期限を「レッスン日の ○日前」でライブごとに持ち、開催回の日時はそこから計算し直す
+    （school-launcher 20261013093100）。旧もライブごとに日数で持っていたので、そのまま入れる。
+
+    - `reserve_start_day` → `reserve_open_days_before`（開始日の N 日前の 0:00）
+    - `reserve_end_day` / `reserve_end_time` → `reserve_close_days_before` / `_hours_before`
+      （`reserve_end_time` は「時間前」。旧 `LiveLessonModel.class.php:1262`）
+    - キャンセルは**旧ではテナントに1つ**（`config_live_lesson`）。その値を各ライブに入れる（2026-10-22 決定）
+
+    **キャンセルの期限を日数で表せないテナントは NULL にする**（警告を出す）。時間（`ticket_cancel_time`）が
+    0 以外のとき、および**キャンセル不可（`ticket_cancel_chk = 0`）**のとき。新の NULL は「開始まで可」で、
+    「不可」を表す値が無い。行ごと移さないと予約の期限まで落ちるので、行は入れる。開催回の
+    `cancel_closes_at` は今までどおり旧の式で入っている。
+    """
+
+    name = "content.live_reservation_policies"
+    description = "ライブごとの予約・キャンセルの期限を移す"
+    source_table = "live_lesson"
+    target_table = "live_lesson_reservation_policies"
+    depends_on = ("content.live_lessons",)
+
+    def extract(self, ctx: RunContext) -> list[dict]:
+        source = ctx.require_source()
+        rows = source.fetch_for_tenant("live_lesson", LIVE_LESSON_COLUMNS)
+        config = source.fetch_for_tenant("config_live_lesson", CONFIG_COLUMNS)
+        cancel = config[0] if config else {}
+        for row in rows:
+            row["_cancel"] = cancel
+        return rows
+
+    def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
+        tenant_id = ctx.tenant_id.value
+        records: list[Record] = []
+        for row in rows:
+            records.append(
+                Record(
+                    table="live_lesson_reservation_policies",
+                    values={
+                        "lesson_id": ctx.ulid.for_row("live_lesson", row["live_lesson_id"]),
+                        "tenant_id": tenant_id,
+                        "reserve_open_days_before": row.get("reserve_start_day"),
+                        "reserve_close_days_before": row.get("reserve_end_day"),
+                        "reserve_close_hours_before": row.get("reserve_end_time"),
+                        "cancel_days_before": cancel_days_before(row["_cancel"]),
+                    },
+                    natural_key=("lesson_id",),
+                    source_key=int(row["live_lesson_id"]),
+                )
+            )
+        cancel = rows[0]["_cancel"] if rows else {}
+        if rows and cancel and cancel_days_before(cancel) is None:
+            ctx.logger.warning(
+                "キャンセルの期限を日数で表せない（ticket_cancel_chk=%s / ticket_cancel_time=%s）。"
+                "cancel_days_before は NULL（開始まで可）で入れる。開催回の cancel_closes_at は旧の式で入っている",
+                cancel.get("ticket_cancel_chk"),
+                cancel.get("ticket_cancel_time"),
+            )
+        return records
+
+
+def cancel_days_before(cancel: dict) -> int | None:
+    """テナントのキャンセルの設定を「開始日時の N 日前」にする。表せなければ None。"""
+    if not cancel or not int(cancel.get("ticket_cancel_chk") or 0):
+        return None
+    if int(cancel.get("ticket_cancel_time") or 0) != 0:
+        return None
+    return int(cancel.get("ticket_cancel_day") or 0)
+
+
 class OccurrencesStep(Step):
     """`live_lesson_date` を `live_lesson_occurrences` に移す。
 
+    **開催回の親は `lessons`**（school-launcher 20260930013549 で `live_lessons` から付け替わった）。
+    `live_lessons` の行が無いライブ（開催回が0件で代表日時が決まらないもの）にも開催回は入れられるが、
+    そういうライブは開催回を持たないので、移す行は変わらない。
+
     **`del_chk` を `canceled_at` に写さない。** 削除と中止は別で、混ぜると受講者の履歴に
-    「中止された」と見える。削除は `deleted_at`（A5 で追加）、中止は予約の `stop_chk` から作る。
+    「中止された」と見える。中止は予約の `stop_chk` から作る。
+
+    **削除済みの開催回は移さない**（2026-10-26 決定。02 の移行仕様 0-3 の Q14）。新は開催回の
+    `deleted_at` を読まず、削除済みの回もカレンダー・予約・リマインドに出す。ステージングの
+    削除済み 817 件はすべて過去の回。その回の予約は外部キーで連鎖して一覧に出る。
     """
 
     name = "content.live_occurrences"
@@ -311,6 +410,10 @@ class OccurrencesStep(Step):
                 # 孤児。親のライブが物理削除されている（開催回は tenant_id を持つ）
                 self.drop("live_lesson_occurrences", row["live_lesson_date_id"], "旧データの不整合",
                           f"ライブ（live_lesson_id={row['live_lesson_id']}）が物理削除されている")
+                continue
+            if int(row.get("del_chk") or 0) == 1:
+                self.drop("live_lesson_occurrences", row["live_lesson_date_id"], "移行対象外",
+                          "削除済みの開催回（新は deleted_at を読まず、カレンダーと予約に出る。2026-10-26 決定）")
                 continue
             out.append(
                 {
@@ -358,12 +461,8 @@ class OccurrencesStep(Step):
                             if row["_stopped"]
                             else None
                         ),
-                        # **削除は canceled_at と別の軸**（A5）
-                        "deleted_at": (
-                            convert(row.get("update_date"), ColumnKind.DATETIME)
-                            if int(row.get("del_chk") or 0) == 1
-                            else None
-                        ),
+                        # 削除済みの回は移さない（extract で一覧に出した）
+                        "deleted_at": None,
                         # **旧に開催回ごとのリマインドの止め方は無い**（`mail_send_chk` は「送信済み」の印で、
                         # 予約の `reminded_at` に移す）。旧のバッチは、削除済みでない回のうち、
                         # ライブが削除済みでなく有効（`valid_chk = 1`）なものに送っていた。削除・無効は
@@ -418,4 +517,4 @@ def _text(value: object) -> str | None:
 
 
 def build() -> list[Step]:
-    return [LiveLessonsStep(), LiveLessonDetailsStep(), OccurrencesStep()]
+    return [LiveLessonsStep(), LiveLessonDetailsStep(), ReservationPoliciesStep(), OccurrencesStep()]

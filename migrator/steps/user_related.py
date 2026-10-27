@@ -56,7 +56,15 @@ OPTOUT_SOURCES = (
 )
 OPTOUT_COLUMNS = ("user_id",) + tuple(s.column for s in OPTOUT_SOURCES)
 
-LINE_COLUMNS = ("user_id", "line_id", "regist_date")
+#: 会員の状態（`users._status_of`）を決める列も読む。有効でない会員には送らない（05 移行仕様 0R-2 Q3）
+LINE_COLUMNS = ("user_id", "line_id", "regist_date", "del_chk", "valid_chk", "entry_date", "limit_date", "is_lockout")
+
+#: 会員の個別番号とスカウトでの名前の出し方（U2）。旧は `user_id` が主キー
+PERSONAL_NO_COLUMNS = ("user_id", "regist_no", "personal_no", "scout_display_type")
+
+#: 旧 `scout_display_type` → `scout_display_types.code`。旧は数値の直書きで、
+#: 0 名前 / 1 ニックネーム / 2 個別番号（旧 `UserModel.class.php` の会員検索）
+SCOUT_DISPLAY_TYPES = {0: "name", 1: "nickname", 2: "personal_no"}
 
 
 class UserAddressesStep(Step):
@@ -170,6 +178,58 @@ def _foreign_address(
     ]
 
 
+class UserPersonalNumbersStep(Step):
+    """会員の個別番号を `user_personal_numbers` に移す（U2）。
+
+    **番号は旧の値のまま。** 新システムは新しい会員に「テナント内の `regist_no` の最大 + 1」を
+    振るので、旧の `regist_no` も持ち込まないと番号が重なる。`personal_no` は新では文字列。
+    NULL・重複は表の NOT NULL / UNIQUE に当たり、その行は移らない（一覧に出る）。
+    """
+
+    name = "user_personal_numbers"
+    description = "会員の個別番号とスカウトでの名前の出し方を移す"
+    source_table = "user_personal_no"
+    target_table = "user_personal_numbers"
+    depends_on = ("users",)
+
+    def extract(self, ctx: RunContext) -> list[dict]:
+        return ctx.require_source().fetch_joined(
+            "user_personal_no", PERSONAL_NO_COLUMNS, parent="user", on="c.user_id = p.user_id"
+        )
+
+    def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
+        tenant_id = ctx.tenant_id.value
+        records: list[Record] = []
+        for row in sorted(rows, key=lambda r: int(r["user_id"])):
+            personal_no = row.get("personal_no")
+            records.append(
+                Record(
+                    table="user_personal_numbers",
+                    values={
+                        "id": ctx.ulid.for_row("user_personal_number", row["user_id"]),
+                        "tenant_id": tenant_id,
+                        "user_id": ctx.ulid.for_row("user", row["user_id"]),
+                        "regist_no": row.get("regist_no"),
+                        "personal_no": None if personal_no is None else str(personal_no),
+                        "scout_display_type": _scout_display_type(row.get("scout_display_type")),
+                    },
+                    natural_key=("tenant_id", "user_id"),
+                    source_key=int(row["user_id"]),
+                )
+            )
+        return records
+
+
+def _scout_display_type(value: object) -> str | None:
+    """旧の数値を code にする。**対応表に無い値は既定（名前）に倒さない。**
+
+    `scout_display_type` は NOT NULL なので、その会員の行は移らず一覧に出る。
+    """
+    if value is None:
+        return None
+    return SCOUT_DISPLAY_TYPES.get(int(value))
+
+
 class UserProfileValuesStep(Step):
     """自由記述（`user_profile1`〜`20`）の値を移す。
 
@@ -214,7 +274,12 @@ class UserProfileValuesStep(Step):
 
 
 class NotificationOptoutsStep(Step):
-    """通知の受取設定を**極性を反転**して移す。"""
+    """通知の受取設定を**極性を反転**して移す。
+
+    **携帯の受け取り設定（`channel = 'mobile'`）は移さず一覧に出す**（2026-10-26 決定。移行対象外）。
+    新は携帯のアドレスに送らず、受け取り設定の `channel` も見ない。移すと、携帯だけ止めていた会員の
+    その種類の通知が、PC も LINE も止まって見える（ステージングでお知らせ 2,653 行）。
+    """
 
     name = "notification_optouts"
     description = "通知の受取設定を optout に反転して移す"
@@ -223,7 +288,13 @@ class NotificationOptoutsStep(Step):
     depends_on = ("users", "master.email_kinds")
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        return ctx.require_source().fetch_for_tenant("user", OPTOUT_COLUMNS)
+        rows = ctx.require_source().fetch_for_tenant("user", OPTOUT_COLUMNS)
+        for row in rows:
+            for optout in optouts_for(row, OPTOUT_SOURCES):
+                if optout.channel is Channel.MOBILE:
+                    self.drop("notification_optouts", f"{row['user_id']}:{optout.kind}:{optout.channel.value}",
+                              "移行対象外", "携帯の受け取り設定。新は携帯のアドレスに送らず、channel を見ない")
+        return rows
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         tenant_id = ctx.tenant_id.value
@@ -231,6 +302,8 @@ class NotificationOptoutsStep(Step):
         for row in rows:
             user_id = ctx.ulid.for_row("user", row["user_id"])
             for optout in optouts_for(row, OPTOUT_SOURCES):
+                if optout.channel is Channel.MOBILE:
+                    continue  # 抽出で一覧に出した（移行対象外）
                 key = f"{row['user_id']}:{optout.kind}:{optout.channel.value}"
                 records.append(
                     Record(
@@ -253,7 +326,10 @@ class LineLinksStep(Step):
     """LINE の友だち紐付けを移す（公式アカウントを継続する決定のため移行対象）。
 
     `line_links.line_user_id` は Messaging API の userId（`U` で始まる33文字）。
-    **形式が違うものは移さず、一覧を運営に渡す。**
+    **形式が違うものは移さず、理由を付けて一覧に出す**（05 移行仕様 0R-2 Q1）。
+
+    **新は会員の状態を見ずに `is_friend = TRUE` の人へ送る。** 削除済み・利用停止の会員の紐付けは
+    `is_friend = FALSE` で入れる（値は残すが送らない。Q3）。同じ ID の重なりは補正データで直す（Q2）。
     """
 
     name = "line_links"
@@ -264,17 +340,25 @@ class LineLinksStep(Step):
 
     def extract(self, ctx: RunContext) -> list[dict]:
         rows = ctx.require_source().fetch_for_tenant("user", LINE_COLUMNS)
-        return [r for r in rows if r.get("line_id")]
+        kept = []
+        for row in rows:
+            if not row.get("line_id"):
+                continue
+            if not is_line_user_id(str(row["line_id"]).strip()):
+                self.drop("line_links", row["user_id"], "旧データの不整合",
+                          "LINE の ID の形が違う（Messaging API の userId は `U` ＋ 32 文字）")
+                continue
+            kept.append(row)
+        return kept
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         tenant_id = ctx.tenant_id.value
+        from .users import _status_of, _today_jst
+
+        today = _today_jst()
         records: list[Record] = []
-        rejected: list[int] = []
         for row in rows:
             line_id = str(row["line_id"]).strip()
-            if not (line_id.startswith("U") and len(line_id) == 33):
-                rejected.append(int(row["user_id"]))
-                continue
             records.append(
                 Record(
                     table="line_links",
@@ -283,8 +367,9 @@ class LineLinksStep(Step):
                         "tenant_id": tenant_id,
                         "user_id": ctx.ulid.for_row("user", row["user_id"]),
                         "line_user_id": line_id,
-                        # lw2 に友だち状態が無い。TRUE で入れ、初回 push の 403 で落とす
-                        "is_friend": True,
+                        # lw2 に友だち状態が無い。TRUE で入れ、初回 push の 403 で落とす。
+                        # **有効でない会員は FALSE**（新は会員の状態を見ずに送る。Q3）
+                        "is_friend": _status_of(row, today) == "active",
                         # **NOT NULL**。旧に「連携した日時」は無いので会員の登録日を入れる
                         "linked_at": convert(row.get("regist_date"), ColumnKind.DATETIME),
                     },
@@ -292,13 +377,13 @@ class LineLinksStep(Step):
                     source_key=int(row["user_id"]),
                 )
             )
-        if rejected:
-            ctx.logger.warning(
-                "line_id の形式が違う会員が %d 名いる（移さない。一覧を運営に渡す）: %s",
-                len(rejected),
-                rejected[:20],
-            )
         return records
+
+
+def is_line_user_id(value: str) -> bool:
+    """Messaging API の userId の形（`U` ＋ 32 文字）。"""
+    return value.startswith("U") and len(value) == 33
+
 
 #: 公開制限。`user` の `*_open_chk` 6列を、それぞれ短いコード（列名から `_open_chk` を
 #: 除いたもの）の `field_code` にする（決定2）。他の表からは読まない。
@@ -359,6 +444,7 @@ def build() -> list[Step]:
     """1-2 ユーザ。**LINE は含めない** — 区分はサポート機能（5-1）。"""
     return [
         UserAddressesStep(),
+        UserPersonalNumbersStep(),
         UserProfileValuesStep(),
         UserFieldVisibilityStep(),
         NotificationOptoutsStep(),

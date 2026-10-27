@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import json
+
 from ...context import RunContext
 from ...core.datetimes import ColumnKind, convert
 from ...core.records import Record
@@ -81,6 +83,10 @@ class ReceiptSettingsStep(Step):
         ]
 
 
+def _iso(value) -> str | None:
+    return value.isoformat() if hasattr(value, "isoformat") else (str(value) if value else None)
+
+
 class ReceiptsStep(Step):
     """発行済みの領収書（`receipt_log`）を `receipts` に移す（P11）。"""
 
@@ -136,6 +142,14 @@ class ReceiptsStep(Step):
                         "issuer_invoice_registration_no": row.get("invoice_no") or None,
                         "transaction_date": pay.as_date(paid) if paid else row.get("payment_date_from"),
                         "issued_at": convert(row.get("regist_date"), ColumnKind.DATETIME),
+                        # **旧の番号は (申込, 期間) ごとの再発行の番号。** 自動継続の申込は期間ごとに発行していて、
+                        # 決済額を超える領収書がある。新は決済ごとの再発行なので、期間と旧の番号を残す（0-2 Q9。
+                        # school-launcher 20261026120002。アプリは読まない）
+                        "settings": json.dumps({
+                            "period_from": _iso(row.get("payment_date_from")),
+                            "period_to": _iso(row.get("payment_date_to")),
+                            "seq_no": row.get("seq_no"),
+                        }, ensure_ascii=False),
                     },
                     natural_key=("tenant_id", "receipt_log_id"),
                     source_key=int(row["receipt_log_id"]),

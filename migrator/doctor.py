@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from .config import Config
 from .db import connect as connect_module
 from .errors import MigrationError
-from .steps.schema import PLANNED_SCHEMA, REQUIRED_SCHEMA, SCHEMA_BY_SECTION
+from .steps.schema import CAREER_SCHEMA, PLANNED_SCHEMA, REQUIRED_SCHEMA, SCHEMA_BY_SECTION
 
 
 @dataclass
@@ -46,7 +46,45 @@ def run(config: Config) -> list[Finding]:
     findings: list[Finding] = []
     findings += _source(config)
     findings += _target(config)
+    findings += _career(config)
     return findings
+
+
+def _career(config: Config) -> list[Finding]:
+    """career の DB（求人・面談・就活プロフィール）。**support の区分を流すときだけ要る**ので TODO。"""
+    if not config.target_career_dsn:
+        return [
+            Finding(
+                "career の移行先 TARGET_CAREER_DB_URL",
+                True,
+                "未設定。support の区分を流すときに設定する（他区分の移行には影響しない）",
+                todo=True,
+            )
+        ]
+    out = [Finding("career の移行先 TARGET_CAREER_DB_URL", True, _dsn_summary(config.target_career_dsn))]
+    try:
+        conn = connect_module.connect(config.target_career_dsn)
+    except Exception as exc:
+        out.append(Finding("career の移行先に接続", False, str(exc)[:120]))
+        return out
+    try:
+        cur = conn.cursor()
+        lacking = _missing_schema(cur, CAREER_SCHEMA)
+        out.append(
+            Finding(
+                f"career のスキーマ（support {len(CAREER_SCHEMA)} 件）",
+                True,
+                "すべて入っている"
+                if not lacking
+                else f"{len(lacking)} 件未適用: " + ", ".join(lacking) + "。career-backend の migration を当てる",
+                todo=bool(lacking),
+            )
+        )
+    except Exception as exc:
+        out.append(Finding("career の移行先の読み出し", False, str(exc)[:160]))
+    finally:
+        conn.close()
+    return out
 
 
 def _source(config: Config) -> list[Finding]:

@@ -125,9 +125,54 @@ class ReviewsStep(Step):
         ]
 
 
+class MonthlyRemainingStep(Step):
+    """**月チケットの今の期間の残り**を `ticket_grants` に入れる（0-2 Q5）。
+
+    `monthly_ticket_allowances` は新が読まないので、今使える残りは付与にしないと消える。
+    ただし月チケットには種別が無く、新の付与は種別が要る。**種別を決めるまで（確認事項 D22）は
+    一覧に出すだけ**。今の期間は「契約日 ≤ 今日 ≤ 期限」で削除されていないもの（旧の判定。
+    `LiveLessonModel` の月チケット）。ステージングは 0 件。
+    """
+
+    name = "billing.monthly_remaining"
+    description = "月チケットの今の期間の残りを付与にする（種別が決まるまで一覧に出す）"
+    source_table = "month_user_ticket"
+    target_table = "ticket_grants"
+    depends_on = ("billing.monthly_allowances",)
+
+    def extract(self, ctx: RunContext) -> list[dict]:
+        today = _today()
+        for row in ctx.require_source().fetch_joined(
+            "month_user_ticket", MONTH_TICKET_COLUMNS, parent="user", on="c.user_id = p.user_id"
+        ):
+            if current_period(row, today):
+                self.drop("ticket_grants", f"month:{row['month_user_ticket_id']}", "受け皿なし",
+                          f"月チケットの今の期間の残り {int(row.get('ticket_count') or 0)} 枚。"
+                          "新はチケットに種別が要る。種別を決めるまで移さない（確認事項 D22）")
+        return []
+
+    def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
+        return []
+
+
+def _today():
+    from datetime import date
+
+    return date.today()
+
+
+def current_period(row: dict, today) -> bool:
+    """今の期間で、残りがあり、削除されていない月チケットか。"""
+    agreed, limit = row.get("agreement_date"), row.get("limit_date")
+    agreed = agreed.date() if hasattr(agreed, "date") else agreed
+    limit = limit.date() if hasattr(limit, "date") else limit
+    return (int(row.get("del_chk") or 0) == 0 and int(row.get("ticket_count") or 0) > 0
+            and agreed is not None and limit is not None and agreed <= today <= limit)
+
+
 def allowances() -> list[Step]:
     """4-1 チケット（月次配布）。"""
-    return [MonthlyAllowancesStep()]
+    return [MonthlyAllowancesStep(), MonthlyRemainingStep()]
 
 
 def reviews() -> list[Step]:

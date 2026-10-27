@@ -25,6 +25,8 @@ class RunContext:
     source: SourceDatabase | None
     target: TargetDatabase
     ulid: UlidFactory
+    #: career の DB（別の DB。会員・テナントは btoc の ULID で持つ）。support の区分だけが使う
+    career: TargetDatabase | None = None
     tenant_id: TenantId = field(default_factory=TenantId)
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger("migrator"))
     results: list[StepResult] = field(default_factory=list)
@@ -36,12 +38,26 @@ class RunContext:
     #: `pref_master` の読み込み結果（1回だけ引く）
     _prefectures: dict[int, str] | None = None
     _countries: dict[str, str] | None = None
-    _schema_reader: object | None = None
+    _schema_readers: dict = field(default_factory=dict)
     _exclusions: object | None = None
 
     @property
     def dry_run(self) -> bool:
         return self.target.dry_run
+
+    def target_for(self, database: str) -> TargetDatabase:
+        """Step の投入先（`Step.database`）。**career は別の DB** なので取り違えない。"""
+        if database == "btoc":
+            return self.target
+        if database == "career":
+            if self.career is None:
+                raise ConfigError("career の DB への接続が無い（TARGET_CAREER_DB_URL を設定する）")
+            return self.career
+        raise ConfigError(f"知らない投入先: {database}")
+
+    def targets(self) -> list[TargetDatabase]:
+        """接続している移行先すべて（コミット・巻き戻しはそろえて行う）。"""
+        return [t for t in (self.target, self.career) if t is not None]
 
     def require_source(self) -> SourceDatabase:
         if self.source is None:
@@ -88,13 +104,14 @@ class RunContext:
             self._exclusions = ExclusionLog(self.config.work_dir, self.logger)
         return self._exclusions
 
-    def schema_reader(self):
-        """移行先のスキーマ読み取り（1テーブル1回だけ問い合わせる）。"""
-        if self._schema_reader is None:
+    def schema_reader(self, target: TargetDatabase | None = None):
+        """移行先のスキーマ読み取り（1テーブル1回だけ問い合わせる）。DB ごとに持つ。"""
+        target = target or self.target
+        if id(target) not in self._schema_readers:
             from .validation.constraints import SchemaReader
 
-            self._schema_reader = SchemaReader(self.target)
-        return self._schema_reader
+            self._schema_readers[id(target)] = SchemaReader(target)
+        return self._schema_readers[id(target)]
 
     def password_migration(self):
         """パスワードの復号・再ハッシュ。**鍵が無ければ止める。**
@@ -151,11 +168,13 @@ def build_context(
     source: SourceDatabase | None,
     target: TargetDatabase,
     logger: logging.Logger | None = None,
+    career: TargetDatabase | None = None,
 ) -> RunContext:
     return RunContext(
         config=config,
         source=source,
         target=target,
+        career=career,
         ulid=UlidFactory(config.ulid_namespace, config.epoch_ms),
         logger=logger or logging.getLogger("migrator"),
     )

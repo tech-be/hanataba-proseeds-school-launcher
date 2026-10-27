@@ -54,14 +54,18 @@ def no_platform_admin(ctx: RunContext) -> None:
 
 
 def email_unique(ctx: RunContext) -> None:
-    """`UNIQUE (tenant_id, email)` に反する重複が無いか。"""
+    """`UNIQUE (tenant_id, email)` に反する重複が無いか。
+
+    **NULL は数えない。** メールの無い会員・削除済みの会員は NULL で入る（2026-10-26 決定）。
+    UNIQUE も NULL どうしは重複にしない。アドレスは出さない（個人情報）。
+    """
     rows = ctx.target.query(
-        "SELECT email, COUNT(*) AS n FROM users WHERE tenant_id = %s "
+        "SELECT email, COUNT(*) AS n FROM users WHERE tenant_id = %s AND email IS NOT NULL "
         "GROUP BY email HAVING n > 1",
         (ctx.tenant_id.value,),
     )
     if rows:
-        raise VerificationError(f"メールが重複している: {[r['email'] for r in rows][:10]}")
+        raise VerificationError(f"メールが重複している: {len(rows)} 組")
 
 
 def row_count(ctx: RunContext, table: str, expected: int) -> None:

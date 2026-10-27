@@ -47,6 +47,8 @@ class Config:
     legacy_crypt_key: str = ""
     source_dsn: str = ""
     target_dsn: str = ""
+    #: career の DB（求人・面談・就活プロフィール）。**support の区分を流すときだけ要る**
+    target_career_dsn: str = ""
     work_dir: Path = Path("./out")
     #: 暫定対応で入れる仮の値（`course_price` など）。**届いたら差し替える**
     provisional: dict = field(default_factory=dict)
@@ -102,6 +104,7 @@ def load(path: str | Path = DEFAULT_CONFIG, env: dict[str, str] | None = None) -
         legacy_crypt_key=env.get(passwords.SECRET_ENV, ""),
         source_dsn=env.get("SOURCE_DB_URL", ""),
         target_dsn=env.get("TARGET_DB_URL", ""),
+        target_career_dsn=env.get("TARGET_CAREER_DB_URL", ""),
         work_dir=Path(raw.get("work_dir", "./out")),
         overrides_path=Path(raw.get("overrides", "overrides.csv")),
         provisional=raw.get("provisional") or {},

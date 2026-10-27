@@ -159,6 +159,26 @@ class TenantSettingsTest(unittest.TestCase):
         out = json.loads(tenant._settings(ctx, None, None, {"lw2_account": {"enable_lockout": 1}}))
         self.assertEqual(out["lw2_account"], {"enable_lockout": 1})
 
+    def test_line_settings_are_in_the_shape_the_app_reads(self) -> None:
+        """旧 `line_chk` / `line_id` / `line_channel_id` → `settings.line`（新アプリの `line.Config`）。"""
+        line = tenant._line_settings({"line_chk": 1, "line_id": "@abc", "line_channel_id": "1234567890"})
+        self.assertEqual(line, {"enabled": True, "notification_kinds": [],
+                                "official_account_id": "@abc", "login_channel_id": "1234567890"})
+
+    def test_line_settings_without_values(self) -> None:
+        """値の無い列はキーを作らない。行が無ければ `line` も作らない。"""
+        self.assertEqual(tenant._line_settings({"line_chk": 0, "line_id": "", "line_channel_id": None}),
+                         {"enabled": False, "notification_kinds": []})
+        self.assertIsNone(tenant._line_settings(None))
+
+    def test_line_channel_secret_is_the_login_channel(self) -> None:
+        """**旧の `line_channel_sercret` は LINE ログインのチャネルのもの**（`line_channel_id` と組）。"""
+        from migrator.steps import tenant_config
+
+        kinds = dict(tenant_config.LINE_SECRET_SOURCES)
+        self.assertEqual(kinds["line_channel_sercret"], "line_login_channel_secret")
+        self.assertEqual(kinds["send_line_chanel_token"], "line_channel_access_token")
+
 
 class FacilityTest(unittest.TestCase):
     def test_facility_is_kept_as_text(self) -> None:
@@ -276,8 +296,9 @@ class LibraryVisibilityTest(unittest.TestCase):
             {**base, "_has_groups": False}, {**base, "drive_id": 2, "_has_groups": True},
             {**base, "drive_id": 3, "_has_groups": False, "del_chk": 1}])
         self.assertEqual(open_.values["audience_type"], "all_users")
-        self.assertEqual(grouped.values["audience_type"], "specific_users")
-        self.assertTrue(grouped.values["published"])
+        # **全員向け・非公開**（対象 0 件の個別指定は誰にも見えず、運営が保存できない。05 の 0R-2 Q4）
+        self.assertEqual(grouped.values["audience_type"], "all_users")
+        self.assertFalse(grouped.values["published"])
         self.assertFalse(deleted.values["published"])
 
     def test_restricted_or_deleted_attachments_are_hidden(self) -> None:
@@ -295,11 +316,14 @@ class LibraryVisibilityTest(unittest.TestCase):
 class KeepDeletedRowsTest(unittest.TestCase):
     """**移行対象外を除き、削除済みも含めてすべて移す**（2026-10-01 の方針）。"""
 
-    def test_deleted_heading_becomes_deleted_chapter(self) -> None:
-        ctx = make_ctx()
-        row = {**unit(4, 3, type_id=0, del_chk=1), "update_date": datetime(2021, 6, 1, 12)}
-        [rec] = lessons.ChaptersStep().transform(ctx, [row])
-        self.assertIsNotNone(rec.values["deleted_at"])
+    def test_deleted_heading_is_listed_not_migrated(self) -> None:
+        """**削除済みの見出しは移さない**（2026-10-26。新は章の deleted_at を読まず、空の見出しとして出す）。"""
+        rows = [unit(4, 3, type_id=0, del_chk=1), unit(5, 4, type_id=0)]
+        ctx = make_ctx({"unit": rows})
+        step = lessons.ChaptersStep()
+        kept = step.extract(ctx)
+        self.assertEqual([r["unit_id"] for r in kept], [5])
+        self.assertEqual([v.key for v in step._take_dropped()], ["4"])
 
     def test_collapse_prefers_the_living_row(self) -> None:
         """**同じ組が積まれていれば1行。** 生きている行があれば生きた行、全部削除済みなら削除日時つき。"""
@@ -315,17 +339,37 @@ class KeepDeletedRowsTest(unittest.TestCase):
         self.assertIsNotNone(out["2023-02-01"]["_deleted_at"])
 
     def test_trigger_kinds(self) -> None:
-        """**きっかけは全行移す。** レッスン → 講座、講座の商品 → プラン、それ以外の商品は旧 ID だけ。"""
+        """**きっかけは全行移す。** レッスン → 講座、講座の商品 → コース、それ以外の商品は旧 ID だけ
+        （2026-10-23 から。旧の商品は tenant_plans に移さず、コースとして売る。sync-issues B7）。"""
         ctx = make_ctx()
+        path = ctx.ulid.for_row("learning_path", 8)
         rows = [
-            {"assign_id": 1, "item_id": 7, "item_type": 1, "_course_plan": False},
-            {"assign_id": 1, "item_id": 8, "item_type": 0, "_course_plan": True},
-            {"assign_id": 1, "item_id": 9, "item_type": 0, "_course_plan": False},
+            {"assign_id": 1, "item_id": 7, "item_type": 1, "_learning_path_id": None},
+            {"assign_id": 1, "item_id": 8, "item_type": 0, "_learning_path_id": path},
+            {"assign_id": 1, "item_id": 9, "item_type": 0, "_learning_path_id": None},
         ]
-        lesson, plan, other = assign.TriggersStep().transform(ctx, rows)
+        lesson, course_product, other_product = assign.TriggersStep().transform(ctx, rows)
         self.assertEqual(lesson.values["course_id"], ctx.ulid.for_row("lesson", 7))
-        self.assertEqual(plan.values["plan_id"], ctx.ulid.for_row("payment_item", 8))
-        self.assertEqual((other.values["course_id"], other.values["plan_id"], other.values["item_id"]), (None, None, 9))
+        self.assertIsNone(lesson.values["learning_path_id"])
+        self.assertEqual(
+            (course_product.values["course_id"], course_product.values["plan_id"],
+             course_product.values["learning_path_id"], course_product.values["item_id"]),
+            (None, None, path, 8))
+        self.assertEqual((other_product.values["learning_path_id"], other_product.values["item_id"]), (None, 9))
+
+    def test_trigger_points_only_at_a_migrated_learning_path(self) -> None:
+        """**入っていないコースは結ばない。** 外部キーで行ごと落ちると、きっかけの無いルール
+        （すべての購入で動く）に化ける。レッスンの旧 ID がコースの旧 ID と同じでも結ばない。"""
+        triggers = [
+            {"assign_id": 1, "item_id": 8, "item_type": 0},   # 移したコース
+            {"assign_id": 1, "item_id": 9, "item_type": 0},   # 制約に当たって入らなかったコース
+            {"assign_id": 1, "item_id": 8, "item_type": 1},   # レッスン（講座の旧 ID が 8）
+        ]
+        ctx = make_ctx({"assign_payment_item": triggers})
+        migrated = ctx.ulid.for_row("learning_path", 8)
+        ctx.target.query = lambda sql, params=(): [{"id": migrated}]
+        rows = assign.TriggersStep().extract(ctx)
+        self.assertEqual([r["_learning_path_id"] for r in rows], [migrated, None, None])
 
     def test_deleted_and_invalid_grants_are_kept(self) -> None:
         ctx = make_ctx()

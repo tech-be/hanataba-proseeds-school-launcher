@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 from ...context import RunContext
 from ...core.datetimes import ColumnKind, convert
@@ -101,7 +102,7 @@ def _learning_units(ctx: RunContext) -> dict[int, dict]:
     units: dict[int, dict] = {}
     for unit in source.fetch_joined(
         "user_learning_unit",
-        ("user_learning_unit_id", "user_learning_lesson_id", "unit_id"),
+        ("user_learning_unit_id", "user_learning_lesson_id", "unit_id", "progress_status", "learning_status"),
         parent="user",
         on="ull.user_id = p.user_id",
         via=[
@@ -636,8 +637,47 @@ def _submissions(ctx: RunContext) -> list[dict]:
         unit = units.get(int(report["user_learning_unit_id"]))
         if unit is None:
             continue
-        rows.append({**report, "_user_id": unit["_user_id"]})
+        rows.append({**report, "_user_id": unit["_user_id"],
+                     "_progress_status": unit.get("progress_status"),
+                     "_learning_status": unit.get("learning_status")})
+    latest: dict[int, dict] = {}
+    for row in rows:
+        current = latest.get(int(row["user_learning_unit_id"]))
+        if current is None or _submission_order(row) > _submission_order(current):
+            latest[int(row["user_learning_unit_id"])] = row
+    for row in rows:
+        row["_latest"] = latest[int(row["user_learning_unit_id"])] is row
     return rows
+
+
+def _submission_order(row: dict) -> tuple:
+    return (row.get("submit_date") or row.get("regist_date") or datetime.min, int(row["user_learning_report_id"]))
+
+
+#: 旧の課題の状態（`user_learning_unit.progress_status`。`UserLearningConstants`）→ 新の提出の状態
+REPORT_STATUSES: dict[int, str] = {2: "submitted", 3: "graded", 4: "returned", 5: "under_review"}
+
+
+def submission_status(row: dict) -> str:
+    """提出の状態（03 移行仕様 0-2 Q10）。**旧の状態は学習の行に1つだけで、最新の提出のもの。**
+
+    古い提出（再提出の前のもの）は、評価済みなら差し戻し（`returned`）、評価されていなければ提出のまま。
+    評価した日時があるのに評価待のままの最新の提出は `graded`。
+    """
+    evaluated = row.get("evaluate_date") is not None
+    if not row.get("_latest"):
+        return "returned" if evaluated else "submitted"
+    status = REPORT_STATUSES.get(int(row.get("_progress_status") or 0), "submitted")
+    # **評価した日時があるのに状態が評価待のまま**の提出（2017 年の旧データ。ステージング 1 件）は、添削の行が
+    # できるので採点待ちに戻さない
+    return "graded" if evaluated and status == "submitted" else status
+
+
+def feedback_result(row: dict) -> str:
+    """添削の結果。**旧に合否の列は無く、評価者が学習の状態を修了 / 学習中で付ける**のが実質の合否（Q10）。"""
+    if not row.get("_latest") or int(row.get("_progress_status") or 0) == 4:
+        return "needs_resubmission"
+    return "pass" if int(row.get("_learning_status") or 0) == 1 else "fail"
 
 
 class SubmissionsStep(Step):
@@ -660,7 +700,6 @@ class SubmissionsStep(Step):
         tenant_id = ctx.tenant_id.value
         records: list[Record] = []
         for row in rows:
-            reviewed = row.get("evaluate_date") is not None
             records.append(
                 Record(
                     table="submissions",
@@ -676,7 +715,7 @@ class SubmissionsStep(Step):
                         # 添削に付ける（FeedbackFilesStep）
                         "object_key": None,
                         "body_text": None,
-                        "status": "reviewed" if reviewed else "submitted",
+                        "status": submission_status(row),
                         "reviewer_id": _reviewer(ctx, row),
                         # **NOT NULL。** NULL の行はここで弾かれて一覧に出る
                         "submitted_at": convert(row.get("submit_date"), ColumnKind.DATETIME),
@@ -796,8 +835,7 @@ class SubmissionFeedbacksStep(Step):
                         "body": row.get("user_report_evaltext") or "",
                         "object_key": None,
                         "score": row.get("score"),
-                        # **lw2 の課題に合否の概念が無い。** 点数だけなので「添削済み」を入れる
-                        "result": "reviewed",
+                        "result": feedback_result(row),
                         "question_comments": _question_comments(row),
                         "created_at": convert(row.get("evaluate_date"), ColumnKind.TIMESTAMP),
                     },

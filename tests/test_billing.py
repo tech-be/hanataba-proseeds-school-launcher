@@ -84,20 +84,19 @@ class MigratedTest(unittest.TestCase):
 
 
 class KindTest(unittest.TestCase):
-    """P5: 講座が1つに決まらない購入を course_purchase に入れない。"""
+    """P5: **講座の商品はコースの購入**（2026-10-22。買い切りも自動継続も、講座の数によらず）。"""
 
-    def test_single_course_one_time_is_course_purchase(self) -> None:
-        self.assertEqual(pay.payment_kind(item(), 1), "course_purchase")
-
-    def test_bundle_is_lw2_purchase(self) -> None:
-        self.assertEqual(pay.payment_kind(item(), 2), "lw2_purchase")
-        self.assertEqual(pay.payment_kind(item(), 0), "lw2_purchase")
+    def test_course_item_is_learning_path_purchase(self) -> None:
+        self.assertEqual(pay.payment_kind(item()), "learning_path_purchase")
+        self.assertEqual(pay.payment_kind(item(auto=1)), "learning_path_purchase")
 
     def test_ticket_item_is_lw2_purchase(self) -> None:
-        self.assertEqual(pay.payment_kind(item(item_type=1), 1), "lw2_purchase")
+        self.assertEqual(pay.payment_kind(item(item_type=1)), "lw2_purchase")
+        self.assertEqual(pay.payment_kind(None), "lw2_purchase")
 
-    def test_auto_extension_is_subscription(self) -> None:
-        self.assertEqual(pay.payment_kind(item(auto=1), 3), "subscription")
+    def test_auto_extension_other_than_course_is_subscription(self) -> None:
+        """月次のチケットなど、講座以外の自動継続の商品は今までどおり。"""
+        self.assertEqual(pay.payment_kind(item(item_type=2, auto=1)), "subscription")
 
 
 class PaymentsStepTest(unittest.TestCase):
@@ -110,7 +109,7 @@ class PaymentsStepTest(unittest.TestCase):
         recs = self.records([app(1, 1, 1), app(2, 1, 0), app(3, 1, 2), app(4, 3, 1), app(5, 2, 1)])
         got = {r.values["application_id"]: (r.values["status"], r.values["provider"]) for r in recs}
         self.assertEqual(got, {
-            1: ("succeeded", "legacy_jpayment"), 2: ("pending", "legacy_jpayment"),
+            1: ("succeeded", "legacy_jpayment"), 2: ("failed", "legacy_jpayment"),
             3: ("failed", "legacy_jpayment"), 4: ("succeeded", "bank_transfer"),
             5: ("succeeded", "legacy_jpayment"),
         })
@@ -120,6 +119,19 @@ class PaymentsStepTest(unittest.TestCase):
         [rec] = self.records([app(1, 1, 1, is_cancel=1, cancel_date_time=datetime(2024, 5, 1))])
         self.assertEqual(rec.values["status"], "succeeded")
         self.assertTrue(json.loads(rec.values["settings"])["cancel"]["canceled"])
+
+    def test_auto_extension_is_kept_in_settings(self) -> None:
+        """種類をコースの購入にそろえたので、自動継続だったことは settings に残す（2026-10-22）。"""
+        [rec] = self.records([app(1, 1, 1)], items=(item(auto=1),))
+        self.assertEqual(rec.values["type"], "learning_path_purchase")
+        self.assertTrue(json.loads(rec.values["settings"])["item"]["auto_extension"])
+
+    def test_learning_path_purchase_detail_points_at_the_course_item(self) -> None:
+        ctx = make_ctx(tables([app(1, 1, 1)], (item(item_id=7),), links={1: 7}))
+        step = pay.LearningPathPurchasePaymentsStep()
+        [rec] = step.transform(ctx, step.extract(ctx))
+        self.assertEqual(rec.values["payment_id"], ctx.ulid.for_row("payment_application", 1))
+        self.assertEqual(rec.values["learning_path_id"], ctx.ulid.for_row("learning_path", 7))
 
     def test_skipped_applications_are_not_extracted(self) -> None:
         recs = self.records([app(1, 0, 1, amount=0), app(2, 5, 1, amount=0), app(3, 3, 3)])

@@ -247,7 +247,29 @@ def _tenant_settings(ctx: RunContext) -> dict:
     }
     if not any(out["lw2_functions"].values()):
         out["lw2_functions"] = None
+    out["line"] = _line_settings(out["lw2_config"])
     return {k: v for k, v in out.items() if v is not None}
+
+
+def _line_settings(config: dict | None) -> dict | None:
+    """`application_config` の LINE の列を、新アプリが読む `settings.line` にする（2026-10-22）。
+
+    - `line_chk` → `enabled`（旧も OFF なら LINE でのログイン・登録・連携を止める）
+    - `line_id` → `official_account_id`
+    - `line_channel_id` → `login_channel_id`（シークレットは `tenant_secrets` の
+      `line_login_channel_secret`。`tenant_config.TenantSecretsStep`）
+    - `notification_kinds` は空（旧に対応する設定が無い。新の既定も空 = 流さない）
+
+    旧の値は `lw2_config` にもそのまま残る。行が無ければキーを作らない。
+    """
+    if config is None:
+        return None
+    line: dict = {"enabled": int(config.get("line_chk") or 0) == 1, "notification_kinds": []}
+    for column, key in (("line_id", "official_account_id"), ("line_channel_id", "login_channel_id")):
+        value = config.get(column)
+        if value is not None and str(value) != "":
+            line[key] = str(value)
+    return line
 
 
 def _settings(
@@ -261,6 +283,7 @@ def _settings(
     - `service`  … サービス名・説明・提供期間・サイト URL
     - `features` … 旧のバッチ・機能フラグ（`lw_type` / テスト分析 / ランキング / 日次メール）
     - `lw2_*`    … テナントの設定（`_tenant_settings`）。秘密の値は含まない
+    - `line`     … LINE 連携の設定（`_line_settings`）。新アプリが読む形
     """
     extra = extra or {}
     if not site:

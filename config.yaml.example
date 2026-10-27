@@ -31,6 +31,19 @@ mappings:
   # password:
   #   bcrypt_cost: 10
 
+  # 問い合わせの分類（旧 inquire_cate の ID → 新の既定の分類）。
+  # docs/db/05-support/migration-spec.md 0-9 の Q9。本番では分類名を見て取り直す
+  inquiry_category:
+    source: "ステージング DB の inquire_cate（2026-10-26）"
+    values:
+      1: environment      # システムの操作に関するお問い合わせ（削除済み）
+      1110: environment   # システムに関するご質問
+      2: other            # その他のお問い合わせ（削除済み）
+      1111: other         # bccメールを利用するテスト
+      5: other            # テスト用問合せCareer（削除済み）
+      1114: course_content  # Revit基礎講座
+      7: other            # BCCメール設定あり（削除済み。問い合わせ 0 件）
+
   # 都道府県は**書かなければ旧 DB の `pref_master` から引く**（48件。`description` が名称）。
   # ここに values を書いた場合はそちらが優先される。
   # prefecture:
@@ -43,3 +56,10 @@ mappings:
 # 本番では空にして、実際に有るかを確かめること。
 # source:
 #   absent_tables:
+
+# **暫定対応で入れる仮の値。** 旧に元の値が無い列に入れる固定の値（届いたら差し替える）。
+# 書かなければ NULL のまま制約の確認に当たり、その行は移らずに一覧に出る。
+provisional:
+  # アナウンス（旧 `announce`）には件名が無い。お知らせの件名に入れる固定の文言
+  # （docs/db/05-support/migration-spec.md 0-9 の Q3）
+  announce_title: アナウンス

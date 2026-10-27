@@ -120,7 +120,8 @@ class AssignmentsStep(Step):
                         "max_score": None,
                         "due_at": convert(row.get("limit_Date"), ColumnKind.DATETIME),
                         "due_after_days": _positive(row.get("limit_Date_Num")),
-                        "status": "deleted" if int(row.get("del_chk") or 0) == 1 else "published",
+                        # 削除済みは `archived`（2026-10-26 決定。新の課題の状態は draft / published / archived）
+                        "status": "archived" if int(row.get("del_chk") or 0) == 1 else "published",
                         "video_url": _video_url(row),
                         "settings": _settings(row),
                         # **ゼロ日付がステージングで 250件中23件ある。** `created_at` は NOT NULL なので

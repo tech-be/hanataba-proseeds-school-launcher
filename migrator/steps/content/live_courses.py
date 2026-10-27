@@ -4,7 +4,7 @@
 
 - `content.live_host_course` … content.4（ライブ講座）
 - `enrollment.live_host_enrollments` … enrollment.1（受講権限）
-- `billing.live_limit_item_history` … billing.2（決済。`plan_id` が `tenant_plans` を指すため）
+- `billing.live_limit_item_history` … billing.2（決済。旧の商品にまつわる記録。`plan_id` は NULL）
 
 **lw2 のライブは講座に属さない。** 新環境は `courses` → `lessons`(type=live) の階層で、
 `lessons.course_id` が NOT NULL なので、**どの講座に置くかを決めないと1行も入らない。**
@@ -231,20 +231,17 @@ class LimitItemHistoryStep(Step):
 
     新は「商品で制限したライブ」を講座の配下に置くことで表す（`resolve_placement`）ので、
     制限そのものの行を持つ表が無い。旧は保存のたびに旧行を `del_chk = 1` にして積む
-    （ステージング実測 50行のうち45行が削除済み）。**講座の商品なら `plan_id` も入れる**ので、
-    商品（`tenant_plans`）が入る課金の2で流す。
+    （ステージング実測 50行のうち45行が削除済み）。`plan_id` は NULL（2026-10-23 から。旧の商品は
+    `tenant_plans` に移さない）。どの商品かは `item_id` に残す。流すのは今までどおり課金の2。
     """
 
     name = "billing.live_limit_item_history"
     description = "ライブを予約できる商品の全行を旧の形のまま移す"
     source_table = "live_lesson_limit_item"
     target_table = "live_lesson_limit_item_history"
-    depends_on = ("content.live_lessons", "billing.plans")
+    depends_on = ("content.live_lessons",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        from ..billing.payments import COURSE_ITEM, items
-
-        catalog = items(ctx)
         rows = ctx.require_source().fetch_joined(
             "live_lesson_limit_item",
             ("live_lesson_id", "item_id", "del_chk", "regist_date", "update_date"),
@@ -261,8 +258,6 @@ class LimitItemHistoryStep(Step):
             base = (int(row["live_lesson_id"]), int(row["item_id"]), str(row.get("regist_date")))
             seen[base] = seen.get(base, 0) + 1
             row["_key"] = f"{base[0]}:{base[1]}:{base[2]}:{seen[base]}"
-            item = catalog.get(int(row["item_id"]))
-            row["_course_plan"] = item is not None and int(item.get("item_type") or 0) == COURSE_ITEM
         return rows
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
@@ -276,9 +271,7 @@ class LimitItemHistoryStep(Step):
                     "lesson_id": ctx.ulid.for_row("live_lesson", int(row["live_lesson_id"])),
                     "live_lesson_id": int(row["live_lesson_id"]),
                     "item_id": int(row["item_id"]),
-                    "plan_id": (
-                        ctx.ulid.for_row("payment_item", int(row["item_id"])) if row["_course_plan"] else None
-                    ),
+                    "plan_id": None,  # 旧の商品は tenant_plans に移さない（2026-10-23）
                     "del_chk": int(row.get("del_chk") or 0) == 1,
                     "regist_date": convert(row.get("regist_date"), ColumnKind.DATETIME),
                     "update_date": convert(row.get("update_date"), ColumnKind.DATETIME),
@@ -296,7 +289,7 @@ def host_course() -> list[Step]:
 
 
 def limit_item_history() -> list[Step]:
-    """課金の2で流す（`plan_id` が `tenant_plans` を指すため）。"""
+    """課金の2で流す（決済と同じ、旧の商品にまつわる記録として）。"""
     return [LimitItemHistoryStep()]
 
 

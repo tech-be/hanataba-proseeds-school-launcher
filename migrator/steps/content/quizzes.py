@@ -19,6 +19,16 @@ lw2 は `question`（テナント直下の**共有問題バンク**）から、`
 順番どおりに出る。どうするかは cutover 前に決める（school-launcher の
 `docs/scrun-etl-design.md` 11-21）。
 
+**2026-10-26 の見直し**（02 の移行仕様 0-3 の Q8・Q10・Q11）。新は問題バンクと出題条件を読まず、
+`quiz_questions` の固定の一覧だけで出題するので、**旧で出うる問題を設問として入れる**（`plan_questions`）:
+
+- 固定出題（0）… 旧どおり**先頭の N 問だけ**（`LIMIT set_question_no`）
+- 固定問題からランダム（1）… **全問**（合格点は割合に直すので意味は保てる）
+- カテゴリからランダム（2）… **候補の問題をすべて**展開する
+- 採点できない設問（選択肢 0 件・正解の番号が範囲外の選択式）は移さない
+- 設問が 1 件も無くなるテスト（出題条件なし・テスト以外のユニットのテストなど）は移さない
+- 出題条件と問題バンクは今どおり残す（記録として）
+
 **`test_sub_type_id` で意味が変わる**（`UserLearningLessonModel::208-275`）。
 
 - `0` 固定問題よりそのまま出題 … `test_sub_question` の順に N 問
@@ -123,6 +133,95 @@ FIXED_SUB_TYPES = frozenset({0, 1})
 
 #: **`unit` → `lesson` で絞るときの経路。** `test` も `test_sub` も `tenant_id` を持たない
 _VIA_UNIT = [("unit", "u", "c.unit_id = u.unit_id")]
+
+
+NOT_MIGRATED = "移行対象外"
+UNSCORABLE = "旧データの不整合"
+NO_QUESTIONS_DETAIL = "設問が 1 件も無いテスト（出題条件なし・テスト以外のユニット・問題の無い固定出題。旧でも受験できない）"
+NOT_ASKED_DETAIL = "固定出題の先頭 N 問より後ろ（旧では出題されない）"
+DELETED_DETAIL = "削除済みの出題条件・設問（旧では出題されない）"
+UNSCORABLE_DETAIL = "採点できない設問（選択肢が 0 件、または正解の番号が選択肢の範囲外）"
+QUIZ_UNIT_TYPE = 2
+
+
+def scorable(question: dict) -> bool:
+    """新で採点できる設問か。**選択式は選択肢が 1 件以上・正解が範囲内に 1 件以上。**記述式は常に可。"""
+    if QUESTION_TYPES.get(int(question.get("question_type_id") or 0)) == "free_text":
+        return True
+    count = int(question.get("selection_num") or 0)
+    correct = {n for n in _correct_numbers(question.get("answer")) if 1 <= n <= count}
+    return count > 0 and bool(correct)
+
+
+def plan_questions(subs: list[dict], links: list[dict], questions: dict[int, dict]) -> tuple[dict[int, list[dict]], list[tuple[int, str, str, str]]]:
+    """テストごとに入れる設問（並び順つき）と、入れない行（テスト, キー, 理由, 詳細）。
+
+    設問の行は `{"_sub", "_question", "question_id", "_sort", "test_sub_question_id"}`。並び順は
+    テストの中で「出題条件の `sort_no` → 条件の中の順」の通し番号（1 から）。
+    """
+    by_sub: dict[int, list[dict]] = {}
+    for link in links:
+        by_sub.setdefault(int(link["test_sub_id"]), []).append(link)
+    plan: dict[int, list[dict]] = {}
+    dropped: list[tuple[int, str, str, str]] = []
+    for sub in sorted(subs, key=lambda r: (int(r["test_id"]), int(r.get("sort_no") or 0), int(r["test_sub_id"]))):
+        sub_type = int(sub.get("test_sub_type_id") or 0)
+        count = int(sub.get("set_question_no") or 0)
+        rows = plan.setdefault(int(sub["test_id"]), [])
+        sub_links = by_sub.get(int(sub["test_sub_id"]), [])
+        if int(sub.get("del_chk") or 0):
+            for link in sub_links:
+                dropped.append((int(sub["test_id"]), str(link["test_sub_question_id"]), NOT_MIGRATED, DELETED_DETAIL))
+            continue
+        if sub_type in FIXED_SUB_TYPES:
+            ordered = sorted(sub_links, key=lambda r: (int(r.get("sort_no") or 0), int(r["test_sub_question_id"])))
+            for link in ordered:
+                if int(link.get("del_chk") or 0):
+                    dropped.append((int(sub["test_id"]), str(link["test_sub_question_id"]), NOT_MIGRATED, DELETED_DETAIL))
+            ordered = [link for link in ordered
+                       if int(link["question_id"]) in questions and not int(link.get("del_chk") or 0)]
+            if sub_type == 0 and count > 0:
+                for link in ordered[count:]:
+                    dropped.append((int(sub["test_id"]), str(link["test_sub_question_id"]), NOT_MIGRATED, NOT_ASKED_DETAIL))
+                ordered = ordered[:count]
+            picked = [(questions[int(link["question_id"])], int(link["test_sub_question_id"])) for link in ordered]
+        else:
+            # カテゴリ（とレベル）の範囲の問題すべて。削除済みの問題は旧でも出ない
+            cate, level = sub.get("question_cate_id"), sub.get("question_level_id")
+            picked = [
+                (q, None) for q in sorted(questions.values(), key=lambda q: int(q["question_id"]))
+                if cate is not None and int(q.get("question_cate_id") or 0) == int(cate)
+                and (not level or int(q.get("question_level_id") or 0) == int(level))
+                and not int(q.get("del_chk") or 0)
+            ]
+        for question, link_id in picked:
+            key = str(link_id) if link_id is not None else f"{sub['test_sub_id']}:{question['question_id']}"
+            if not scorable(question):
+                dropped.append((int(sub["test_id"]), key, UNSCORABLE, UNSCORABLE_DETAIL))
+                continue
+            rows.append({
+                "_sub": sub, "_question": question, "question_id": int(question["question_id"]),
+                "test_sub_question_id": key, "_sort": len(rows) + 1,
+            })
+    return plan, dropped
+
+
+def _fetch_plan_inputs(ctx: RunContext) -> tuple[list[dict], list[dict], dict[int, dict]]:
+    source = ctx.require_source()
+    links = source.fetch_joined(
+        "test_sub_question", TEST_SUB_QUESTION_COLUMNS, parent="lesson", on="u.lesson_id = p.lesson_id",
+        via=[("test_sub", "s", "c.test_sub_id = s.test_sub_id"), ("test", "t", "s.test_id = t.test_id"),
+             ("unit", "u", "t.unit_id = u.unit_id")],
+    )
+    subs = source.fetch_joined(
+        "test_sub", TEST_SUB_COLUMNS, parent="lesson", on="u.lesson_id = p.lesson_id",
+        via=[("test", "t", "c.test_id = t.test_id"), ("unit", "u", "t.unit_id = u.unit_id")],
+    )
+    questions = {
+        int(q["question_id"]): q
+        for q in source.fetch_for_tenant("question", QUESTION_COLUMNS + _SELECTION_COLUMNS)
+    }
+    return subs, links, questions
 
 
 class QuizQuestionCategoriesStep(Step):
@@ -301,9 +400,24 @@ class QuizzesStep(Step):
     depends_on = ("content.quiz_question_banks",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        return ctx.require_source().fetch_joined(
+        from .lessons import _fetch_units
+
+        tests = ctx.require_source().fetch_joined(
             "test", TEST_COLUMNS, parent="lesson", on="u.lesson_id = p.lesson_id", via=_VIA_UNIT
         )
+        units = _fetch_units(ctx)
+        unit_types = {int(u["unit_id"]): int(u["unit_type_id"]) for u in units}
+        titles = {int(u["unit_id"]): (u.get("title") or "").strip() for u in units}
+        plan, _ = plan_questions(*_fetch_plan_inputs(ctx))
+        kept = []
+        for row in tests:
+            # **設問が 1 件も無いテストは移さない**（Q8。新は設問 0 件のテストを受験できない）。
+            # テスト以外のユニット（アンケート・講義）に付いたテストも、中身が無いので同じ
+            if unit_types.get(int(row["unit_id"])) != QUIZ_UNIT_TYPE or not plan.get(int(row["test_id"])):
+                self.drop("quizzes", str(row["test_id"]), NOT_MIGRATED, NO_QUESTIONS_DETAIL)
+                continue
+            kept.append({**row, "_unit_title": titles.get(int(row["unit_id"]), "")})
+        return kept
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         tenant_id = ctx.tenant_id.value
@@ -319,8 +433,10 @@ class QuizzesStep(Step):
                         "id": ctx.ulid.for_row("test", row["test_id"]),
                         "tenant_id": tenant_id,
                         "lesson_id": ctx.ulid.for_row("unit", unit_id),
-                        # 旧 `test` にテスト名が無い。ユニット名が画面の見出しになる
-                        "title": "",
+                        # **旧 `test` にテスト名が無い。ユニット名（＝レッスンの題）を入れる。** 旧の画面ではユニット名が
+                        # テストの名前として出ていた。空だと新は題が必須で、運営がテストを保存すると 400
+                        # （02 の Q-06。2026-10-26 決定）
+                        "title": row.get("_unit_title") or "",
                         "description": row.get("exam_pre_message"),
                         "passing_score": int(row.get("pass_score") or 0),
                         # **旧は分、新は秒。** 換算を落とすと制限時間が 1/60 になる
@@ -414,52 +530,28 @@ class QuizQuestionsStep(Step):
     depends_on = ("content.quiz_question_rules",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
+        from .lessons import _fetch_units
+
         source = ctx.require_source()
-        links = source.fetch_joined(
-            "test_sub_question",
-            TEST_SUB_QUESTION_COLUMNS,
-            parent="lesson",
-            on="u.lesson_id = p.lesson_id",
-            via=[
-                ("test_sub", "s", "c.test_sub_id = s.test_sub_id"),
-                ("test", "t", "s.test_id = t.test_id"),
-                ("unit", "u", "t.unit_id = u.unit_id"),
-            ],
+        plan, dropped = plan_questions(*_fetch_plan_inputs(ctx))
+        tests = source.fetch_joined(
+            "test", ("test_id", "unit_id"), parent="lesson", on="u.lesson_id = p.lesson_id", via=_VIA_UNIT
         )
-        subs = {
-            int(s["test_sub_id"]): s
-            for s in source.fetch_joined(
-                "test_sub",
-                TEST_SUB_COLUMNS,
-                parent="lesson",
-                on="u.lesson_id = p.lesson_id",
-                via=[
-                    ("test", "t", "c.test_id = t.test_id"),
-                    ("unit", "u", "t.unit_id = u.unit_id"),
-                ],
-            )
-        }
-        questions = {
-            int(q["question_id"]): q
-            for q in source.fetch_for_tenant("question", QUESTION_COLUMNS + _SELECTION_COLUMNS)
-        }
-        rows: list[dict] = []
-        for link in links:
-            sub = subs.get(int(link["test_sub_id"]))
-            question = questions.get(int(link["question_id"]))
-            if sub is None or question is None:
-                # 親が読めない行。**親が移らなければ子も移らない**ので落とす
-                continue
-            if int(sub.get("test_sub_type_id") or 0) not in FIXED_SUB_TYPES:
-                continue
-            rows.append({**link, "_sub": sub, "_question": question})
+        unit_types = {int(u["unit_id"]): int(u["unit_type_id"]) for u in _fetch_units(ctx)}
+        # QuizzesStep と同じ規則（テストのユニットで、設問が 1 件以上ある）
+        migrated = {int(t["test_id"]) for t in tests
+                    if unit_types.get(int(t["unit_id"])) == QUIZ_UNIT_TYPE and plan.get(int(t["test_id"]))}
+        # 移すテストの分だけ一覧に出す（移さないテストの設問は、テストごと一覧に出ている）
+        for test_id, key, reason, detail in dropped:
+            if test_id in migrated:
+                self.drop("quiz_questions", key, reason, detail)
         # **移すカテゴリだけを設問に付ける。** 無い分類を指すと外部キーに当たり、
         # 設問ごと移らなくなる（分類は任意なので、無ければ付けない）
         self._categories = {
             int(r["question_cate_id"])
             for r in source.fetch_for_tenant("question_cate", ("question_cate_id",))
         }
-        return rows
+        return [row for test_id, rows in sorted(plan.items()) if test_id in migrated for row in rows]
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         tenant_id = ctx.tenant_id.value
@@ -467,7 +559,7 @@ class QuizQuestionsStep(Step):
         for row in rows:
             sub, question = row["_sub"], row["_question"]
             _check_type(question)
-            sort_no = int(row.get("sort_no") or 0)
+            sort_no = _sort_of(row)
             records.append(
                 Record(
                     table="quiz_questions",
@@ -480,7 +572,8 @@ class QuizQuestionsStep(Step):
                         "category_id": self._category_of(ctx, question.get("question_cate_id")),
                         "body": question.get("question_text") or "",
                         "type": QUESTION_TYPES[int(question["question_type_id"])],
-                        "points": int(sub.get("score_per_question") or 0) or 1,
+                        # 旧の値のまま（0 を 1 に変えない。ステージングで 0 は 0 件。Q11）
+                        "points": int(sub.get("score_per_question") or 0),
                         "sort_order": sort_no,
                         "explanation": question.get("answer_explanation"),
                         "name": question.get("question_name"),
@@ -489,11 +582,10 @@ class QuizQuestionsStep(Step):
                         "image_url": None,  # L9 の移送待ち
                     },
                     natural_key=("id",),
-                    source_key=int(row["test_sub_question_id"]),
+                    source_key=row["test_sub_question_id"],
                 )
             )
         return records
-
 
     def _category_of(self, ctx: RunContext, legacy_id: object) -> str | None:
         categories = getattr(self, "_categories", None)
@@ -534,9 +626,7 @@ class QuizOptionsStep(Step):
         for row in rows:
             sub, question = row["_sub"], row["_question"]
             question_type = QUESTION_TYPES[int(question["question_type_id"])]
-            question_ulid = _question_ulid(
-                ctx, sub["test_sub_id"], row["question_id"], int(row.get("sort_no") or 0)
-            )
+            question_ulid = _question_ulid(ctx, sub["test_sub_id"], row["question_id"], _sort_of(row))
             if question_type == "free_text":
                 # **記述式は `answer` が正解候補そのもの。** 候補1件 = 1行で入れる
                 records.extend(
@@ -592,6 +682,11 @@ def _question_ulid(ctx: RunContext, sub_id: object, question_id: object, sort_no
     **大問を含めるほうが元の構造に忠実**。
     """
     return ctx.ulid.for_row("test_sub_question", f"{int(sub_id)}:{int(question_id)}:{sort_no}")
+
+
+def _sort_of(row: dict) -> int:
+    """設問の並び。`plan_questions` が付けた通し番号（無ければ旧の `sort_no`）。"""
+    return int(row.get("_sort") or row.get("sort_no") or 0)
 
 
 def _category_id(ctx: RunContext, legacy_id: object) -> str | None:

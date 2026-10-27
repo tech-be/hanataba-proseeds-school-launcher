@@ -55,7 +55,7 @@ class RightsTest(unittest.TestCase):
     def test_cancel_chk_is_not_a_cancellation(self) -> None:
         """**`cancel_chk = 1` を取り消しにしない。**
 
-        作成時に定数で入るだけの列で、UPDATE されない。取り消しと読むと
+        毎月の自動延長の対象から外す印で、受講できるかは期限で決まる。取り消しと読むと
         実測 3,684 行中 3,064 行（83%）が `canceled` になる。
         """
         [rec] = self._records([authority(cancel_chk=1, del_chk=0)])
@@ -174,22 +174,30 @@ class RightsTest(unittest.TestCase):
 
 
 class SubscriptionRightsTest(unittest.TestCase):
-    """**自動継続は期限で切らない。** lw2 の判定は `is_cancel IS NULL` だけ。"""
+    """**自動継続も期限で切る**（2026-10-23。sync-issues B6）。
+
+    旧の受講可否は `authority_end_date >= 今日`（`LessonModel::1363`）で、自動継続の期限は
+    毎日のバッチが1か月ずつ延ばしている。無期限にすると、cutover 後に継続課金を止めても受講が止まらない。
+    """
 
     def _records(self, rows):
         ctx = make_ctx()
         return en_rights.EnrollmentRightsStep().transform(ctx, rows)
 
-    def test_live_subscription_ignores_past_expiry(self) -> None:
-        """**ここが本丸。** 期限が過去でも未解約なら受講できる。
+    def test_live_subscription_keeps_the_paid_month_end(self) -> None:
+        """**ここが本丸。** 未解約でも、いま払っている1か月の終わりを期限にする（無期限にしない）。"""
+        [rec] = self._records([authority(
+            authority_end_date=date(2037, 12, 31), _auto_extension=1, _is_cancel=None)])
+        self.assertEqual(rec.values["status"], "active")
+        self.assertEqual(rec.values["expires_at"], datetime(2037, 12, 31, 14, 59, 59))
+        self.assertFalse(json.loads(rec.values["settings"])["unlimited"])
 
-        期限をそのまま写すと、**いま受講できている人が失効扱いになる**
-        （ステージング実測で 249 組が該当した）。
-        """
+    def test_live_subscription_past_expiry_is_expired(self) -> None:
+        """**延長されなかった期限は、旧でも受講できない。** 申込の無い自動継続の権限（ステージング 228組）が該当する。"""
         [rec] = self._records([authority(
             authority_end_date=date(2021, 1, 1), _auto_extension=1, _is_cancel=None)])
-        self.assertEqual(rec.values["status"], "active")
-        self.assertIsNone(rec.values["expires_at"])
+        self.assertEqual(rec.values["status"], "expired")
+        self.assertEqual(rec.values["expires_at"], datetime(2021, 1, 1, 14, 59, 59))
 
     def test_canceled_subscription_is_revoked_not_expired(self) -> None:
         """解約済みは `revoked`。**期限切れ（`expired`）ではない。**"""
@@ -197,23 +205,23 @@ class SubscriptionRightsTest(unittest.TestCase):
             authority_end_date=date(2021, 1, 1), _auto_extension=1, _is_cancel=1)])
         self.assertEqual(rec.values["status"], "revoked")
 
-    def test_one_live_subscription_wins_over_expired_rows(self) -> None:
-        """**lw2 の判定は OR。** 1つでも生きていれば受講できる。"""
+    def test_latest_expiry_wins(self) -> None:
+        """**lw2 は MAX() を取る。** 買い切りと自動継続が重なれば、遅いほうの期限。"""
         [rec] = self._records([
             authority(authority_id=1, authority_end_date=date(2021, 1, 1), _auto_extension=0),
-            authority(authority_id=2, authority_end_date=date(2021, 1, 1),
+            authority(authority_id=2, authority_end_date=date(2037, 12, 31),
                       _auto_extension=1, _is_cancel=None),
         ])
         self.assertEqual(rec.values["status"], "active")
-        self.assertIsNone(rec.values["expires_at"])
+        self.assertEqual(rec.values["expires_at"], datetime(2037, 12, 31, 14, 59, 59))
 
-    def test_original_expiry_is_kept_in_settings(self) -> None:
-        """期限を写さない代わりに、元の値を残す。"""
+    def test_subscription_is_marked_in_settings(self) -> None:
+        """自動継続だったことを残す（cutover 後に延長・取り消しの対象を探すのに使う）。"""
         [rec] = self._records([authority(
             authority_end_date=date(2021, 1, 1), _auto_extension=1)])
         settings = json.loads(rec.values["settings"])
         self.assertTrue(settings["subscription"])
-        self.assertIn("2021-01-01", settings["legacy_authority_end_dates"])
+        self.assertNotIn("legacy_authority_end_dates", settings)
 
     def test_non_subscription_still_expires(self) -> None:
         """買い切りは従来どおり期限で切れる。"""

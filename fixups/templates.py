@@ -26,7 +26,8 @@ def build(tasks: list[Task], context: dict[str, dict], path: Path, propose: bool
         if task.how != OVERRIDE:
             continue
         groups = _groups(task, context) if propose else {}
-        for key in sorted(task.keys, key=lambda k: int(k) if k.isdigit() else 0):
+        keys = _with_group_members(task, groups) if propose else set(task.keys)
+        for key in sorted(keys, key=lambda k: int(k) if k.isdigit() else 0):
             row = context.get(key, {})
             value, why = _propose(task, key, row, groups) if propose else ("", "")
             memo = _memo(task, row)
@@ -44,10 +45,21 @@ def build(tasks: list[Task], context: dict[str, dict], path: Path, propose: bool
 def _groups(task: Task, context: dict[str, dict]) -> dict:
     """同じ値を共有している会員をまとめる（重複の扱いを決めるのに要る）。"""
     if task.kind == "email-duplicate":
-        out: dict[str, list[str]] = {}
+        # **一覧に出なかった会員も組に入れる。** 投入では組の 1 人目が入り、2 人目以降だけが
+        # UNIQUE に当たって一覧に出る。一覧の会員だけで組を作ると、入った会員を知らずに
+        # 「残す 1 人」を選び、その 1 人がまた当たる。削除済みの会員はメールが NULL で入るので外す
+        mails = {str(context.get(k, {}).get("mail_add") or "").strip().lower() for k in task.keys}
+        mails.discard("")
+        out: dict[str, list[dict]] = {}
+        for key, row in context.items():
+            mail = str(row.get("mail_add") or "").strip().lower()
+            if mail in mails and not int(row.get("del_chk") or 0):
+                out.setdefault(mail, []).append({**row, "user_id": key})
         for key in task.keys:
-            mail = str(context.get(key, {}).get("mail_add") or "").lower()
-            out.setdefault(mail, []).append(key)
+            row = context.get(key, {"user_id": key})
+            mail = str(row.get("mail_add") or "").strip().lower()
+            if not any(str(r["user_id"]) == key for r in out.get(mail, [])):
+                out.setdefault(mail, []).append({**row, "user_id": key})
         return out
     if task.kind == "line-duplicate":
         out_rows: dict[str, list[dict]] = {}
@@ -58,11 +70,20 @@ def _groups(task: Task, context: dict[str, dict]) -> dict:
     return {}
 
 
+def _with_group_members(task: Task, groups: dict) -> set[str]:
+    """重複の組の会員すべて（一覧に出なかった、先に入った会員も値を決める対象にする）。"""
+    keys = set(task.keys)
+    if task.kind == "email-duplicate":
+        for group in groups.values():
+            keys.update(str(r["user_id"]) for r in group)
+    return keys
+
+
 def _propose(task: Task, key: str, row: dict, groups: dict) -> tuple[str, str]:
     if task.kind == "email-missing":
         return proposals.for_missing_email(key, row)
     if task.kind == "email-duplicate":
-        group = groups.get(str(row.get("mail_add") or "").lower(), [key])
+        group = groups.get(str(row.get("mail_add") or "").strip().lower(), [{**row, "user_id": key}])
         return proposals.for_duplicate_email(key, row, group)
     if task.kind == "line-duplicate":
         group = groups.get(str(row.get("line_id") or ""), [row])

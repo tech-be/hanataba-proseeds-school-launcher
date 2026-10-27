@@ -6,11 +6,17 @@
 **残高1行 = 付与1行。** lw2 の `user_ticket.ticket_num` は**すでに引かれたあとの残高**で、
 「何枚配って何枚使ったか」を持たない。`quantity` と `remaining_quantity` に同じ値を入れる。
 
-**消費の台帳行は移行時に作る**（2026-09-24 決定）。lw2 の `user_ticket_log` は
-`grant_id` も符号も持たず再生できないが、**台帳が空だとキャンセルしてもチケットが戻らない**
-（`RefundForReservation` が `ticket_ledger_entries` から引いた枚数を読む）。
-席を占める予約に対して `consumed` を1行作る。**`remaining_quantity` は減らさない** —
-旧の残高が既に引かれたあとの値なので、引くと二重に減る。
+lw2 のチケットは 3 種類（docs/db/04-billing/migration-spec.md 0-1）。
+
+- **専用チケット**（`ticket_id` と `authority_id` あり）… 予約 1 回で **1 枚**。期限は結び付く権限の期間
+  （`LiveLessonModel:4858-4892`。`ticket_end_date` は全テナントで空）。申込の `payment_type = 7`
+- **回数チケット**（`ticket_id` が NULL）… 予約 1 回でライブの商品の `ticket_price` 枚。`payment_type = 5`。
+  **種別が無いので、運営の回答（確認事項 D22）まで移さない**（一覧に出す）
+- **月チケット**（`month_user_ticket`）… 予約 1 回で 1 枚。`payment_type = 6`（`extras.py`）
+
+**消費の台帳行は、開催が未来でチケットで払った予約にだけ作る**（0-2 Q4）。台帳はキャンセルで
+チケットを戻すため（`RefundForReservation` が予約の `consumed` の行から戻す枚数を数える）だけにあり、
+過去の予約はキャンセルできない。**`remaining_quantity` は減らさない** — 旧の残高が既に引かれたあとの値。
 """
 
 from __future__ import annotations
@@ -53,8 +59,15 @@ RESERVE_COLUMNS = (
 
 #: チケットを保持したままの status。**`live_reservation_statuses.occupies_seat = 1` と揃える**
 #: （`reserved` / `attended` / `no_show`）。**欠席でもチケットは消費済み** — lw2 は予約時に
-#: 引き、来なくても戻さない。`canceled` と `host_canceled` は席を解放するので対象外
+#: 引き、来なくても戻さない。`canceled` は席を解放するので対象外
 HOLDS_SEAT = frozenset({"reserved", "attended", "no_show"})
+
+#: キャンセルでチケットを戻す期限（`ticket_types.refund_deadline_days`）。0 は開始まで（旧と同じ）
+REFUND_UNTIL_START = 0
+#: 専用チケットで予約 1 回に引く枚数
+EXCLUSIVE_COST = 1
+#: チケットで払った予約の申込（`payment_application.payment_type`）。5 回数・6 月・7 専用
+TICKET_PAYMENTS = {5: "count", 6: "monthly", 7: "exclusive"}
 
 
 def _live_ulid(ctx: RunContext, live_lesson_id: object) -> str:
@@ -103,7 +116,10 @@ class TicketTypesStep(Step):
                     "legacy_ticket_type": row.get("ticket_type"),
                     "name": row.get("ticket_name") or "",
                     "description": None,
-                    "refund_deadline_days": None,  # 旧に対応なし
+                    # **キャンセルしたら開始まで戻す（0）。** 旧はキャンセルを受け付けたら回数・月・専用のどのチケットも
+                    # 必ず戻していた（`default/LiveLessonController.php` のキャンセル）。キャンセルできる期限は開催回の
+                    # 設定で別に決まる。NULL だと新は戻さない（04 移行仕様 0-4。2026-10-27 決定）
+                    "refund_deadline_days": REFUND_UNTIL_START,
                     "active": int(row.get("del_chk") or 0) == 0,
                     "deprecated_at": (
                         convert(row.get("regist_date"), ColumnKind.DATETIME)
@@ -183,9 +199,11 @@ class TicketTypeLessonsStep(Step):
 
 
 class TicketRequirementsStep(Step):
-    """`live_lesson.item_ticket_price` を `live_lesson_ticket_requirements` に移す。
+    """チケットの要るライブを `live_lesson_ticket_requirements` に移す。
 
-    **`item_ticket_price = 0` は行を作らない**（`chk_lltr_cost (cost >= 1)` に当たるため）。
+    **予約 1 回で引くのは専用チケット 1 枚**（`cost = 1`。0-2 Q3）。`live_lesson.item_ticket_price` は
+    講座の権限を持つ会員に**配る枚数**で、予約で引く枚数ではない（`admin/LiveLessonController:592, 1078-1100`）。
+    **`item_ticket_price = 0` のライブは行を作らない**（配っていない＝専用チケットを使わない）。
     行が無い = チケット不要。
 
     **種別は `ticket_limit_lesson` から逆引きする。** 旧はライブ側に種別を持たないので、
@@ -235,7 +253,7 @@ class TicketRequirementsStep(Step):
                     "lesson_id": _live_ulid(ctx, row["live_lesson_id"]),
                     "tenant_id": tenant_id,
                     "ticket_type_id": ctx.ulid.for_row("ticket", row["_ticket_id"]),
-                    "cost": int(row["item_ticket_price"]),
+                    "cost": EXCLUSIVE_COST,
                 },
                 natural_key=("lesson_id",),
                 source_key=int(row["live_lesson_id"]),
@@ -288,7 +306,8 @@ class ReservationsStep(Step):
 
     **3フラグを `status` に畳むが、元の値は `settings` に残す。**
 
-    - `stop_chk = 1` … 開催側の中止。**`canceled`（受講者都合）と混ぜない**ので `host_canceled`
+    - `stop_chk = 1` … 開催側の中止。`canceled` にし、`settings.stop_chk` で受講者のキャンセルと区別する
+      （新の画面は `host_canceled` を扱えない。03 移行仕様 0-2 Q13）
     - `cancel_chk = 1` … 受講者がキャンセル
     - `attendance_chk = 1` … 出席
     - いずれでもなく開催回が過去 … `no_show`、未来 … `reserved`
@@ -360,15 +379,38 @@ class ReservationsStep(Step):
 
 
 def _status(row: dict, starts, now) -> str:
-    if int(row.get("stop_chk") or 0) == 1:
-        return "host_canceled"
-    if int(row.get("cancel_chk") or 0) == 1:
+    if int(row.get("stop_chk") or 0) == 1 or int(row.get("cancel_chk") or 0) == 1:
         return "canceled"
     if int(row.get("attendance_chk") or 0) == 1:
         return "attended"
     if starts is not None and starts < now:
         return "no_show"
     return "reserved"
+
+
+def _authority_periods(ctx: RunContext) -> dict[int, dict]:
+    """`authority_id` → 権限の期間。**削除済みの権限も期間はそのまま**（旧も期間で判定する）。"""
+    sql = (
+        "SELECT c.`authority_id`, c.`authority_start_date`, c.`authority_end_date` "
+        "FROM `payment_item_lesson_authority` AS c INNER JOIN `user` AS u ON u.user_id = c.user_id "
+        "WHERE u.tenant_id = %s"
+    )
+    rows = ctx.require_source().fetch("payment_item_lesson_authority", sql, (ctx.config.tenant.legacy_id,))
+    return {int(r["authority_id"]): r for r in rows}
+
+
+def grant_period(row: dict) -> tuple:
+    """(期限, 利用開始)。**旧の専用チケットは権限の期間で使えるかを決める**（`LiveLessonModel:4858-4892`）。
+
+    権限が引けなければ残高の行の日付（全テナントで空）。期限は終了日の終わり（JST）。
+    """
+    period = row.get("_period")
+    if period:
+        end, start = period.get("authority_end_date"), period.get("authority_start_date")
+    else:
+        end, start = row.get("ticket_end_date"), row.get("ticket_start_date")
+    return (convert_date(end, ColumnKind.DATETIME, DateBoundary.END),
+            convert_date(start, ColumnKind.DATETIME, DateBoundary.START))
 
 
 class TicketGrantsStep(Step):
@@ -381,15 +423,26 @@ class TicketGrantsStep(Step):
     depends_on = ("billing.ticket_requirements",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        return ctx.require_source().fetch_joined(
+        rows = ctx.require_source().fetch_joined(
             "user_ticket", USER_TICKET_COLUMNS, parent="user", on="c.user_id = p.user_id"
         )
+        periods = _authority_periods(ctx)
+        kept = []
+        for row in rows:
+            if row.get("ticket_id") is None:
+                self.drop("ticket_grants", f"{row['user_id']}:None:{row.get('authority_id')}", "受け皿なし",
+                          f"種別の無い回数チケット（残 {int(row.get('ticket_num') or 0)} 枚）。新はチケットに種別が要る。"
+                          "種別を決めるまで移さない（確認事項 D22）")
+                continue
+            kept.append({**row, "_period": periods.get(row.get("authority_id"))})
+        return kept
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         tenant_id = ctx.tenant_id.value
         records: list[Record] = []
         for row in rows:
             quantity = int(row.get("ticket_num") or 0)
+            expires_at, starts_at = grant_period(row)
             records.append(
                 Record(
                     table="ticket_grants",
@@ -407,13 +460,9 @@ class TicketGrantsStep(Step):
                         # `chk_tg_qty (quantity >= 1)` に当たる 0 枚の行は移らない
                         "quantity": quantity,
                         "remaining_quantity": quantity,
-                        # date → datetime。**終了日なので日の終わりを補う**
-                        "expires_at": convert_date(
-                            row.get("ticket_end_date"), ColumnKind.DATETIME, DateBoundary.END
-                        ),
-                        "starts_at": convert_date(
-                            row.get("ticket_start_date"), ColumnKind.DATETIME, DateBoundary.START
-                        ),
+                        # **専用チケットの期限は結び付く権限の期間**（0-2 Q1）
+                        "expires_at": expires_at,
+                        "starts_at": starts_at,
                         "source": "manual",
                         # 有料受講権限。旧 `authority_id` との対応付けをまだ実装していないので、いまは入れない
                         "source_ref": None,
@@ -427,8 +476,18 @@ class TicketGrantsStep(Step):
         return records
 
 
+def _ticket_payments(ctx: RunContext) -> dict[int, str]:
+    """予約 → 払ったチケットの種類（`payment_application.live_lesson_reserve_id`。5 回数・6 月・7 専用）。"""
+    sql = (
+        "SELECT c.`live_lesson_reserve_id`, c.`payment_type` FROM `payment_application` AS c "
+        "WHERE c.tenant_id = %s AND c.live_lesson_reserve_id IS NOT NULL AND c.payment_type IN (5, 6, 7)"
+    )
+    rows = ctx.require_source().fetch("payment_application", sql, (ctx.config.tenant.legacy_id,))
+    return {int(r["live_lesson_reserve_id"]): TICKET_PAYMENTS[int(r["payment_type"])] for r in rows}
+
+
 class TicketLedgerStep(Step):
-    """席を占める予約に `consumed` の台帳行を作る（2026-09-24 決定）。
+    """**開催が未来で、チケットで払った予約**に `consumed` の台帳行を作る（0-2 Q4）。
 
     **lw2 の `user_ticket_log` は再生しない。** `grant_id` も符号も持たないため。
     ここで作るのは**キャンセル時に戻す枚数を決めるための行**で、
@@ -451,10 +510,8 @@ class TicketLedgerStep(Step):
         # ライブ → 必要枚数と種別
         need: dict[int, tuple[int, int]] = {}
         for row in TicketRequirementsStep().extract(ctx):
-            need[int(row["live_lesson_id"])] = (
-                int(row["item_ticket_price"]),
-                int(row["_ticket_id"]),
-            )
+            need[int(row["live_lesson_id"])] = (EXCLUSIVE_COST, int(row["_ticket_id"]))
+        paid_by = _ticket_payments(ctx)
         # 会員 × 種別 → 付与（**使える付与だけ**。0枚の行は移らないので対象外）
         grants: dict[tuple[int, int], dict] = {}
         for row in source.fetch_joined(
@@ -469,6 +526,14 @@ class TicketLedgerStep(Step):
             starts = res["_date"].get("live_lesson_date_from")
             if _status(res, starts, now) not in HOLDS_SEAT:
                 continue  # 席を占めていない予約はチケットを保持していない
+            if starts is None or starts <= now:
+                continue  # 過去の予約はキャンセルできない（戻すことが無い）
+            kind = paid_by.get(int(res["live_lesson_reserve_id"]))
+            if kind is None:
+                continue  # チケットで払っていない予約
+            if kind != "exclusive":
+                unresolved += 1  # 回数・月チケットは種別が決まるまで移していない（D22）
+                continue
             requirement = need.get(int(res["_date"]["live_lesson_id"]))
             if requirement is None:
                 continue  # チケットの要らないライブ
@@ -480,8 +545,9 @@ class TicketLedgerStep(Step):
             out.append({**res, "_cost": cost, "_grant": grant})
         if unresolved:
             ctx.logger.warning(
-                "チケットを使った予約 %d 件で、戻し先の付与が見つからない。"
-                "**キャンセルしてもチケットが戻らない**（種別が無い残高と `ticket_num = 0` の残高は移らないため）",
+                "開催が未来でチケットで払った予約 %d 件で、戻し先の付与が見つからない。"
+                "**キャンセルしてもチケットが戻らない**（回数・月チケットは種別が決まるまで移さない（D22）。"
+                "`ticket_num = 0` の残高も移らない）",
                 unresolved,
             )
         return out

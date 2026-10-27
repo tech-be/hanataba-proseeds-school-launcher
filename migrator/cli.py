@@ -26,7 +26,7 @@ from .logging_setup import setup
 from .overrides import Overrides
 from .phases.registry import bootstrap, build_sections, check_schema, resolve_tenant_id
 from .phases.selection import resolve
-from .validation import legacy_checks, postcheck, preflight, reconcile
+from .validation import legacy_checks, postcheck, preflight, reconcile, spec_checks
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -84,6 +84,9 @@ def main(argv: list[str] | None = None) -> int:
 
         source_conn = connect_module.connect(config.source_dsn) if config.source_dsn else None
         target_conn = connect_module.connect(config.target_dsn) if config.target_dsn else None
+        career_conn = (
+            connect_module.connect(config.target_career_dsn) if config.target_career_dsn else None
+        )
         overrides = Overrides.load(config.overrides_path)
         source = (
             SourceDatabase(source_conn, config.tenant.legacy_id, overrides)
@@ -93,9 +96,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "verify":
             # **照合は書かない。** 行は取っておくだけで、移行先には何も送らない
             target = reconcile.RecordingTarget(target_conn)
+            career = reconcile.RecordingTarget(career_conn) if career_conn else None
         else:
             target = TargetDatabase(target_conn, dry_run=dry_run)
-        ctx = build_context(config, source, target, logger)
+            career = TargetDatabase(career_conn, dry_run=dry_run) if career_conn else None
+        ctx = build_context(config, source, target, logger, career=career)
         ctx.verifying = args.command == "verify"
 
         if args.command == "doctor":
@@ -162,13 +167,22 @@ def _verify(ctx, sections, selected) -> int:
         failed = [c for c in checks if not c.ok]
         print(f"  {len(checks)} 項目 / NG {len(failed)} 項目" if failed else f"  {len(checks)} 項目すべて一致")
 
+    # **テスト仕様のデータの確認。** 新アプリの問い合わせ条件で移行先を見る（各区分の test-spec.md の方式 D）
+    specs = spec_checks.run(ctx, {p.section for p in selected})
+    if specs:
+        print("\n=== テスト仕様のデータの確認 ===")
+        for check in specs:
+            print(f"  {check}")
+        failed = [c for c in specs if not c.ok]
+        print(f"  {len(specs)} 項目 / NG {len(failed)} 項目" if failed else f"  {len(specs)} 項目すべて通過")
+
     if not ctx.tenant_id.resolved:
         ctx.tenant_id.resolve(resolve_tenant_id(ctx))
     postcheck.target_tenant_once(ctx)
     postcheck.no_platform_admin(ctx)
     postcheck.email_unique(ctx)
     print("  テナント・管理者・メールの検証 OK")
-    return 0 if result.ok and all(c.ok for c in checks) else 1
+    return 0 if result.ok and all(c.ok for c in checks) and all(c.ok for c in specs) else 1
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -234,8 +234,17 @@ class TableReport:
 class Reconciler:
     """Step ごとに行を受け取り、移行先と突き合わせる。"""
 
-    def __init__(self, reader: TargetReader, work_dir: Path, password_workers: int = 8) -> None:
-        self._reader = reader
+    def __init__(
+        self,
+        reader: TargetReader,
+        work_dir: Path,
+        password_workers: int = 8,
+        others: dict[str, TargetReader] | None = None,
+    ) -> None:
+        #: DB ごとの読み出し（`Step.database`）。**career は別の DB** なので、テーブルを
+        #: 書いた Step の DB で引く
+        self._readers = {"btoc": reader, **(others or {})}
+        self._table_db: dict[str, str] = {}
         self._path = Path(work_dir) / FILENAME
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._path.open("w", encoding="utf-8-sig", newline="") as handle:
@@ -251,6 +260,9 @@ class Reconciler:
     def path(self) -> Path:
         return self._path
 
+    def _reader(self, table: str) -> TargetReader:
+        return self._readers[self._table_db.get(table, "btoc")]
+
     @property
     def ok(self) -> bool:
         return all(s.ok for s in self.steps) and not any(t.extra for t in self.tables)
@@ -264,6 +276,7 @@ class Reconciler:
             by_table.setdefault(record.table, []).append(record)
         report = None
         for table, rows in by_table.items():
+            self._table_db[table] = getattr(step, "database", "btoc")
             report = self._check_table(step, table, rows)
             self.steps.append(report)
         return report
@@ -282,7 +295,7 @@ class Reconciler:
 
         keys = [tuple(r.values.get(c) for c in key_columns) for r in records]
         found: dict[tuple, dict] = {}
-        for row in self._reader.fetch(table, key_columns, keys):
+        for row in self._reader(table).fetch(table, key_columns, keys):
             found.setdefault(tuple(_key_part(row.get(c)) for c in key_columns), row)
 
         volatile = set(getattr(step, "volatile_columns", ()) or ())
@@ -389,10 +402,10 @@ class Reconciler:
                 report.skipped = "このテーブルに書く Step の一部しか照合していない"
             elif columns is None:
                 report.skipped = "Step ごとに行の識別子が違う"
-            elif "tenant_id" not in self._reader.columns(table):
+            elif "tenant_id" not in self._reader(table).columns(table):
                 report.skipped = "tenant_id を持たない"
             else:
-                for key in self._reader.tenant_keys(table, columns, tenant_id):
+                for key in self._reader(table).tenant_keys(table, columns, tenant_id):
                     if tuple(_key_part(v) for v in key) not in keys:
                         report.extra += 1
                         label = ", ".join(f"{c}={_shown(v)}" for c, v in zip(columns, key))
@@ -439,15 +452,17 @@ def reconcile(ctx, selected, sections) -> Reconciler:
     コミットは通さない — 何も書かないので要らない。
     """
     target = ctx.target
-    if not isinstance(target, RecordingTarget):
-        raise TypeError("照合は RecordingTarget で流す（書き込みを伴う移行先では流さない）")
-    reconciler = Reconciler(TargetReader(target), Path(ctx.config.work_dir) / "verify")
+    for t in ctx.targets():
+        if not isinstance(t, RecordingTarget):
+            raise TypeError("照合は RecordingTarget で流す（書き込みを伴う移行先では流さない）")
+    others = {"career": TargetReader(ctx.career)} if ctx.career is not None else {}
+    reconciler = Reconciler(TargetReader(target), Path(ctx.config.work_dir) / "verify", others=others)
     ran: set[str] = set()
     for phase in selected:
         ctx.logger.info("=== %s %s（照合） ===", phase.key, phase.name)
         for step in phase.steps:
             step.run(ctx)
-            report = reconciler.check_step(step, target.take())
+            report = reconciler.check_step(step, ctx.target_for(step.database).take())
             if report is not None and not report.ok:
                 ctx.logger.warning("%s", report)
             ran.add(step.name)

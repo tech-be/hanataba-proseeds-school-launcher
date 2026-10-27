@@ -1,16 +1,20 @@
-"""billing.2 — 決済（商品・申込）。
+"""billing.2 — 決済（申込）。
+
+**旧の商品は `tenant_plans` / `plan_courses` に入れない**（2026-10-23 決定）。新の `tenant_plans` は Stripe の
+継続課金のプランで、旧の商品にあたるのはコース（`learning_paths`。コンテンツの `content.5`）。
 
 **lw2 は申込1行 = 契約1件。** 継続課金・分割の毎月の課金は決済代行（J-Payment）が
 持っていて、lw2 には行が無い（`PaymentGatewayController` の継続課金の通知は行を作らない）。
-返金の概念も無い。移すのは**申込の時点の決済**と、商品（講座の束）。
+返金の概念も無い。移すのは**申込の時点の決済**（商品はコースとしてコンテンツで移す）。
 
 **暫定の規則（決定ではない。docs/db/04-billing/migration-spec.md 1-3 の P1〜P10）**
 
 - 決済として移すのは**お金が動く申込だけ**（`payment_type` 1 カード / 2 コンビニ / 3 振込）。
   0 無料 / 4 無料クーポン / 5・6・7 チケット払いは金額0で、権限は受講（3）、チケットは
   4-1 で移っている。`application_result = 3`（支払い不要）も移さない
-- 種類: 自動継続の商品 → `subscription`、講座1つの買い切り → `course_purchase`、
-  それ以外（講座2つ以上・講座なし・チケット商品）→ `lw2_purchase`
+- 種類: **講座の商品（`item_type = 0`）→ `learning_path_purchase`**（コースの購入。買い切りも自動継続も。
+  2026-10-22 決定。明細は `learning_path_purchase_payments`）、それ以外の自動継続の商品 → `subscription`、
+  それ以外（チケット・ライブの商品、商品なし）→ `lw2_purchase`
 - 状態: `application_result` 1 → `succeeded` / 0 → `pending` / 2 → `failed`。
   **解約（`is_cancel`）は状態にしない** — 返金ではなく継続課金を止めただけで、お金は動いている
 - 決済代行: カード・コンビニ → `legacy_jpayment`、振込 → `bank_transfer`。
@@ -74,7 +78,9 @@ APPLICATION_COLUMNS = (
 MONEY_TYPES = frozenset({1, 2, 3})
 #: `application_result`: 0 入金待ち / 1 支払い完了 / 2 エラー / 3 支払い不要（管理者が設定）
 NO_PAYMENT_REQUIRED = 3
-STATUSES = {0: "pending", 1: "succeeded", 2: "failed"}
+#: **入金待ち（0）は `failed`**（0-2 Q6）。`pending` だと新の毎時の照合が全テナントで古い順に 100 件しか見ない枠を埋め、
+#: 振込は入金確認の一覧に出てボタンで受講権限が付く。旧の値は `settings.legacy_application_result` に残す
+STATUSES = {0: "failed", 1: "succeeded", 2: "failed"}
 PROVIDERS = {1: "legacy_jpayment", 2: "legacy_jpayment", 3: "bank_transfer"}
 #: `item_type`: 0 講座 / 1 チケット（都度）/ 2 チケット（月次）/ 3 ライブ
 COURSE_ITEM = 0
@@ -92,12 +98,18 @@ def is_migrated(payment_type: object, application_result: object) -> bool:
     return int(application_result or 0) != NO_PAYMENT_REQUIRED
 
 
-def payment_kind(item: dict | None, course_count: int) -> str:
-    """決済の種類（P5）。"""
+def payment_kind(item: dict | None) -> str:
+    """決済の種類（P5）。
+
+    **講座の商品はコースの購入**（2026-10-22 決定）。school-launcher はコース（`learning_paths`）＝旧の
+    販売商品とし、その決済を `learning_path_purchase` で持つ（20261012014810）。受講（03）のコースの購入
+    （`learning_path_enrollments.payment_id`）もこの決済を指す。**自動継続の商品も同じ**にそろえる
+    （新のコースに継続課金は無い。自動継続だったことは決済の `settings.item.auto_extension` に残す）。
+    """
+    if item is not None and int(item.get("item_type") or 0) == COURSE_ITEM:
+        return "learning_path_purchase"
     if item is not None and int(item.get("is_auto_extension") or 0) == 1:
         return "subscription"
-    if item is not None and int(item.get("item_type") or 0) == COURSE_ITEM and course_count == 1:
-        return "course_purchase"
     return "lw2_purchase"
 
 
@@ -162,6 +174,38 @@ def items(ctx: RunContext) -> dict[int, dict]:
     return rows
 
 
+def course_item_links(ctx: RunContext, drop) -> list[dict]:
+    """講座の商品と講座の結び付き（`payment_item_lesson`）。(商品, 講座) ごとに1行。
+
+    **削除済みの結び付きも返す**（`_alive` が False）。同じ組が積まれていれば生きている行を優先する。
+    移行の対象に無い講座を指す行は `drop(table_key, reason, detail)` に渡して返さない。
+    `content.learning_path_courses` が使う（課金の `plan_courses` には 2026-10-23 から入れない）。
+    """
+    course_items = {i for i, row in items(ctx).items() if int(row.get("item_type") or 0) == COURSE_ITEM}
+    # このテナントの講座と、移す共有講座。**ここに無い講座は移らない**（削除済みの対応は、講座そのものが
+    # 物理削除されていることがある。他テナントの講座を指す行もあり得るが、テナントで絞らずに
+    # 旧の講座を引くことはガードで禁じているので、どちらかは区別しない）
+    known = {int(r["lesson_id"]) for r in ctx.require_source().fetch_for_tenant("lesson", ("lesson_id",))}
+    links = ctx.require_source().fetch_joined(
+        "payment_item_lesson", ("item_set_lesson_id", "item_id", "lesson_id", "del_chk", "update_date"),
+        parent="payment_item", on="c.item_id = p.item_id",
+    )
+    best: dict[tuple[int, int], dict] = {}
+    for link in links:
+        if int(link["item_id"]) not in course_items:
+            continue
+        key = (int(link["item_id"]), int(link["lesson_id"]))
+        if key[1] not in known:
+            drop(f"{key[0]}:{key[1]}", "旧データの不整合",
+                 f"講座（lesson_id={key[1]}）が移行の対象に無い（物理削除されているか、他テナントの講座）")
+            continue
+        alive = int(link.get("del_chk") or 0) == 0
+        held = best.get(key)
+        if held is None or (alive and not held["_alive"]):
+            best[key] = {**link, "_alive": alive}
+    return [{"item_id": k[0], "lesson_id": k[1], **v} for k, v in sorted(best.items())]
+
+
 def applications(ctx: RunContext) -> list[dict]:
     """決済として移す申込（P3 / P4 で絞ったあと）。商品を `_item` に添える。
 
@@ -198,6 +242,16 @@ def applications(ctx: RunContext) -> list[dict]:
     return out
 
 
+def payers(ctx: RunContext) -> dict[int, int]:
+    """決済として移す申込 → 払った会員（補正データを当てたあと）。
+
+    **受講登録・コースの購入は、払った会員が権限の会員と同じ申込にだけ結ぶ**（0-2 Q8）。会員の無い申込
+    （ステージングの申込 322。`user_id = 0`）は決済が会員の外部キーで落ちるので、結ぶとコースの購入まで
+    連鎖して落ちる。補正データで会員を直せば結ばれる。
+    """
+    return {int(a["application_id"]): int(a.get("user_id") or 0) for a in applications(ctx)}
+
+
 def _courses(item: dict | None) -> list[int]:
     if item is None or int(item.get("item_type") or 0) != COURSE_ITEM:
         return []
@@ -205,154 +259,6 @@ def _courses(item: dict | None) -> list[int]:
 
 
 # --- Step ---------------------------------------------------------------------
-class PlansStep(Step):
-    """講座の商品（`item_type = 0`）を `tenant_plans` に移す（P1）。
-
-    **すべて `inactive`（新規の購入を受け付けない）。** 新で売るには Stripe の価格を
-    作り直す必要があり、`active` にすると購入ボタンが出て決済が失敗する。
-    `provider_price_id` は NOT NULL なので `lw2-item-{item_id}` を入れる。
-    """
-
-    name = "billing.plans"
-    description = "講座の商品を移す（新規購入は受け付けない状態で）"
-    source_table = "payment_item"
-    target_table = "tenant_plans"
-    depends_on = ("content.courses",)
-
-    def extract(self, ctx: RunContext) -> list[dict]:
-        return [r for r in items(ctx).values() if int(r.get("item_type") or 0) == COURSE_ITEM]
-
-    def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
-        tenant_id = ctx.tenant_id.value
-        return [
-            Record(
-                table="tenant_plans",
-                values={
-                    "id": ctx.ulid.for_row("payment_item", row["item_id"]),
-                    "tenant_id": tenant_id,
-                    "item_id": int(row["item_id"]),
-                    "name": row.get("item_name") or "",
-                    "description": row.get("description"),
-                    "plan_type": "course_bundle",
-                    "service_category_code": None,
-                    "provider_price_id": f"lw2-item-{int(row['item_id'])}",
-                    "provider_product_id": None,
-                    "provider_yearly_price_id": None,
-                    # **税込**（コメントの「税抜」は誤り）
-                    "price": row.get("price") or 0,
-                    "yearly_price": None,
-                    "currency": "JPY",
-                    "interval_type": "month" if int(row.get("is_auto_extension") or 0) == 1 else "one_time",
-                    # 試用期間は単位（日/週/月/年）つきで持つので settings に残す
-                    "trial_days": 0,
-                    "features": None,
-                    "status": "inactive",
-                    "sort_order": int(row.get("sort_no") or 0),
-                    "settings": _json(_plan_settings(row)),
-                    "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
-                },
-                natural_key=("tenant_id", "item_id"),
-                source_key=int(row["item_id"]),
-            )
-            for row in rows
-        ]
-
-
-def _plan_settings(row: dict) -> dict:
-    return {
-        "legacy": {
-            "valid_chk": row.get("valid_chk"), "display_chk": row.get("display_chk"),
-            "deleted": int(row.get("del_chk") or 0) == 1, "remote_chk": row.get("remote_chk"),
-        },
-        "price": {
-            "first_price": row.get("first_price"), "extension_price": row.get("extension_price"),
-            "extension_type": row.get("extension_type"),
-            "invoice_chk": row.get("invoice_chk"), "tax_rate_treatment": row.get("tax_rate_treatment"),
-            "excluding_tax_price": row.get("excluding_tax_price"),
-            "excluding_tax_first_price": row.get("excluding_tax_first_price"),
-            "excluding_tax_extension_price": row.get("excluding_tax_extension_price"),
-        },
-        "term": {
-            "manual_term": row.get("manual_term"), "manual_term_type": row.get("manual_term_type"),
-            "no_limit": int(row.get("no_limit_chk") or 0) == 1,
-        },
-        "subscription": {
-            "auto_extension": int(row.get("is_auto_extension") or 0) == 1,
-            "auto_cancel": int(row.get("is_auto_cancel") or 0) == 1,
-            "auto_cancel_term": row.get("auto_cancel_term"),
-            "trial": int(row.get("is_use_trial") or 0) == 1,
-            "trial_term": row.get("trial_term"), "trial_term_type": row.get("trial_term_type"),
-            "payment_date_type": row.get("payment_date_type"), "payment_day": row.get("payment_day"),
-        },
-        "payment_methods": {
-            "credit_card": row.get("is_use_credit_card"), "convenience": row.get("is_use_convenience"),
-            "bank": row.get("is_use_bank"),
-        },
-    }
-
-
-class PlanCoursesStep(Step):
-    """商品と講座の対応（`payment_item_lesson`）を `plan_courses` に移す。
-
-    **削除済みの対応も移す**（`deleted_at`。2026-10-01 の方針）。新のアプリはまだ `deleted_at` を
-    読まないので、**商品から外した講座も購入で付与される**。同じ (商品, 講座) が積まれていれば
-    生きている行を優先して1行にする（`uk_plan_course`）。
-    """
-
-    name = "billing.plan_courses"
-    description = "商品と講座の対応を移す"
-    source_table = "payment_item_lesson"
-    target_table = "plan_courses"
-    depends_on = ("billing.plans",)
-
-    def extract(self, ctx: RunContext) -> list[dict]:
-        course_items = {i for i, row in items(ctx).items() if int(row.get("item_type") or 0) == COURSE_ITEM}
-        # このテナントの講座と、移す共有講座。**ここに無い講座は移らない**（削除済みの対応は、講座そのものが
-        # 物理削除されていることがある。他テナントの講座を指す行もあり得るが、テナントで絞らずに
-        # 旧の講座を引くことはガードで禁じているので、どちらかは区別しない）
-        known = {int(r["lesson_id"]) for r in ctx.require_source().fetch_for_tenant("lesson", ("lesson_id",))}
-        links = ctx.require_source().fetch_joined(
-            "payment_item_lesson", ("item_id", "lesson_id", "del_chk", "update_date"),
-            parent="payment_item", on="c.item_id = p.item_id",
-        )
-        best: dict[tuple[int, int], dict] = {}
-        for link in links:
-            if int(link["item_id"]) not in course_items:
-                continue
-            key = (int(link["item_id"]), int(link["lesson_id"]))
-            if key[1] not in known:
-                self.drop("plan_courses", f"{key[0]}:{key[1]}", "旧データの不整合",
-                          f"講座（lesson_id={key[1]}）が移行の対象に無い（物理削除されているか、他テナントの講座）")
-                continue
-            alive = int(link.get("del_chk") or 0) == 0
-            held = best.get(key)
-            if held is None or (alive and not held["_alive"]):
-                best[key] = {**link, "_alive": alive}
-        return [
-            {"item_id": k[0], "lesson_id": k[1],
-             "_deleted_at": None if v["_alive"] else convert(v.get("update_date"), ColumnKind.DATETIME)}
-            for k, v in sorted(best.items())
-        ]
-
-    def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
-        tenant_id = ctx.tenant_id.value
-        return [
-            Record(
-                table="plan_courses",
-                values={
-                    "id": ctx.ulid.for_row("payment_item_lesson", f"{row['item_id']}:{row['lesson_id']}"),
-                    "tenant_id": tenant_id,
-                    "plan_id": ctx.ulid.for_row("payment_item", row["item_id"]),
-                    "course_id": ctx.ulid.for_row("lesson", row["lesson_id"]),
-                    "deleted_at": row.get("_deleted_at"),
-                },
-                natural_key=("tenant_id", "plan_id", "course_id"),
-                source_key=f"{row['item_id']}:{row['lesson_id']}",
-            )
-            for row in rows
-        ]
-
-
 class PaymentsStep(Step):
     """お金が動く申込を `payments` に移す（P3〜P8）。"""
 
@@ -360,7 +266,7 @@ class PaymentsStep(Step):
     description = "お金が動く申込を決済として移す"
     source_table = "payment_application"
     target_table = "payments"
-    depends_on = ("billing.plan_courses",)
+    depends_on = ("users",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
         return applications(ctx)
@@ -385,7 +291,7 @@ class PaymentsStep(Step):
                         "provider_payment_id": provider_payment_id(app["application_id"]),
                         "provider": PROVIDERS[int(app["payment_type"])],
                         "provider_transfer_id": None,
-                        "type": payment_kind(item, len(_courses(item))),
+                        "type": payment_kind(item),
                         "status": STATUSES[int(app.get("application_result") or 0)],
                         "settings": _json(_payment_settings(app, item)),
                         "created_at": convert(app.get("application_date_time"), ColumnKind.TIMESTAMP),
@@ -405,6 +311,8 @@ def _payment_settings(app: dict, item: dict | None) -> dict:
         "item": None if item is None else {
             "item_id": item.get("item_id"), "item_type": item.get("item_type"),
             "name": item.get("item_name"), "courses": _courses(item),
+            # 種類はコースの購入にそろえたので、自動継続（継続課金）だったかをここに残す
+            "auto_extension": int(item.get("is_auto_extension") or 0) == 1,
             "live_lesson_id": item.get("live_lesson_id"),
         },
         "jpayment": {
@@ -463,31 +371,29 @@ def _payment_settings(app: dict, item: dict | None) -> dict:
     }
 
 
-class CoursePurchasePaymentsStep(Step):
-    """講座1つの買い切りの明細（`course_purchase_payments`）。"""
+class LearningPathPurchasePaymentsStep(Step):
+    """コースの購入の明細（`learning_path_purchase_payments`。決済 → コース）。2026-10-22。
 
-    name = "billing.course_purchase_payments"
-    description = "講座1つの買い切りの明細を移す"
+    講座の商品の決済はすべてコースの購入（`learning_path_purchase`）にしたので、どの商品（コース）の
+    購入かをここに持つ。それまでの講座1つの商品の明細（`course_purchase_payments`）には入れない。
+    """
+
+    name = "billing.learning_path_purchase_payments"
+    description = "コースの購入の明細（決済とコース）を移す"
     source_table = "payment_application"
-    target_table = "course_purchase_payments"
-    depends_on = ("billing.payments",)
+    target_table = "learning_path_purchase_payments"
+    depends_on = ("billing.payments", "content.learning_paths")
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        return [
-            a for a in applications(ctx)
-            if payment_kind(a.get("_item"), len(_courses(a.get("_item")))) == "course_purchase"
-        ]
+        return [a for a in applications(ctx) if payment_kind(a.get("_item")) == "learning_path_purchase"]
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         return [
             Record(
-                table="course_purchase_payments",
+                table="learning_path_purchase_payments",
                 values={
                     "payment_id": ctx.ulid.for_row("payment_application", app["application_id"]),
-                    "course_id": ctx.ulid.for_row("lesson", _courses(app["_item"])[0]),
-                    # クーポンは サポート機能（5）で移す。旧 ID は決済の settings にある
-                    "coupon_id": None,
-                    "discount_amount": app.get("coupon_discount") or 0,
+                    "learning_path_id": ctx.ulid.for_row("learning_path", app["_item"]["item_id"]),
                     "created_at": convert(app.get("application_date_time"), ColumnKind.TIMESTAMP),
                 },
                 natural_key=("payment_id",),
@@ -509,7 +415,7 @@ class SubscriptionPaymentsStep(Step):
     def extract(self, ctx: RunContext) -> list[dict]:
         return [
             a for a in applications(ctx)
-            if payment_kind(a.get("_item"), len(_courses(a.get("_item")))) == "subscription"
+            if payment_kind(a.get("_item")) == "subscription"
         ]
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
@@ -534,6 +440,6 @@ class SubscriptionPaymentsStep(Step):
 def build() -> list[Step]:
     """4-2 決済。"""
     return [
-        PlansStep(), PlanCoursesStep(), PaymentsStep(),
-        CoursePurchasePaymentsStep(), SubscriptionPaymentsStep(),
+        PaymentsStep(),
+        LearningPathPurchasePaymentsStep(), SubscriptionPaymentsStep(),
     ]

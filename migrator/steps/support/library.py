@@ -252,11 +252,13 @@ class LibraryFoldersStep(Step):
                     "tenant_id": tenant_id,
                     "name": row.get("drive_name") or "",
                     "description": row.get("detail"),
-                    # **グループで絞っていたフォルダは「対象者なし」にする。** 新に「グループに公開」が
-                    # 無く、全員に公開すると旧より広がる。グループは library_folder_group_targets に残す
-                    "audience_type": "specific_users" if row["_has_groups"] else "all_users",
+                    # **グループで絞っていたフォルダは「全員向け・非公開」にする**（05 移行仕様 0R-2 Q4）。
+                    # 新に「グループに公開」が無く、公開すると旧より広がる。対象 0 件の個別指定にすると誰にも
+                    # 見えず、運営が保存しても 400 になる。運営が公開先を決めて公開する。グループは
+                    # library_folder_group_targets に残す
+                    "audience_type": "all_users",
                     # 削除済みのフォルダは旧で見えないので非公開
-                    "published": bool(int(row.get("open_chk") or 0)) and not deleted,
+                    "published": bool(int(row.get("open_chk") or 0)) and not deleted and not row["_has_groups"],
                     "sort_order": int(row.get("sort_no") or 0),
                     "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
                 },

@@ -40,6 +40,19 @@ KEY_COLUMNS: dict[str, str] = {
     "group": "group_id",
     "attribute": "attribute_id",
     "tenant": "tenant_id",
+    # 本文のプレーンテキスト化（docs/db/05-support/migration-spec.md 0-9 の Q2）
+    "news": "news_id",
+    "announce": "announce_id",
+    # 差し込みの書き換え（0-9 の Q8）
+    "mail_setting": "mail_setting_id",
+    "line_message_mail_setting": "mail_type_id",
+    # コンテンツ（02 の移行仕様 0-3 の Q9・Q12・Q13・Q15）
+    "test": "test_id",
+    "question": "question_id",
+    "enquete_question": "enquete_question_id",
+    "payment_item": "item_id",
+    # 課金（04 の移行仕様 0-2 の Q8）
+    "payment_application": "application_id",
 }
 
 #: 値を消すときに書く語

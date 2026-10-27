@@ -178,6 +178,9 @@ class TenantVerificationTest(unittest.TestCase):
     def _ctx(self, rows: list[dict]):
         return build_context(CONFIG, FakeSource({}), self._Target(rows), logging.getLogger("test"))
 
+    def _ctx_with(self, target):
+        return build_context(CONFIG, FakeSource({}), target, logging.getLogger("test"))
+
     def test_demo_tenants_do_not_fail_the_check(self) -> None:
         """デモ seed のテナントが同居していても、recademy が1件なら OK。"""
         from migrator.validation.postcheck import target_tenant_once
@@ -207,6 +210,22 @@ class TenantVerificationTest(unittest.TestCase):
         ]
         with self.assertRaises(VerificationError):
             target_tenant_once(self._ctx(rows))
+
+    def test_null_emails_are_not_duplicates(self) -> None:
+        """**メールの無い会員（NULL）を重複に数えない**（2026-10-26。NULL で入る会員が多数いる）。"""
+        from migrator.validation.postcheck import email_unique
+
+        seen: list[str] = []
+
+        class Target(self._Target):
+            def query(self, sql, params=()):
+                seen.append(sql)
+                return []
+
+        ctx = self._ctx_with(Target([]))
+        ctx.tenant_id.resolve("01ARZ3NDEKTSV4RRFFQ69G5FAV")
+        email_unique(ctx)
+        self.assertIn("email IS NOT NULL", seen[0])
 
 
 class PreflightRoleMapTest(unittest.TestCase):
@@ -298,9 +317,10 @@ class SchemaCheckTest(unittest.TestCase):
         ctx, check_schema = self._ctx(selected)
         with self.assertRaises(PreflightError) as caught:
             check_schema(ctx, selected)
-        # 見るのは選んだ区分の分だけ
+        # 見るのは選んだ区分の分だけ。受講区分の必須（`enrollments.settings`）は出ない
+        # （`learning_path_enrollments` は課金の billing.2 で流すので課金の必須にある）
         self.assertIn("ticket_types.ticket_id", str(caught.exception))
-        self.assertNotIn("enrollments", str(caught.exception))
+        self.assertNotIn(" enrollments.settings", " " + str(caught.exception).replace(",", " "))
 
     def test_not_repeated_when_common_is_selected(self) -> None:
         selected = resolve(build_sections(), ["common.0", "foundation.1"], [])

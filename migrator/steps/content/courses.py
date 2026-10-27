@@ -1,11 +1,15 @@
 """content.1 — 講座のカテゴリ・講座本体・講座タグ。
 
-- `lesson_cate` → `course_categories`（**テナントを持たないルックアップ**）
+- `lesson_cate` → `tenant_course_categories`（テナントごとのカテゴリ。2026-10-22 から）と
+  `course_category_links`。**全テナント共通の `course_categories` には入れず、`courses.category` は NULL**
+  （2026-10-26 決定。02 の移行仕様 0-3 の Q16。新の `/courses` の絞り込みは recademy の
+  `settings.top_catalog.categories` の 6 つのコードを見るので、旧のコードとは合わない。
+  対応表を受け取ったら入れる）
 - `lesson` → `courses`
 - `lesson_tag` / `lesson_lesson_tag` → `course_tags` / `course_tag_links`
 
-**削除済み（`del_chk=1`）の講座も移す。** `status='deleted'` で表現する
-（`content_statuses` に `deleted` を足してある）。
+**削除済み（`del_chk=1`）の講座も移す。** `status='archived'` で表現する（2026-10-26 決定。
+新は `deleted` の講座を受講者に見せ、状態を変える編集も 400 にする）。
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ CATEGORY_COLUMNS = (
     "lesson_cate_name",
     "lesson_cate_img_file_name",
     "sort_no",
+    "update_date",
     "del_chk",
 )
 
@@ -64,21 +69,8 @@ TAG_LINK_COLUMNS = (
 from .instructors import PROXY_KEY as PROXY_INSTRUCTOR_KEY
 
 
-def category_code(ctx: RunContext, legacy_id: object, legacy_tenant: object = None) -> str | None:
-    """`course_categories` はコードが主キー。**旧 ID からコードを組み立てる。**
-
-    テナントを持たないルックアップなので、テナントをまたいで衝突しないよう
-    **移行対象テナントの旧 ID を混ぜる**（共有カテゴリも、このテナントのものとして移す）。
-
-    **`0` は「分類なし」** で NULL（旧 `lesson_cate` は 1 始まり）。
-    """
-    if legacy_id is None or int(legacy_id) == 0:
-        return None
-    return f"lw2-{ctx.config.tenant.legacy_id}-{int(legacy_id)}"
-
-
 def _categories(ctx: RunContext, log: bool = False) -> list[dict]:
-    """`course_categories` に移すカテゴリ。**講座側の参照チェックにも使う。**"""
+    """移すカテゴリ（`tenant_course_categories`）。**講座側の参照チェックにも使う。**"""
     source = ctx.require_source()
     rows = source.fetch_for_tenant("lesson_cate", CATEGORY_COLUMNS)
     known = {int(r["lesson_cate_id"]) for r in rows}
@@ -103,53 +95,85 @@ def _categories(ctx: RunContext, log: bool = False) -> list[dict]:
     return rows
 
 
-class CourseCategoriesStep(Step):
-    """講座カテゴリを `course_categories` に移す。
+class TenantCourseCategoriesStep(Step):
+    """講座カテゴリを `tenant_course_categories`（テナントごとのカテゴリ）に移す（2026-10-22）。
 
-    **新環境はコード主キーのルックアップ**で、テナントを持たない。旧はテナントごとに
-    持っているため、**コードに旧テナント ID を混ぜて衝突を避ける**。
+    school-launcher 20261020001030 で、講座のカテゴリがテナントごとのマスタになった（受講者の
+    「講座・コースを探す」の絞り込みに使う）。旧 `lesson_cate` もテナントごとなので、こちらが
+    受け皿として合う。全テナント共通の `course_categories` には入れない（2026-10-26。Q16）。
 
-    **`tenant_id = 0` は共有カテゴリ。** lw2 は
-    `LC.tenant_id = 0 OR LC.tenant_id = :TENANT_ID` で引いており、他テナントからも使える。
-    recademy の講座8件がこれを参照しているので、**参照されている共有カテゴリも移す**
-    （移さないと、その講座ごと移らない）。
+    移すカテゴリは `_categories`（共有カテゴリは講座が使っている分だけ）。
+    **削除済みは `deprecated_at`** に入れる（新の「講座に付いたまま残し、選べなくする」が旧の削除にあたる）。
     """
 
-    name = "content.course_categories"
-    description = "講座カテゴリを移す"
+    name = "content.tenant_course_categories"
+    description = "講座カテゴリをテナントのカテゴリとして移す"
     source_table = "lesson_cate"
-    target_table = "course_categories"
+    target_table = "tenant_course_categories"
     depends_on = ("tenant",)
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        return _categories(ctx, log=True)
+        return _categories(ctx)
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
+        tenant_id = ctx.tenant_id.value
         records: list[Record] = []
         for row in rows:
+            name = (row.get("lesson_cate_name") or "").strip()
             deleted = int(row.get("del_chk") or 0) == 1
             records.append(
                 Record(
-                    table="course_categories",
+                    table="tenant_course_categories",
                     values={
-                        "code": category_code(ctx, row["lesson_cate_id"]),
-                        "name_ja": row.get("lesson_cate_name"),
-                        "name_en": None,
-                        "parent_code": None,  # 旧に階層は無い
-                        "icon": None,
-                        # 画像は L9 のファイル移送後に URL を入れる
-                        "image_url": None,
-                        "created_by": None,
+                        "id": ctx.ulid.for_row("tenant_course_category", row["lesson_cate_id"]),
+                        "tenant_id": tenant_id,
+                        # 空の名前は NOT NULL に当たって一覧に出る（作り替えない）
+                        "name": name or None,
                         "sort_order": int(row.get("sort_no") or 0),
                         "is_system": False,
-                        "active": not deleted,
-                        "deprecated_at": None,
+                        "active": True,
+                        "deprecated_at": (
+                            convert(row.get("update_date"), ColumnKind.DATETIME) if deleted else None
+                        ),
                     },
-                    natural_key=("code",),
+                    natural_key=("id",),
                     source_key=int(row["lesson_cate_id"]),
                 )
             )
         return records
+
+
+class CourseCategoryLinksStep(Step):
+    """講座の `lesson_cate_id` を `course_category_links` に移す（1 講座に 1 件）。
+
+    参照先の無い `lesson_cate_id`（旧データの不整合）は、講座と同じく分類なしとして扱う（`CoursesStep`）。
+    """
+
+    name = "content.course_category_links"
+    description = "講座とテナントのカテゴリの結び付きを移す"
+    source_table = "lesson"
+    target_table = "course_category_links"
+    depends_on = ("content.courses", "content.tenant_course_categories")
+
+    def extract(self, ctx: RunContext) -> list[dict]:
+        rows = CoursesStep().extract(ctx)
+        return [r for r in rows if r.get("lesson_cate_id") and int(r["lesson_cate_id"]) != 0]
+
+    def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
+        tenant_id = ctx.tenant_id.value
+        return [
+            Record(
+                table="course_category_links",
+                values={
+                    "course_id": ctx.ulid.for_row("lesson", row["lesson_id"]),
+                    "category_id": ctx.ulid.for_row("tenant_course_category", row["lesson_cate_id"]),
+                    "tenant_id": tenant_id,
+                },
+                natural_key=("course_id", "category_id"),
+                source_key=int(row["lesson_id"]),
+            )
+            for row in rows
+        ]
 
 
 class CoursesStep(Step):
@@ -167,7 +191,7 @@ class CoursesStep(Step):
     description = "講座を移す（講師と価格は暫定値）"
     source_table = "lesson"
     target_table = "courses"
-    depends_on = ("tenant", "content.course_categories", "content.proxy_instructor")
+    depends_on = ("tenant", "content.tenant_course_categories", "content.proxy_instructor")
 
     def extract(self, ctx: RunContext) -> list[dict]:
         source = ctx.require_source()
@@ -211,7 +235,9 @@ class CoursesStep(Step):
                         "legacy_lesson_id": int(row["lesson_id"]),
                         "title": title,
                         "description": row.get("description"),
-                        "category": category_code(ctx, row.get("lesson_cate_id")),
+                        # 新のトップの 6 つのコードとの対応表を受け取るまで NULL（Q16）。
+                        # テナントのカテゴリは course_category_links で付く
+                        "category": None,
                         # **暫定**: 対応表を受け取るまで代理講師に寄せる
                         "instructor_id": instructor_id,
                         "price": price,
@@ -261,11 +287,18 @@ def _access_days(value: object) -> int | None:
 def _status_of(row: dict) -> str:
     """`del_chk` / `sales_status` から `content_statuses.code` を決める。
 
-    **元の列は残す**（`is_used`）。status は判定結果で、ここに畳むわけではない。
+    **販売停止（`sales_status=0`）は `archived`**（2026-10-22 決定）。新システムは講座の下書きを
+    やめ（school-launcher 20261012065004）、画面から公開にする操作が無い。`draft` で入れると
+    運営が戻せないので、アーカイブの解除で戻せる `archived` にする。
+
+    **元の列は残す**（`is_used`、`settings.sales_status`）。status は判定結果で、ここに畳むわけではない。
+
+    **削除済みも `archived`**（2026-10-26 決定。02 の移行仕様 0-3 の Q1）。新は `deleted` の講座を
+    受講者に見せ（除外は `<> 'archived'` だけ）、状態を変える編集も 400 にする。
     """
     if int(row.get("del_chk") or 0) == 1:
-        return "deleted"
-    return "published" if int(row.get("sales_status") or 0) == 1 else "draft"
+        return "archived"
+    return "published" if int(row.get("sales_status") or 0) == 1 else "archived"
 
 
 def _settings(row: dict) -> str:
@@ -283,7 +316,12 @@ def _settings(row: dict) -> str:
         "sns_shared": bool(int(row.get("sns_shared_chk") or 0)),
         "inquiry": bool(int(row.get("inquiry_chk") or 0)),
     }
-    return json.dumps({"features": flags}, ensure_ascii=False)
+    # 旧の販売状態（1 販売中 / 0 販売停止）。status には `archived` として畳んでいるので値も残す
+    sales_status = row.get("sales_status")
+    return json.dumps(
+        {"features": flags, "sales_status": None if sales_status is None else int(sales_status)},
+        ensure_ascii=False,
+    )
 
 
 class CourseTagsStep(Step):
@@ -390,4 +428,10 @@ class CourseTagLinksStep(Step):
 
 
 def build() -> list[Step]:
-    return [CourseCategoriesStep(), CoursesStep(), CourseTagsStep(), CourseTagLinksStep()]
+    return [
+        TenantCourseCategoriesStep(),
+        CoursesStep(),
+        CourseCategoryLinksStep(),
+        CourseTagsStep(),
+        CourseTagLinksStep(),
+    ]

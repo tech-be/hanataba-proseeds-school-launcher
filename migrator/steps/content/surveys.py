@@ -27,6 +27,7 @@ ENQUETE_PAGE_COLUMNS = (
     "page_detail",
     "del_chk",
     "regist_date",
+    "update_date",
 )
 ENQUETE_QUESTION_COLUMNS = (
     "enquete_question_id",
@@ -39,6 +40,7 @@ ENQUETE_QUESTION_COLUMNS = (
     "selection_num",
     "del_chk",
     "regist_date",
+    "update_date",
 )
 _SELECTION_COLUMNS = tuple(f"selection{n}" for n in range(1, 21))
 
@@ -170,6 +172,8 @@ class SurveyPagesStep(Step):
                     # 旧はページ名を持たず説明文だけ。200文字に収まらないものは切らずに
                     # NULL にする（本文は設問側に残る）
                     "title": _fit(row.get("page_detail"), 200),
+                    # 削除済みのページも移す（2026-10-26。school-launcher 20261026120001）
+                    "deleted_at": _deleted_at(row),
                     "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
                 },
                 natural_key=("id",),
@@ -213,11 +217,19 @@ class SurveyQuestionsStep(Step):
                 # 通らない: 設問は enquete_page → enquete で絞って読むので、ページの無い設問は読めない
                 # （テナントで絞れないので、このテナントの行かも分からない）
                 continue
+            # 削除済みのページの設問は、旧の画面に出ない。設問も削除済みとして入れる
+            if int(page.get("del_chk") or 0) and not int(question.get("del_chk") or 0):
+                question = {**question, "del_chk": 1, "update_date": page.get("update_date")}
             by_enquete.setdefault(int(page["enquete_id"]), []).append(question)
+        # **設問の並びはページをまたいだ通し番号**（2026-10-26。02 の移行仕様 0-3 の Q13）。新はページを
+        # 読まず `sort_order, id` だけで並べる。旧の画面の順は「ページ（ID 順）→ ページの中の `sort_no`」
+        for questions_of in by_enquete.values():
+            questions_of.sort(key=lambda q: (int(q["enquete_page_id"]), int(q.get("sort_no") or 0),
+                                             int(q["enquete_question_id"])))
         rows: list[dict] = []
         for unit in _survey_units(ctx):
-            for question in by_enquete.get(int(unit["enquete_id"]), []):
-                rows.append({**question, "_unit_id": unit["unit_id"]})
+            for order, question in enumerate(by_enquete.get(int(unit["enquete_id"]), []), start=1):
+                rows.append({**question, "_unit_id": unit["unit_id"], "_order": order})
         return rows
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
@@ -233,13 +245,16 @@ class SurveyQuestionsStep(Step):
                         "tenant_id": tenant_id,
                         "lesson_id": ctx.ulid.for_row("unit", row["_unit_id"]),
                         "page_id": page_ulid(ctx, row["_unit_id"], row["enquete_page_id"]),
-                        "sort_order": int(row.get("sort_no") or 0),
+                        "sort_order": int(row.get("_order") or row.get("sort_no") or 0),
                         "kind": kind,
                         "prompt": row.get("question_text") or "",
                         "description": None,
                         "required": bool(int(row.get("required_chk") or 0)),
                         "max_length": None,  # 旧に入力上限が無い
                         "image_url": None,   # L9 の移送待ち
+                        # **削除済みの設問も移し、deleted_at で表す**（2026-10-26 決定。新はこれで除く。
+                        # school-launcher 20261026120001）。残すと削除済みの必須の設問で回答を送れなくなる
+                        "deleted_at": _deleted_at(row),
                         "created_at": convert(row.get("regist_date"), ColumnKind.TIMESTAMP),
                     },
                     natural_key=("id",),
@@ -294,6 +309,13 @@ class SurveyQuestionOptionsStep(Step):
 
 
 # --- 小道具 -----------------------------------------------------------------
+
+
+def _deleted_at(row: dict):
+    """削除済みなら旧の最終更新日時（UTC の datetime(3)）。"""
+    if not int(row.get("del_chk") or 0):
+        return None
+    return convert(row.get("update_date") or row.get("regist_date"), ColumnKind.DATETIME)
 
 
 def page_ulid(ctx: RunContext, unit_id: object, page_id: object) -> str:

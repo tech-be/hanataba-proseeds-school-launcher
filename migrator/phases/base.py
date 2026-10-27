@@ -40,12 +40,14 @@ class Phase:
             try:
                 results.append(step.run(ctx))
             except MigrationError:
-                ctx.target.rollback()
+                for target in ctx.targets():
+                    target.rollback()
                 ctx.logger.error("%s の %s で停止した", self.key, step.name)
                 raise
         for check in self.checks:
             check(ctx)
-        ctx.target.commit()
+        for target in ctx.targets():
+            target.commit()
         ctx.completed.add(self.key)
         return results
 

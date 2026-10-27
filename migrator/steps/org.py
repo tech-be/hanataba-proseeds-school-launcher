@@ -128,12 +128,27 @@ def _distinct_tag_names(rows: list[dict], taken: set[str] | None = None) -> dict
     return out
 
 
+#: 削除済みの属性を一覧に出すときの理由と詳細（タグ・割当・自動割当の条件で同じ）
+DELETED_ATTRIBUTE_REASON = "移行対象外"
+DELETED_ATTRIBUTE_DETAIL = "削除済みの属性（タグ）。新はタグの deleted_at を見ず、一覧や会員の詳細に出てしまう"
+
+
+def deleted_attribute_ids(ctx: RunContext) -> set[int]:
+    """削除済み（`del_chk = 1`）の属性の旧 ID。**タグにも割当にも移さない**（2026-10-26 決定）。"""
+    return {
+        int(r["attribute_id"])
+        for r in ctx.require_source().fetch_for_tenant("attribute", ("attribute_id", "del_chk"))
+        if int(r.get("del_chk") or 0) == 1
+    }
+
+
 class AttributesStep(Step):
     """属性を `user_tags`（タグ）に移す。**旧システムの「属性」が新システムの「タグ」。**
 
     新の自動付与ルール・会員の絞り込みはタグを使うので、属性はタグに一本化する
-    （`tenant_attributes` には書かない）。**削除済みの属性も移す**（`deleted_at`。2026-10-01 の方針。
-    新のアプリはまだ `deleted_at` を読まないので、削除済みのタグも一覧に出る）。
+    （`tenant_attributes` には書かない）。**削除済みの属性は移さず一覧に出す**（2026-10-26 決定。
+    共通のルール「削除済みも移す」の例外）。新はタグの `deleted_at` を読まず、移すと一覧・会員の詳細・
+    自動付与の条件の候補に出てしまう（ステージングで 1 件、割当 2,550 件）。
     `kiracari_user_chk` はタグに受け皿が無い（docs/db/01-foundation/review.md）。
     """
 
@@ -152,7 +167,13 @@ class AttributesStep(Step):
                 (ctx.tenant_id.value,),
             )
         }
-        return ctx.require_source().fetch_for_tenant("attribute", ATTRIBUTE_COLUMNS)
+        rows = []
+        for row in ctx.require_source().fetch_for_tenant("attribute", ATTRIBUTE_COLUMNS):
+            if int(row.get("del_chk") or 0) == 1:
+                self.drop("user_tags", row["attribute_id"], DELETED_ATTRIBUTE_REASON, DELETED_ATTRIBUTE_DETAIL)
+                continue
+            rows.append(row)
+        return rows
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         tenant_id = ctx.tenant_id.value
@@ -212,7 +233,7 @@ class UserAttributeValuesStep(Step):
     """会員の属性を `user_tag_assignments`（会員に付いたタグ）に移す。
 
     手動・自動の区別は旧に無いので `assigned_by` / `rule_id` は NULL。
-    **削除済みの属性への割当も移す**（タグを削除済みとして移すので付けられる）。
+    **削除済みの属性への割当は移さず一覧に出す**（タグを移さないため。2026-10-26 決定）。
     """
 
     name = "user_attribute_values"
@@ -222,12 +243,20 @@ class UserAttributeValuesStep(Step):
     depends_on = ("users", "config.attributes")
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        return ctx.require_source().fetch_joined(
+        deleted = deleted_attribute_ids(ctx)
+        rows = []
+        for row in ctx.require_source().fetch_joined(
             "user_attribute",
             ("attribute_id", "user_id", "regist_date"),
             parent="attribute",
             on="c.attribute_id = p.attribute_id",
-        )
+        ):
+            if int(row["attribute_id"]) in deleted:
+                self.drop("user_tag_assignments", f"{row['attribute_id']}:{row['user_id']}",
+                          DELETED_ATTRIBUTE_REASON, DELETED_ATTRIBUTE_DETAIL)
+                continue
+            rows.append(row)
+        return rows
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         tenant_id = ctx.tenant_id.value

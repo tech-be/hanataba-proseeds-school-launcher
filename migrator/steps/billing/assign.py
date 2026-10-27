@@ -6,7 +6,7 @@
 | 旧 | 新 |
 |---|---|
 | `assign` | `tag_auto_assign_rules` |
-| `assign_payment_item` | `tag_auto_assign_rule_triggers`（講座の商品 → `plan_id`、レッスン → `course_id`、それ以外の商品は旧 ID だけ） |
+| `assign_payment_item` | `tag_auto_assign_rule_triggers`（講座の商品 → `learning_path_id`、レッスン → `course_id`、それ以外の商品は旧 ID だけ） |
 | `assign_attribute` | `tag_auto_assign_rule_conditions`（属性 → タグ） |
 | `assign_group` | `tag_auto_assign_rule_group_conditions`（2026-10-01 新設。新のアプリはまだ読まない） |
 | `assign_item` | `tag_auto_assign_rule_grants`（削除済み・無効も `deleted_at` / `valid` で移す） |
@@ -30,7 +30,6 @@ from ...context import RunContext
 from ...core.datetimes import ColumnKind, convert, convert_date
 from ...core.records import Record
 from ..base import Step
-from .payments import COURSE_ITEM, items
 
 ASSIGN_COLUMNS = ("assign_id", "login_chk", "del_chk", "regist_date")
 ASSIGN_ITEM_COLUMNS = (
@@ -118,24 +117,31 @@ class RulesStep(Step):
 class TriggersStep(Step):
     """きっかけ。**旧の行はすべて移す。**
 
-    - 商品（`item_type = 0`）で講座の商品 → `plan_id`（`tenant_plans`。P2）
-    - 商品で講座以外（チケット・ライブ）→ `tenant_plans` に移していないので、旧の商品 ID（`item_id`）だけを持つ行
+    - 講座の商品 → `learning_path_id`（コース。旧の商品は新ではコースとして売る。2026-10-23。
+      school-launcher `20261023075332`）。**コースが入っていないときは結ばない**（制約に当たって
+      移らなかった商品）。外部キーで行ごと落ちると、きっかけの無いルール＝すべての購入で動くルールになる
+    - そのほかの商品（チケット・ライブ）→ **旧の商品 ID（`item_id`）だけを持つ行**（新に受け皿が無い）
     - レッスン（`item_type = 1`）→ `course_id`（`item_id` は講座の旧 ID）
+    - `plan_id` は NULL（旧の商品は `tenant_plans` に移さない。2026-10-23）
     """
 
     name = "billing.assign_triggers"
     description = "自動割当のきっかけ（商品・レッスン）を移す"
     source_table = "assign_payment_item"
     target_table = "tag_auto_assign_rule_triggers"
-    depends_on = ("billing.assign_rules", "billing.plans", "content.courses")
+    depends_on = ("billing.assign_rules", "content.courses", "content.learning_paths")
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        catalog = items(ctx)
         rows = _payment_triggers(ctx)
+        # 入っているコース（移行先を読む。dry-run でも読む）
+        paths = {
+            r["id"] for r in ctx.target.query(
+                "SELECT id FROM learning_paths WHERE tenant_id = %s", (ctx.tenant_id.value,))
+        }
         for row in rows:
-            kind = int(row.get("item_type") or 0)
-            item = catalog.get(int(row["item_id"])) if kind == TRIGGER_PRODUCT else None
-            row["_course_plan"] = item is not None and int(item.get("item_type") or 0) == COURSE_ITEM
+            path = ctx.ulid.for_row("learning_path", int(row["item_id"]))
+            is_product = int(row.get("item_type") or 0) == TRIGGER_PRODUCT
+            row["_learning_path_id"] = path if is_product and path in paths else None
         return rows
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
@@ -152,9 +158,9 @@ class TriggersStep(Step):
                         "course_id": (
                             ctx.ulid.for_row("lesson", int(row["item_id"])) if kind == TRIGGER_LESSON else None
                         ),
-                        "plan_id": (
-                            ctx.ulid.for_row("payment_item", int(row["item_id"])) if row["_course_plan"] else None
-                        ),
+                        # 旧の商品は tenant_plans に移さない（2026-10-23）。どの商品かは item_id に残す
+                        "plan_id": None,
+                        "learning_path_id": row.get("_learning_path_id"),
                         "item_id": int(row["item_id"]),
                         "item_type": kind,
                     },
@@ -166,7 +172,10 @@ class TriggersStep(Step):
 
 
 class ConditionsStep(Step):
-    """発動の条件のうち属性 → タグ。削除済みの属性もタグとして移っている。"""
+    """発動の条件のうち属性 → タグ。
+
+    **削除済みの属性を指す条件は移さず一覧に出す**（削除済みの属性はタグに移さない。2026-10-26 決定）。
+    """
 
     name = "billing.assign_conditions"
     description = "自動割当の条件（属性）を移す"
@@ -175,10 +184,20 @@ class ConditionsStep(Step):
     depends_on = ("billing.assign_rules", "config.attributes")
 
     def extract(self, ctx: RunContext) -> list[dict]:
-        return ctx.require_source().fetch_joined(
+        from ..org import DELETED_ATTRIBUTE_DETAIL, DELETED_ATTRIBUTE_REASON, deleted_attribute_ids
+
+        deleted = deleted_attribute_ids(ctx)
+        rows = []
+        for row in ctx.require_source().fetch_joined(
             "assign_attribute", ("assign_id", "attribute_id"), parent="assign",
             on="c.assign_id = p.assign_id",
-        )
+        ):
+            if int(row["attribute_id"]) in deleted:
+                self.drop("tag_auto_assign_rule_conditions", f"{row['assign_id']}:{row['attribute_id']}",
+                          DELETED_ATTRIBUTE_REASON, DELETED_ATTRIBUTE_DETAIL)
+                continue
+            rows.append(row)
+        return rows
 
     def transform(self, ctx: RunContext, rows: list[dict]) -> list[Record]:
         return [

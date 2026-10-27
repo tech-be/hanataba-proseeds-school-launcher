@@ -11,7 +11,11 @@ from migrator.context import build_context
 from migrator.db.target import TargetDatabase
 from migrator.errors import PreflightError
 from migrator.steps.tenant import TenantStep
-from migrator.steps.user_related import NotificationOptoutsStep, UserAddressesStep
+from migrator.steps.user_related import (
+    NotificationOptoutsStep,
+    UserAddressesStep,
+    UserPersonalNumbersStep,
+)
 from migrator.steps.users import UsersStep
 from tests.fakes import FakeSource
 
@@ -202,6 +206,41 @@ class UsersStepTest(unittest.TestCase):
         records = UsersStep().transform(self.ctx, [USER_ROW])
         self.assertEqual(records[0].source_key, USER_ROW["user_id"])
 
+    def test_members_who_could_not_log_in_are_inactive(self) -> None:
+        """**旧でログインできない会員は inactive**（新は status だけを見る。2026-10-26 決定）。
+
+        旧 `AuthModel.class.php:149-154`: ロックアウト中・開始日が空か未来・終了日の翌日 0 時を過ぎた会員は止める。
+        """
+        from migrator.steps.users import _status_of
+
+        today = date(2026, 10, 26)
+        def status(**over):
+            return _status_of({**USER_ROW, **over}, today)
+        self.assertEqual(status(), "active")
+        self.assertEqual(status(limit_date=date(2026, 10, 26)), "active")  # 終了日の当日はログインできる
+        self.assertEqual(status(limit_date=date(2026, 10, 25)), "inactive")
+        self.assertEqual(status(entry_date=None), "inactive")
+        self.assertEqual(status(entry_date="0000-00-00"), "inactive")
+        self.assertEqual(status(entry_date=date(2026, 10, 27)), "inactive")
+        self.assertEqual(status(is_lockout=1), "inactive")
+        self.assertEqual(status(is_lockout=1, del_chk=1), "deleted")
+
+    def test_deleted_member_has_no_email(self) -> None:
+        """削除済みの会員のメールは NULL（残すと、そのアドレスで新しく登録できない）。"""
+        [record] = UsersStep().transform(self.ctx, [{**USER_ROW, "del_chk": 1}])
+        self.assertIsNone(record.values["email"])
+
+    def test_natural_key_is_the_legacy_user_id(self) -> None:
+        """**メールは NULL の会員がいる**ので、旧の会員 ID で見分ける（流し直しで二重に入れない）。"""
+        [record] = UsersStep().transform(self.ctx, [{**USER_ROW, "mail_add": None}])
+        self.assertEqual(record.natural_key, ("tenant_id", "user_id"))
+        self.assertEqual(record.key_values(), {"tenant_id": "0" * 26, "user_id": 101})
+
+    def test_member_no_is_not_written(self) -> None:
+        """**個別番号は `user_personal_numbers` に移す。** `users.member_no` は新アプリが読まない。"""
+        records = UsersStep().transform(self.ctx, [USER_ROW])
+        self.assertNotIn("member_no", records[0].values)
+
 
 class UserRelatedTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -242,10 +281,49 @@ class UserRelatedTest(unittest.TestCase):
         self.assertEqual(values["street"], "千代田1-1 ビル101")
 
     def test_optout_polarity_is_inverted(self) -> None:
-        """lw2 の「受け取る」→ 新環境の「受け取らない」。"""
-        records = NotificationOptoutsStep().transform(self.ctx, [USER_ROW])
+        """lw2 の「受け取る」→ 新環境の「受け取らない」。PC の「受け取らない」が行になる。"""
+        row = {**USER_ROW, "sendmail_pc_chk": 0, "sendmail_mobile_chk": 1}
+        records = NotificationOptoutsStep().transform(self.ctx, [row])
         made = {(r.values["kind"], r.values["channel"]) for r in records}
-        self.assertEqual(made, {("announcement", "mobile")})
+        self.assertEqual(made, {("announcement", "pc")})
+
+    def test_mobile_optouts_are_listed_not_loaded(self) -> None:
+        """**携帯の受け取り設定は移さず一覧に出す**（新は channel を見ず、PC も止まって見える。2026-10-26 決定）。"""
+        ctx = make_ctx({"user": [USER_ROW]})  # USER_ROW は PC 受け取る・携帯受け取らない
+        ctx.tenant_id.resolve("0" * 26)
+        step = NotificationOptoutsStep()
+        rows = step.extract(ctx)
+        self.assertEqual(step.transform(ctx, rows), [])
+        dropped = [(v.key, v.reason) for v in step._take_dropped()]
+        self.assertEqual(dropped, [("101:announcement:mobile", "移行対象外")])
+
+
+class UserPersonalNumbersTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.ctx = make_ctx({})
+        self.ctx.tenant_id.resolve("0" * 26)
+
+    def transform(self, **row):
+        base = {"user_id": 101, "regist_no": 1, "personal_no": 1001, "scout_display_type": 0}
+        return UserPersonalNumbersStep().transform(self.ctx, [{**base, **row}])[0].values
+
+    def test_numbers_are_kept_as_is(self) -> None:
+        """番号は作り直さない。`personal_no` は新では文字列。"""
+        values = self.transform(regist_no=7, personal_no=1007)
+        self.assertEqual(values["regist_no"], 7)
+        self.assertEqual(values["personal_no"], "1007")
+        self.assertEqual(values["user_id"], self.ctx.ulid.for_row("user", 101))
+
+    def test_scout_display_type_is_mapped_to_code(self) -> None:
+        """旧は 0 名前 / 1 ニックネーム / 2 個別番号（旧 `UserModel` の会員検索）。"""
+        for old, new in ((0, "name"), (1, "nickname"), (2, "personal_no")):
+            self.assertEqual(self.transform(scout_display_type=old)["scout_display_type"], new)
+
+    def test_unknown_values_are_not_filled_in(self) -> None:
+        """**NULL・対応表に無い値は既定に倒さない。** NOT NULL に当たり、一覧に出る。"""
+        self.assertIsNone(self.transform(scout_display_type=9)["scout_display_type"])
+        self.assertIsNone(self.transform(scout_display_type=None)["scout_display_type"])
+        self.assertIsNone(self.transform(personal_no=None)["personal_no"])
 
 
 if __name__ == "__main__":
@@ -345,3 +423,48 @@ class VisibilityStepTest(unittest.TestCase):
                 for r in UserFieldVisibilityStep().transform(ctx, [row])}
         self.assertEqual(made, {"profile": True, "name": False, "birthday": True,
                                 "diary": False, "lesson": True})  # None の列は作らない
+
+
+class DeletedAttributeTest(unittest.TestCase):
+    """**削除済みの属性（タグ）と、その割当・自動割当の条件は移さず一覧に出す**（2026-10-26 決定）。
+
+    新はタグの deleted_at を見ず、移すと一覧・会員の詳細・自動付与の条件の候補に出てしまう。
+    """
+
+    def setUp(self) -> None:
+        from datetime import datetime as dt
+
+        attr = {"attribute_memo": None, "sort_no": 1, "regist_date": dt(2020, 1, 1), "update_date": dt(2022, 11, 21)}
+        self.ctx = make_ctx({
+            "attribute": [{"attribute_id": 1, "attribute_name": "会員", "del_chk": 0, **attr},
+                          {"attribute_id": 8, "attribute_name": "テスト", "del_chk": 1, **attr}],
+            "user_attribute": [{"attribute_id": 1, "user_id": 101, "regist_date": dt(2020, 1, 1)},
+                               {"attribute_id": 8, "user_id": 101, "regist_date": dt(2020, 1, 1)}],
+            "assign_attribute": [{"assign_id": 5, "attribute_id": 1}, {"assign_id": 5, "attribute_id": 8}],
+        })
+        self.ctx.tenant_id.resolve("0" * 26)
+
+    def extracted(self, step):
+        rows = step.extract(self.ctx)
+        return rows, [(v.key, v.reason) for v in step._take_dropped()]
+
+    def test_tag(self) -> None:
+        from migrator.steps.org import AttributesStep
+
+        rows, dropped = self.extracted(AttributesStep())
+        self.assertEqual([r["attribute_id"] for r in rows], [1])
+        self.assertEqual(dropped, [("8", "移行対象外")])
+
+    def test_assignment(self) -> None:
+        from migrator.steps.org import UserAttributeValuesStep
+
+        rows, dropped = self.extracted(UserAttributeValuesStep())
+        self.assertEqual([r["attribute_id"] for r in rows], [1])
+        self.assertEqual(dropped, [("8:101", "移行対象外")])
+
+    def test_auto_assign_condition(self) -> None:
+        from migrator.steps.billing.assign import ConditionsStep
+
+        rows, dropped = self.extracted(ConditionsStep())
+        self.assertEqual([r["attribute_id"] for r in rows], [1])
+        self.assertEqual(dropped, [("5:8", "移行対象外")])

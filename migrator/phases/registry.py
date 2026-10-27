@@ -7,16 +7,16 @@
 
 識別子は `foundation.1` のように**区分.フェーズ番号**。区分が増えても番号がずれない。
 
-**区分とフェーズは移行計画の区分・項目に対応する**（共通を除き5区分 / 25フェーズ）。
+**区分とフェーズは移行計画の区分・項目に対応する**（共通を除き5区分 / 26フェーズ）。
 
 ```
 common.0       スキーマ確認（追加は移行直前に migration で実施）
 foundation.1   マスター      ← マスタ・テナント・テナント設定。ここで tenant_id が決まる
 foundation.2   ユーザ
-content.1-4    オンデマンド講座 / テスト定義・課題定義 / アンケート定義 / ライブ講座
+content.1-5    オンデマンド講座 / テスト定義・課題定義 / アンケート定義 / ライブ講座 / コース
 enrollment.1-7 受講権限 / 学習履歴 / テスト結果 / 課題提出 / アンケート回答 / ライブ予約 / 修了証
 billing.1-4    チケット / 決済 / 帳票 / 自動割当
-support.1-8    LINE / クーポン / お知らせ / 問い合わせ / ファイル / 就業支援 / コミュニティ / 利用料の集計
+support.1-9    LINE / クーポン / お知らせ / 問い合わせ / ファイル / 就業支援 / コミュニティ / 利用料の集計 / 自動メールの文面
 ```
 
 `login_history` は純ログのため移行しない。フェーズ表に現れない。
@@ -34,6 +34,7 @@ from ..steps.billing import tickets as bl_tickets
 from ..steps.content import assignments as ct_assignments
 from ..steps.content import courses as ct_courses
 from ..steps.content import instructors as ct_instructors
+from ..steps.content import learning_paths as ct_learning_paths
 from ..steps.content import lessons as ct_lessons
 from ..steps.content import live_courses as ct_live_courses
 from ..steps.content import live_definitions as ct_live_definitions
@@ -42,11 +43,16 @@ from ..steps.content import masters as ct_masters
 from ..steps.content import quizzes as ct_quizzes
 from ..steps.content import surveys as ct_surveys
 from ..steps.enrollment import certificates as en_certificates
+from ..steps.enrollment import learning_paths as en_learning_paths
 from ..steps.enrollment import progress as en_progress
 from ..steps.enrollment import results as en_results
 from ..steps.enrollment import rights as en_rights
 from ..steps.schema import SchemaCheckStep
 from ..steps.support import accounting as sp_accounting
+from ..steps.support import announcements as sp_announcements
+from ..steps.support import coupons as sp_coupons
+from ..steps.support import inquiries as sp_inquiries
+from ..steps.support import templates as sp_templates
 from ..steps.support import career as sp_career
 from ..steps.support import community as sp_community
 from ..steps.support import library as sp_library
@@ -108,6 +114,9 @@ def build_sections() -> list[Section]:
                 Phase(4, "ライブ講座", "受け皿講座・ライブ・開催回・分類を移す",
                       steps=(ct_live_courses.host_course() + ct_live_lessons.build()
                              + ct_live_definitions.build())),
+                # 旧の販売商品（2026-10-22）。講座（content.1）の後
+                Phase(5, "コース", "講座の販売商品をコースとして移す",
+                      steps=ct_learning_paths.build()),
             ],
         ),
         # --- 3 受講 ---------------------------------------------------------
@@ -145,11 +154,13 @@ def build_sections() -> list[Section]:
                 Phase(1, "チケット", "種別・必要枚数・付与・消費の台帳・月次配布を移す",
                       steps=(bl_tickets.definitions() + bl_tickets.grants()
                              + bl_extras.allowances())),
-                Phase(2, "決済", "商品と、お金が動く申込を決済として移す",
-                      steps=bl_payments.build() + ct_live_courses.limit_item_history()),
+                # コースの購入・割り当ては受講（03）のデータだが、`payment_id` が決済を指すので決済の後
+                Phase(2, "決済", "商品と、お金が動く申込を決済として移す。コースの購入・割り当ても",
+                      steps=(bl_payments.build() + ct_live_courses.limit_item_history()
+                             + en_learning_paths.build())),
                 Phase(3, "帳票", "領収書の設定・発行済みの領収書・規約の本文を移す",
                       steps=bl_receipts.build()),
-                # 受講（J04）のデータだが、きっかけの商品（tenant_plans）が billing.2 で入るので最後
+                # 受講（J04）のデータだが、きっかけの商品の記録と並べて課金の最後に置く
                 Phase(4, "自動割当", "自動割当のルール・きっかけ・条件・付与・記録を移す",
                       steps=bl_assign.build()),
             ],
@@ -163,9 +174,12 @@ def build_sections() -> list[Section]:
             phases=[
                 Phase(1, "LINE 友だち紐付け", "LINE の紐付け（会員の投入後）",
                       steps=user_related.line_links()),
-                Phase(2, "クーポン", "クーポンと対象者割当（未実装）", steps=[]),
-                Phase(3, "お知らせ", "お知らせ・配信設定（未実装）", steps=[]),
-                Phase(4, "問い合わせ", "問い合わせと個別メッセージ（未実装）", steps=[]),
+                Phase(2, "クーポン", "クーポンと対象者・使用の記録を移す（無料クーポンは移さない）",
+                      steps=sp_coupons.build()),
+                Phase(3, "お知らせ", "お知らせ・アナウンスと配信先・既読・返信を移す",
+                      steps=sp_announcements.build()),
+                Phase(4, "問い合わせ", "問い合わせの分類と問い合わせ（1 往復目）を移す",
+                      steps=sp_inquiries.build()),
                 Phase(5, "ファイル", "教材・ライブラリを移す", steps=sp_library.build()),
                 Phase(6, "就業支援", "助言メモ・スカウトのフォロー（求人・面談・スキルチェックは未実装）",
                       steps=sp_career.build()),
@@ -173,6 +187,8 @@ def build_sections() -> list[Section]:
                       steps=sp_community.build()),
                 Phase(8, "利用料の集計", "締め日・月次の会員数の集計・集計時点の会員の写しを移す",
                       steps=sp_accounting.build()),
+                Phase(9, "自動メールの文面", "自動メールと LINE の文面を移す（新に種別があるものだけ）",
+                      steps=sp_templates.build()),
             ],
         ),
     ]
