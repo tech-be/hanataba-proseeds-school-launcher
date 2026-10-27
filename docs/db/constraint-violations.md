@@ -42,12 +42,12 @@
 
 | # | 対象データ | 旧 テーブル.カラム | 新 テーブル.カラム | かかる制約 | 実測 | 決めること |
 |---:|---|---|---|---|---:|---|
-| 1 | メールアドレス | `user.mail_add`（NULL 可・一意制約なし） | `users.email` | **NOT NULL** ＋ `UNIQUE (tenant_id, email)` | 欠損 2,698名<br>重複 389名<br>**＝会員の 98%** | 何を入れるか。**規模が桁違い** |
+| 1 | メールアドレス | `user.mail_add`（NULL 可・一意制約なし） | `users.email` | ~~NOT NULL~~（`20260928061152` で NULL 可になった）＋ `UNIQUE (tenant_id, email)` | 欠損 2,698名<br>重複 389名<br>**＝会員の 98%** | **欠損は NULL で入る（制約に当たらない）。** 重複は組の 1 人に残し、ほかを NULL にする（2026-10-26 決定。どれに残すかは [D11](open-questions.md)。決まるまでは最も新しくログインした会員） |
 | 2 | ログイン ID | `user.login_id`（一意制約なし） | `users.login_id` | `UNIQUE (tenant_id, login_id)` | 8組 21名 | 重複した組の**どれを残すか** |
 | 3 | ロール | `user.role_id`（NULL 可） | `users.role` | **NOT NULL** ＋ FK `user_roles(code)` | 1名 | 何を入れるか。**既定値には倒さない** |
 | 4 | LINE 連携 | `user.line_id`（一意制約なし） | `line_links.line_user_id` | `UNIQUE (tenant_id, line_user_id)` | 1組 4名 | 同じ LINE を共有する会員の**誰に残すか** |
 | 5 | 氏名 | `user.name_sei` ＋ `name_mei`（**どちらも NULL 可**） | `users.name` | **NOT NULL** | 0件 | 両方空のとき何を入れるか |
-| 6 | 会員番号 | `user_personal_no.personal_no`（**一意制約なし**） | `users.member_no` | `UNIQUE (tenant_id, member_no)` | 0件 | 重複した組の**どれを残すか** |
+| 6 | 会員番号 | `user_personal_no.personal_no` / `regist_no`（**一意制約なし**） | `user_personal_numbers.personal_no` / `regist_no` | `UNIQUE (tenant_id, personal_no)`・`UNIQUE (tenant_id, regist_no)`（2026-10-22 から。それまでは `users.member_no`） | 0件（`personal_no`。`regist_no` は未確認） | 重複した組の**どれを残すか** |
 
 > **#1 は暫定対応済み。** 検証データでは合成アドレス `ext-<user_id>@lw2.invalid`（新環境のブリッジと
 > 同じ形式）を当て、重複した組のいちばん古い会員は現在の値のままにした。**この規模のまま本番に当たるなら、
@@ -138,7 +138,7 @@
 | 8 | 課題の提出 | `user_learning_report.report_id` | `report.report_id` | 32件 | 同上。**投入時の `submissions` → `assignments` 違反の主因** |
 | 9 | 講座の分類 | `lesson.lesson_cate_id` | `lesson_cate.lesson_cate_id` | 9講座 / 分類3種 | **解決済み**（`courses.category` は NULL 可なので、分類だけ落として講座は移す） |
 | 10 | バッジの対象講座 | `badge_item.entity_id` | `lesson.lesson_id` | 1件 | **判断不要**（バッジは移行対象外。→ [対象外](06-out-of-scope/breakdown.md#決定で対象外にしたもの)） |
-| 11 | 決済（申込） | `payment_application.user_id` | `user.user_id` | 11件 | 同上。**会員の行が物理削除されている**（2017〜2019年。1件は `user_id = 0`）。うち支払い済み6件。明細（`subscription_payments`）10件も連鎖して移らない |
+| 11 | 決済（申込） | `payment_application.user_id` | `user.user_id` | 11件 | 同上。**会員の行が物理削除されている**（2017〜2019年。1件は `user_id = 0`）。うち支払い済み6件。明細（`learning_path_purchase_payments`）11件も連鎖して移らない（2026-10-22 から。それまでは `subscription_payments` 10件） |
 | 12 | テストの受験 | `user_learning_test` → `user_learning_unit.unit_id` | `unit.unit_id` | 29件 | 同上。**ユニットが物理削除され、テストの定義を引けない**。以前は一覧に出さず黙って落としていた（旧 DB との突き合わせで判明） |
 | 13 | アンケートの定義 | `unit.enquete_id` | `enquete.enquete_id` | 5件 | 同上。**共有講座のアンケートユニットが指す定義が物理削除**（enquete_id 100005703 / 28823） |
 | 14 | アンケートの回答 | `enquete_answer.entity_id` / `enquete_id` | `user_learning_unit` / ユニットのアンケート | 4件 | 同上。3件は**回答したユニットがそのアンケートを使っていない**（03 の仕様書に記載済み）、1件は回答した学習の行が物理削除 |
@@ -170,7 +170,7 @@
 
 | 新テーブル | 参照先 | 原因 |
 |---|---|---|
-| `external_user_links` / `user_addresses` / `user_field_visibility` / `notification_optouts` | `users` | 上の「新の制約」#3 の巻き添え |
+| `external_user_links` / `user_addresses` / `user_personal_numbers` / `user_field_visibility` / `notification_optouts` | `users` | 上の「新の制約」#3 の巻き添え |
 | `quizzes` / `survey_answers` / `certificates` | 親の定義 | 親が移っていない |
 | `lesson_progress` / `submissions` | 親の定義 | **一部は上の「旧データの不整合」#7・#8**（旧で親が消えている）。残りは親が移っていない |
 | `submission_feedback_files` / `submission_feedbacks` / `certificate_events` | 親の実績 | 親が移っていない |

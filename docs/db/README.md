@@ -77,6 +77,10 @@ A/B/C の判定そのものは棚卸し作成者の見解で機械的な基準�
 
 ## 区分ごとのセット
 
+> **school-launcher への追従で見つかった問題と課題は [school-launcher-sync-issues.md](school-launcher-sync-issues.md) にまとめてある**（移行担当・開発チームで決めるもの）。
+>
+> **移行対象外ではないのに、移していない・移せない・移しても効かないものは [not-migrated-summary.md](not-migrated-summary.md) に 1 枚でまとめてある**（件数つき）。
+>
 > **運営に確認したいことは [open-questions.md](open-questions.md) に1枚でまとめてある。** 各区分の `migration-spec.md` の 1-1 と `features.md` の未決から、**回答が要るものだけ**を抜き出したもの（QA表への転記用）。
 >
 > **制約に当たって移らなかった行は [constraint-violations.md](constraint-violations.md)。** NOT NULL / UNIQUE / CHECK ごとに、何が当たっているかを `out/not-migrated.csv` から集計したもの（移行担当用）。
@@ -84,13 +88,13 @@ A/B/C の判定そのものは棚卸し作成者の見解で機械的な基準�
 | 区分 | 内訳 | 突き合わせ | 移行仕様 | 機能の差分 | 項目 |
 |---|---|---|---|---|---|
 | 01 基盤 | [breakdown](01-foundation/breakdown.md) | [review](01-foundation/review.md) | [spec](01-foundation/migration-spec.md) | [features](01-foundation/features.md) | マスター / ユーザ |
-| 02 コンテンツ | [breakdown](02-content/breakdown.md) | [review](02-content/review.md) | [spec](02-content/migration-spec.md) | [features](02-content/features.md) | オンデマンド講座 / テスト定義・課題定義 / アンケート定義 / ライブ講座 |
+| 02 コンテンツ | [breakdown](02-content/breakdown.md) | [review](02-content/review.md) | [spec](02-content/migration-spec.md) | [features](02-content/features.md) | オンデマンド講座 / テスト定義・課題定義 / アンケート定義 / ライブ講座 / コース |
 | 03 受講 | [breakdown](03-enrollment/breakdown.md) | [review](03-enrollment/review.md) | [spec](03-enrollment/migration-spec.md) | [features](03-enrollment/features.md) | 受講権限 / 学習履歴 / テスト結果 / 課題提出 / アンケート回答 / ライブ予約 / 修了証 |
 | 04 課金 | [breakdown](04-billing/breakdown.md) | [review](04-billing/review.md) | [spec](04-billing/migration-spec.md) | [features](04-billing/features.md) | チケット / 決済 / 帳票 / 自動割当 |
 | 05 サポート機能 | [breakdown](05-support/breakdown.md) | [review](05-support/review.md) | [spec](05-support/migration-spec.md) | [features](05-support/features.md) | LINE / クーポン / お知らせ / 問い合わせ / ファイル / 就業支援 / コミュニティ / 利用料の集計 |
 | 06 対象外 | [breakdown](06-out-of-scope/breakdown.md) | [review](06-out-of-scope/review.md) | **不要** | [features](06-out-of-scope/features.md) | 移行しない |
 
-### school-launcher の lw2 移行の migration（2026-10-02 時点）
+### school-launcher の lw2 移行の migration（2026-10-22 時点。`hanataba_dev` の `26fc5be9`）
 
 詳しい中身は各区分の `schema-additions.md`。**移行の直前に全部当てる**（各区分の migration-spec のフェーズ0）。
 `run` の前に移行先を作り直す（`make reseed`）ので、ローカル DB の適用状況は作り直しで追いつく。
@@ -107,12 +111,22 @@ A/B/C の判定そのものは棚卸し作成者の見解で機械的な基準�
 | `20260928132756_lw2_billing_additions` | 04 | 同上（PR #139） |
 | `20260929091539` / `20260929102209` / `20260930044959`（旧 ID の列を旧列名にする） | 01〜04 | 同上（前の2つは PR #135、`20260930044959` は PR #139） |
 | career `009_rename_career_history_legacy_id`（職務経歴の旧 ID。移行ツールは career に書かない） | 05 | 同上（PR #139） |
-| `20260930052453_lw2_support_additions` | 05（03 の添削のファイルを同居） | **`feat/lw2-support-schema` にコミット・push 済み**（`hanataba_dev` には未マージ） |
-| `20261001085757_lw2_keep_deleted_rows`（削除済みも移すための列・表） | 01〜05 | **同上** |
+| `20260930052453_lw2_support_additions` | 05（03 の添削のファイルを同居） | `hanataba_dev` にマージ済み |
+| `20261001085757_lw2_keep_deleted_rows`（削除済みも移すための列・表） | 01〜05 | 同上 |
+| `20261015021737_line_login_channel_secret_kind`（school-launcher 側。LINE ログインのチャネルシークレットの種類） | 01 | 同上。旧 `line_channel_sercret` の移し先 |
+| `20261016030602_create_user_personal_numbers`（school-launcher 側。個別番号とスカウトでの名前の出し方） | 01 | 同上。旧 `user_personal_no` の移し先（`users.member_no` は使わなくなった） |
+| `20261016064734_widen_profile_item_no_to_smallint`（school-launcher 側） | 01 | 同上。`tenant_profile_items.item_no` を SMALLINT に広げる（移す値は変わらない） |
+| `20261009113244_learning_path_pricing` / `20261013001351_add_course_order_to_learning_paths`（school-launcher 側。コース＝旧の販売商品） | 02 | 同上。旧 `payment_item` の移し先（`content.5`） |
+| `20261020001030_tenant_course_categories`（school-launcher 側） | 02 | 同上。旧 `lesson_cate` をテナントごとのカテゴリにも入れる |
+| `20261021082002_add_lesson_deleted_at` / `20261008112033_add_video_source_to_video_lessons` / `20261013093100_live_lesson_reservation_policies`（school-launcher 側） | 02 | 同上。削除済みのレッスン・動画の置き場所・ライブの予約とキャンセルの期限 |
+| `20261012014810_learning_path_purchase` / `20261019004848_learning_path_enrollment_admin_grant` / `20261019042710_learning_path_enrollment_courses` / `20261012174140_align_remote_pc_eligibility_with_lw2`（school-launcher 側） | 03（流すのは 04 の `billing.2`）・04 | 同上。コースの購入・割り当て、渡した講座、`enrollments.via_learning_path`。04 は講座の商品の決済をコースの購入の種類（`learning_path_purchase`）と明細（`learning_path_purchase_payments`）にそろえる |
+| `20261020083042_tenant_line_templates` / `20261020083044_add_line_body_to_announcements`（school-launcher 側） | 05 | 同上。自動メールの LINE の文面・お知らせの LINE の本文の受け皿。**移行ツールはまだ書かない**（自動メール・お知らせの移行が未実装） |
+| career `20261016084938_career_profile_fields` / `20261016084939_desired_prefectures`（school-launcher 側） | 05（01 の会員の列） | 同上。旧 `user` の就活の列の受け皿。**移行ツールは career に書かない** |
 
 > school-launcher 側の都合で入った lw2 関連の migration（メールアドレスを任意にする `20260928061152`、
 > 問題カテゴリの統合 `20260928082433`、初回ログイン時のパスワード変更 `20260928175059` など）は、
 > 移行ツールが前提にしていないので、区分の文書には載せていない。
+> ただし、**移行ツールが書き込む先になったもの**（上の表の「school-launcher 側」の行）は載せる。
 
 > **区分は移行計画の5グループ。** `既存機能と新システムの保有.docx.pdf` の8区分は
 > **データ種の分類軸**として [data-type-mapping.md](data-type-mapping.md) に残してあり、
@@ -252,7 +266,7 @@ A/B/C の判定そのものは棚卸し作成者の見解で機械的な基準�
 | オンデマンド | **テストの出題条件（カテゴリ×レベルからN問）**、**問題・選択肢・解説の画像（22列）**、**問題バンクの共有**、テストの表示制御6種、**動画のスキップ防止・修了設定**、絶対日時でのユニット公開、**課題の配布ファイル5本**、アンケート回答のうちお知らせ・レポート添付（entity_type 1/3） |
 | ライブ | 1人あたりの予約上限、出席認証キー、月次チケット配布、**チケット消費履歴（`grant_id` を決められないため再生不能）** |
 | 受講 | **進捗状態（学習中/未着手の区別）**、ユニットごとの得点、SCORM 中断データ、`user_learning_unit_log`（2,929,224行 / 780MB）、**割当ルールの定義そのもの** |
-| 課金 | 申込フォームの取得項目設定、商品ごとの支払手段許可、**決済の税額・税抜額・税率**（領収書233件以外）、コンビニ決済の受付情報5列、**規約本文**（商品そのものは `tenant_plans` / `plan_courses` で受けられる。→ [04 B3](04-billing/review.md#b3-決済)） |
+| 課金 | 申込フォームの取得項目設定、商品ごとの支払手段許可、**決済の税額・税抜額・税率**（領収書233件以外）、コンビニ決済の受付情報5列、**規約本文**（商品そのものはコース `learning_paths` / `learning_path_courses` で受ける。2026-10-23 から `tenant_plans` には入れない。→ [04 B3](04-billing/review.md#b3-決済)） |
 | 運営 | お知らせ添付296ファイル、**問い合わせ添付706ファイル**（L9 最大の塊）、催促メール設定、**フォローメールの条件24列**、掲示板の公開範囲5軸 |
 | 就職支援 | **求人への応募記録**、企業ページの訴求コンテンツ9列、構造化された職務経歴、**面談項目20列** |
 
@@ -298,7 +312,7 @@ A/B/C の判定そのものは棚卸し作成者の見解で機械的な基準�
 | `lecture` が複数ぶら下がる `unit` の有無 | `video_lessons.lesson_id` が PK（実測では最大1） |
 | `user_learning_test_sub.question_answer` の格納形式 | 選択式の回答をどう復元するか |
 | `test.exam_limit_times` の単位（分か秒か） | `time_limit_sec` との換算 |
-| `user_personal_no.personal_no` の用途（会員に見せる番号か、スカウト時の匿名IDか） | 会員の一意 ID と確認済み。**移行先を作るかの判断に要る** |
+| `user_personal_no.personal_no` の用途（会員に見せる番号か、スカウト時の匿名IDか） | 会員の一意 ID と確認済み。**移行先は school-launcher が作った**（`user_personal_numbers`。スカウトで名前の代わりに出せる番号として使う。2026-10-22） |
 | 実データへの cp932 混入 | 文字コード検証 |
 | `ex_training`（外部研修）の利用件数 | 対象外にしてよいかの判断 |
 | `payment_item.price` と `excluding_tax_price` のどちらが正か | 列コメントが両方「税抜」で重複している |
