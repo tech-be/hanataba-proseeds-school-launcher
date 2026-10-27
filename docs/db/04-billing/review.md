@@ -124,7 +124,7 @@
 > **内訳の残り（`payment_item_lesson` / `payment_item_cate` ほか / `payment_application_item` /
 > `payment_infomation` / `payment_application_set_user_learning_lesson`）は列の突き合わせをしていない。** いまの扱い:
 >
-> - `payment_item_lesson` は `plan_courses` に移す（削除済みの対応も `deleted_at` で移す）。`payment_application_item` は決済の商品の特定に使う
+> - `payment_item_lesson` はコースの講座（`learning_path_courses`。02）に移す（削除済みの対応は移行対象外。2026-10-23 から `plan_courses` には移さない）。`payment_application_item` は決済の商品の特定に使う
 > - `payment_infomation` は**移している**。設定は基盤のテナントの Step で `tenants.settings.lw2_payment`（P13）、
 >   規約の URL・表題の上書きは `tenant_legal_documents`（`receipts.py`。P12）
 > - 商品の分類（`payment_item_cate` 3件 / `payment_item_item_cate` 7件）と申込と受講の古い対応表
@@ -136,6 +136,19 @@
 
 商品（講座パッケージ）。**この区分の外にも影響する表**で、コンテンツの価格（B1）と
 受講権限の母集合がどちらもここを参照する。
+
+> **2026-10-22: 講座の商品（`item_type = 0`）は、コンテンツの `content.5` でコース（`learning_paths` / `learning_path_courses`）にも入れる。**
+> school-launcher は「コース＝旧の販売商品」という作りにした（`20261009113244`）。下の `tenant_plans` への移し方は、
+> 課金の見直しで扱う（今は両方に入る）。対応は [02 の review](../02-content/review.md#payment_item--payment_item_lesson--learning_paths--learning_path_courses)。
+>
+> **2026-10-22 の見直し: 講座の商品の決済は、種類をコースの購入（`learning_path_purchase`）にし、
+> 明細を `learning_path_purchase_payments` に入れる**（P5）。`course_purchase_payments` には入れない。
+>
+> **2026-10-23 の決定: `tenant_plans` / `plan_courses` には移さない**（P1）。新の `tenant_plans` は Stripe の継続課金のプランで、旧の商品にあたるのはコース。
+> 残していた理由（自動割当のきっかけ `tag_auto_assign_rule_triggers.plan_id` が `tenant_plans` を指す）は、新がコースの購入で自動割当を動かさないので
+> 実際の動きに効かない（[sync-issues の B7](../school-launcher-sync-issues.md)）。きっかけの `plan_id` は NULL で、どの商品かは `item_id` に残る。
+> 2026-10-24 から、講座の商品のきっかけはコース（`learning_path_id`）を指し、新はコースの購入で自動割当を動かす（B7。school-launcher は未マージ）。
+> 下の表の「修正方法」は 2026-10-22 までの記録。
 
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
@@ -220,10 +233,10 @@
 |---|---|---|---|
 | **A1** | `ticket_types.ticket_id` / `legacy_ticket_type` ＋ UNIQUE `uk_tt_legacy`、`ticket_grants.starts_at` | `ticket.ticket_id` / `ticket_type` / `user_ticket.ticket_start_date` | ・**`user_ticket_log.ticket_type` が参照しているのは `legacy_ticket_type`**（`ticket_id` ではない）。履歴を移さなくても**あとで人が突き合わせられる**ようにする<br>・`starts_at` は実測全件 NULL |
 | **A2** | `monthly_ticket_allowances`（月次のチケット配布） | `month_user_ticket`（実測1件） | ・「毎月◯枚まで」の契約と消化の判定<br>・`target_month` は `'YYYYMM'` の**書式を変えずに移す**<br>・`application_id` を決済に結ぶのは未実装 |
-| **A3** | `tenant_plans.item_id` ＋ UNIQUE、`settings` JSON | `payment_item`（講座の商品） | ・**すべて `inactive`**。新で売るには Stripe の価格を作り直す<br>・試用・受講期間・自動解約・支払日は `settings` にあるだけで、**新の購入処理は読まない** |
+| **A3** | `tenant_plans.item_id` ＋ UNIQUE、`settings` JSON | `payment_item`（講座の商品） | **2026-10-23 から移行ツールは使わない**（旧の商品は `tenant_plans` に移さない。P1）。列は school-launcher に残っている（`20260928132756`） |
 | **A4** | `payments.application_id` ＋ UNIQUE、`settings` JSON | `payment_application` | ・決済一覧・売上に移した決済が出る（`platform_fee = 0`）<br>・解約・分割回数・J-Payment の ID は `settings` にあるだけ |
 | **A5** | `payment_providers` に `legacy_jpayment` | J-Payment | ・**新の決済処理は扱わない。** 返金ボタンを押しても決済代行に届かない（運用で止める） |
-| **A6** | `payment_types` に `lw2_purchase` | 講座が1つに決まらない購入 | ・一覧では講座が空欄になる（`course_purchase_payments` が無い） |
+| **A6** | `payment_types` に `lw2_purchase` | チケット・ライブの商品の購入（2026-10-22 から。それまでは講座が1つに決まらない購入も） | ・一覧では講座が空欄になる（`course_purchase_payments` が無い） |
 | **A7** | `receipts.receipt_log_id` ＋ UNIQUE | `receipt_log.receipt_log_id` | ・旧で印字していた番号。新は決済ごとの連番（`issue_no`）で番号の付け方が違う |
 | **A8** | `tenant_legal_documents` | `agreement` / `cancel_policy` / `privacy_policy` / `tokusyo` | ・**アプリはまだ読まない。** テナントごとの規約を見せるなら画面の改修が要る（→ 確認事項 D6） |
 
@@ -257,7 +270,8 @@
 [billing.1]  ticket_types → ticket_type_lessons → live_lesson_ticket_requirements
              → ticket_grants → ticket_ledger_entries → monthly_ticket_allowances
                 ↓
-[billing.2]  tenant_plans → plan_courses → payments → course_purchase_payments / subscription_payments
+[billing.2]  payments → learning_path_purchase_payments / subscription_payments（2026-10-23 から tenant_plans / plan_courses は作らない）
+             → learning_path_enrollments → learning_path_enrollment_courses（受講 03 のデータ）
              → live_lesson_limit_item_history
 [billing.3]  receipt_settings → receipts → tenant_legal_documents
 [billing.4]  tag_auto_assign_rules → tag_auto_assign_rule_triggers → tag_auto_assign_rule_conditions

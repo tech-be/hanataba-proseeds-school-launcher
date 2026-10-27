@@ -25,7 +25,7 @@
 | **チケット** | B1 定義 / B2 残高・台帳 | 実装済み（`billing.1`、6 Step） | 既存の表 ＋ A1 / A2 |
 | **決済** | B3 | 実装済み（`billing.2`、6 Step。決済の5 Step ＋ ライブを予約できる商品の全行 `billing.live_limit_item_history`。**暫定の規則**） | 既存の表 ＋ A3〜A6 |
 | **帳票** | B4 | 実装済み（`billing.3`、3 Step。**暫定の規則**） | 既存の表 ＋ A7 / A8 |
-| （自動割当） | — | 実装済み（`billing.4`、6 Step。受講のデータ種 J04 / J05。きっかけが `tenant_plans` を指すので課金の最後。**P15 は暫定の規則**） | `20260927105511` の表 ＋ [schema-additions 5](schema-additions.md) |
+| （自動割当） | — | 実装済み（`billing.4`、6 Step。受講のデータ種 J04 / J05。旧の商品にまつわる記録と並べて課金の最後。商品のきっかけの `plan_id` は NULL（2026-10-23）。**P15 は暫定の規則**） | `20260927105511` の表 ＋ [schema-additions 5](schema-additions.md) |
 
 **追加スキーマ（A1〜A8）は school-launcher の `20260928132756_lw2_billing_additions.sql`。** `--section billing` にはほかに `20260927105511` / `20260930044959` / `20261001085757` も要る（[schema-additions.md](schema-additions.md) の冒頭）。決済・帳票は
 暫定の規則で作ってある（[migration-spec 1-3](migration-spec.md)）。
@@ -54,10 +54,10 @@
 
 | 旧テーブル | 新テーブル | データ種 | lw2区分 | ローカルデータ数 | A·B·C | 説明 | 移行の注意 |
 |---|---|---|---|---:|:--:|---|---|
-| `payment_item` | `tenant_plans`（A3） | K01 商品 | データ | 336 | C | 商品（講座パッケージ）。実測 301件（講座の商品 280件を移す。**すべて `inactive`**） | **講座と 1:N。** 新環境のまとめ商品（`plan_type = course_bundle`）で受けられる。[講座の価格（確認事項 B2 / C3）](../open-questions.md)と[受講の母集合](../03-enrollment/review.md)の両方がこの表に依存する |
-| `payment_item_lesson` | `plan_courses` | K01 商品 | 中間 | 1,134 | C | 商品と講座の対応。実測985組（うち削除済み619、講座が物理削除の1組は移せない） | **`tenant_id` を持たない。** `payment_item` と join して絞る。**削除済みの対応も `deleted_at` 付きで移す**（2026-10-01）。新のアプリはまだ読まないので、**商品から外した講座も購入で付与される** |
+| `payment_item` | `learning_paths`（02 の `content.5`） | K01 商品 | データ | 336 | C | 商品（講座パッケージ）。実測 301件（講座の商品 280件はコースとして 02 で移す） | **課金では移さない**（2026-10-23 決定。それまでは `tenant_plans` に `inactive` で移していた）。チケット・ライブの商品は商品として移さず、決済の `settings` に残す |
+| `payment_item_lesson` | `learning_path_courses`（02） | K01 商品 | 中間 | 1,134 | C | 商品と講座の対応。実測985組（うち削除済み619、講座が物理削除の1組） | コースの講座として 02 で移す。削除済みは移行対象外（新もコースから外した結び付きは持たない）。2026-10-23 から `plan_courses` には移さない |
 | `payment_item_cate` / `payment_item_item_cate` | — | K01 商品 | 分類 | 10 / 34 | C | 商品カテゴリ | 受け皿なし。移していない |
-| `payment_application` | `payments`（A4）＋ `course_purchase_payments` / `subscription_payments` | K02〜K07 決済 | データ | 634 | C | 決済の申込（実測 479件）。**申込1行 = 契約1件**で、継続課金・分割の毎月の課金は J-Payment が持ち lw2 に行が無い | 決済にするのは 365件、投入 354件（会員が物理削除された11件は移らない）。決済代行は `legacy_jpayment`（A5）/ `bank_transfer`。**継続課金（`learner_subscriptions`）・分割（`installment_plans`）は作らない** |
+| `payment_application` | `payments`（A4）＋ `learning_path_purchase_payments`（2026-10-22 から）/ `subscription_payments` | K02〜K07 決済 | データ | 634 | C | 決済の申込（実測 479件）。**申込1行 = 契約1件**で、継続課金・分割の毎月の課金は J-Payment が持ち lw2 に行が無い | 決済にするのは 365件、投入 354件（会員が物理削除された11件は移らない）。決済代行は `legacy_jpayment`（A5）/ `bank_transfer`。**継続課金（`learner_subscriptions`）・分割（`installment_plans`）は作らない** |
 | `payment_application_item` | —（決済の種類の判定に使う） | K01 商品 | 中間 | 634 | C | 申込と商品の対応（1申込に1商品） | |
 | `payment_infomation` | `tenants.settings.lw2_payment` / `tenant_legal_documents` | K01 商品 | 設定 | 3 | C | 決済まわりのテナント設定。実測1件 | 支払い方法・カードブランド・分割回数はテナントの設定、規約の URL・表題の上書きは規約の本文と一緒に |
 | `payment_application_set_user_learning_lesson` | — | K01 商品 | 中間 | 27 | C | 申込と受講の対応 | |

@@ -41,7 +41,7 @@ lookup への値の追加（A5 / A6）は列ではないので一覧に無い。
 ```
 1  ticket_types / ticket_grants への列追加           (A1)
 2  月次チケット配布                                  (A2) ← users を参照
-3  tenant_plans / payments への列追加                (A3 / A4)
+3  tenant_plans / payments への列追加                (A3 / A4。A3 は 2026-10-23 から使わない)
 4  payment_providers / payment_types への値の追加     (A5 / A6)
 5  receipts への列追加                              (A7)
 6  規約の本文                                        (A8)
@@ -144,12 +144,14 @@ INSERT IGNORE INTO payment_types (code, name_ja, requires_course, is_revenue, so
 ```
 
 > **`legacy_jpayment` は過去の記録を表すだけ。** 新の決済処理はこの値を扱わない。
-> **`lw2_purchase` は講座が1つに決まらない購入**（講座2つ以上の商品・講座なし・チケット商品）。
-> `course_purchase` は講座1つが必須（`course_purchase_payments.course_id` NOT NULL）で、入れると講座を選ぶことになる。
+> **`lw2_purchase` はチケット・ライブの商品の購入**（2026-10-22 から。講座の商品はコースの購入 `learning_path_purchase`。
+> 種類と明細の表 `learning_path_purchase_payments` は school-launcher の `20261012014810` が足したもの）。
+> `course_purchase` は講座1つが必須（`course_purchase_payments.course_id` NOT NULL）で、移行では使わない。
 > 売上には数える（`is_revenue = TRUE`）。
 
 > **継続課金（`learner_subscriptions`）と分割（`installment_plans`）には受け皿を足さない。** lw2 に毎月の課金の行が無く、
 > 新の必須 ID（Stripe）も無い。初回の申込だけを `payments` ＋ `subscription_payments`（`subscription_id` NULL）にする。
+> **2026-10-22 から、講座の商品の自動継続はコースの購入（`learning_path_purchase`）にそろえる**ので、`subscription_payments` に入るのは講座以外の自動継続の商品（月次のチケット）だけ。
 
 ## 4. 帳票（A7 / A8）
 
@@ -184,17 +186,26 @@ CREATE TABLE tenant_legal_documents (
 
 ---
 
+### 4-2. 領収書の旧の期間と番号（2026-10-26。`20261026120002`）
+
+```sql
+ALTER TABLE receipts ADD COLUMN settings JSON NULL;  -- {"period_from", "period_to", "seq_no"}。アプリは読まない
+```
+
+旧の領収書は (申込, 期間) ごとの再発行の番号で、自動継続の申込は期間ごとに発行していた（移行仕様 0-2 Q9）。school-launcher `feat/lw2-migration-rework`。
+
 ## 5. 自動割当（billing.4。2026-09-30 / 2026-10-01）
 
 **必須。** 旧 `assign` ほか（受講のデータ種 J04 / J05）を、新システムの自動付与ルール（`20260927105511`）に移す。
-きっかけの商品（`tenant_plans`）が課金の2で入るので、課金の最後に流す。
+旧の商品にまつわる記録と並べて、課金の最後に流す（2026-10-23 から、商品のきっかけの `plan_id` は NULL。旧の商品は `tenant_plans` に移さない。2026-10-24 から、講座の商品のきっかけはコース（`learning_path_id`）を指す）。
 書き込む先は `tag_auto_assign_rules` / `tag_auto_assign_rule_triggers` / `tag_auto_assign_rule_conditions` /
 `tag_auto_assign_rule_grants` / `tag_auto_assign_logs`（どれも `20260927105511` の表）と、下で足した列・表。
 
 | 追加 | migration | 旧 |
 |---|---|---|
 | `tag_auto_assign_rules.assign_id`（NULL 可） | `20260930044959` | `assign.assign_id` |
-| `tag_auto_assign_rule_triggers.item_id` / `item_type` | `20261001085757` | `assign_payment_item`。講座の商品 → `plan_id`、レッスン → `course_id`、それ以外の商品は旧 ID だけ |
+| `tag_auto_assign_rule_triggers.item_id` / `item_type` | `20261001085757` | `assign_payment_item`。旧の商品 ID と種類（全行に残す） |
+| `tag_auto_assign_rule_triggers.learning_path_id`（NULL 可。`learning_paths` への外部キー） | `20261023075332`（school-launcher `feat/lw2-auto-assign-learning-path-trigger`。未マージ） | 講座の商品 → コース。レッスン → `course_id`、チケット・ライブの商品は旧 ID だけ（sync-issues B7） |
 | `tag_auto_assign_rule_group_conditions`（新設） | `20261001085757` | `assign_group`（新の条件はタグだけなので受け皿を足した） |
 | `tag_auto_assign_rule_grants.item_id` / `valid` / `deleted_at` | `20261001085757` | `assign_item` の旧 ID・`valid_chk`・`del_chk` |
 
@@ -230,7 +241,7 @@ CREATE TABLE live_lesson_limit_item_history (
 
 > **新のアプリは足した `deleted_at` をまだ読まない**ので、商品から外した講座も購入で付与され、
 > 外したライブにもそのチケットが使える（移行の方針として受け入れた）。
-> 予約できる商品の全行の表は、`plan_id` が `tenant_plans` を指すので課金の2で入れる。
+> 予約できる商品の全行の表は課金の2で入れる（2026-10-23 から `plan_id` は NULL。旧の商品は `tenant_plans` に移さない）。
 
 ---
 
