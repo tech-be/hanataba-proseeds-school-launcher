@@ -1,0 +1,9 @@
+{
+  "learner": { "user_id": 0 },
+  "learner_change": { "user_id": 0 },
+  "reset": { "user_id": 0 },
+  "login_id_only": { "user_id": 0 },
+  "inactive": { "user_id": 0 },
+  "deleted": { "user_id": 0 },
+  "admin": { "user_id": 0 }
+}
