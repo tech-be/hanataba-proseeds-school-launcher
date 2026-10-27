@@ -1,5 +1,7 @@
 # サポート機能 — 突き合わせ
 
+> **2026-10-26: クーポン・お知らせ・問い合わせ・自動メールの文面・講座のディスカッション・就活プロフィール・企業・面談・掲示板・お仕事募集の扱いは、[移行仕様の 0 章](migration-spec.md#0-見直し-未実装の移行2026-10-26-決定実装済み)が正。** この表の該当の行（「未実装」「受け皿なし」など）は 0 章より前の記述。
+
 [サポート機能の内訳](breakdown.md) の対応表と **1対1で対応**する。内訳の行それぞれに `###` 見出しが1つあり、
 **順序も内訳と同じ**。ひな形は [00-template/review.md](../00-template/review.md)。
 
@@ -27,7 +29,11 @@
 
 | 旧カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|:--:|---|---|
-| テーブル全体 | 性質 | 低 | 配信の履歴と文面 | **純ログなので移さない**（→ [対象外 B](#b-方針として移行しないもの)）。`line_send_logs` は cutover 後の配信から記録を始める |
+| 配信の履歴（`line_send` ほか4件） | 性質 | 低 | 配信の履歴 | **純ログなので移さない**（→ [対象外 B](#b-方針として移行しないもの)）。`line_send_logs` は cutover 後の配信から記録を始める |
+| `line_message_mail_setting`（自動メールの LINE の文面） | 性質 | 中 | **文面で、ログではない。** 2026-10-22 に新に受け皿 `tenant_line_templates`（テナント × メールの種類。school-launcher `20261020083042`）ができた。旧は `mail_type_id` ごと（ステージング 1 件。種類 35「登録完了通知（SNS 連携）」）。新はメールの種類（`email_kinds`）ごとで、旧の種類との対応表がまだ無い。差し込みの書き方も違う（旧 `{SERVICE_NAME}` / 新 `{{user_name}}`） | **自動メールの文面（`mail_setting` → `tenant_email_templates`。未実装）と一緒に移す**（2026-10-22 決定）。種類の対応表と差し込みの扱いをそのとき決める。それまでは移さず、一覧（`not-migrated.csv`）にも出ない |
+| `line_message`（お知らせの LINE の本文） | 性質 | 中 | 2026-10-22 に新に受け皿 `announcements.line_body` ができた（`20261020083044`）。NULL なら新はタイトルと本文から LINE の文を作る | **お知らせ（S3。未実装）と一緒に移す** |
+| `line_message_mail_follow_setting` / `line_message_recruit`（フォローメール・求人の LINE の本文） | 性質 | 低 | 受け皿が無い（フォローメールは `retention_rules`、求人は career に移す先） | それぞれの移行を実装するときに決める |
+| `tmp_line_entry` / `tmp_line_message` | 性質 | 低 | 一時データ | 移さない |
 
 **まとめ**: 受け皿が無い列 — / 高 0 件
 
@@ -86,6 +92,7 @@
 | 配信期間 | `announcement_statuses` | 性質 | 中 | 公開期間の表現 | |
 | （副）添付 | — | **性質** | **高** | **`announcements` に添付カラムが無い**（ファイル 296件） | 受け皿を追加するか、**添付を落とすことを受け入れる**かを決める |
 | `news_reply` | — | カラム | 低 | ニュースへの返信（13件） | 受け皿なし |
+| `line_message.message`（お知らせの LINE の本文） | `line_body` | カラム | 低 | 2026-10-22 に受け皿ができた（school-launcher `20261020083044`） | お知らせを移すときに入れる |
 
 **まとめ**: 受け皿が無い列 2 / 変換規則が要る列 2 / **高 1 件**
 
@@ -266,6 +273,12 @@ Web Push（実測 配信230件 / 購読1,157件）。**受け皿なし。**
 ### `job_career` ほか → `career:learner_career_profiles` / `career:learner_career_skills`
 
 ローカルデータ数 76。career-backend に受け皿あり。
+
+> **2026-10-22: 旧 `user` の就活の列にも career に受け皿ができた**（career `20261016084938` / `20261016084939`）。
+> `education`（最終学歴）/ `employment_status`（就業状況。新は文字列）/ `job_category`（職種。新は自由入力）/ `qualification`（保有資格）
+> → `learner_career_profiles` の同名の列、希望勤務地 → `learner_desired_prefectures`（複数）。
+> **移行ツールは career に書かない取り決めなので、今は移していない**（[基盤の review](../01-foundation/review.md) の「career DB の `learner_career_profiles`」の行）。
+> 求人・面談と同じく、career への接続をどうするか（上の `recruit` の節）と一緒に決める。
 
 ### `interview_record` / `interview_contents` / `interview_status` → `career:interviews` ほか
 

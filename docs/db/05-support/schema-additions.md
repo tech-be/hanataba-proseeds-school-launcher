@@ -3,10 +3,10 @@
 [突き合わせ](review.md#新環境に追加するテーブルカラム) の追加一覧を、**school-launcher に当てる migration の単位**に落としたもの。
 
 - **当てる先**: `school-launcher/btoc-backend/db/migrations/`（goose 形式。雛形は `make migrate-create`）
-- **実物**: `20260930052453_lw2_support_additions.sql`（school-launcher の `feat/lw2-support-schema` にコミット・push 済み、`hanataba_dev` には未マージ。2026-10-02 時点）。
+- **実物**: `20260930052453_lw2_support_additions.sql`（school-launcher `hanataba_dev` にマージ済み。2026-10-22 時点）。
   1 と 2 の表をまとめて足す。**受講（3）の `submission_feedback_files` も同じ migration に入れてある**
   （[受講 schema-additions 2](../03-enrollment/schema-additions.md#2-課題提出の新テーブルと列追加)）
-- **あわせて当てる**: **`20261001085757_lw2_keep_deleted_rows.sql`**（2026-10-01。同じブランチにコミット・push 済み） の `admin_notes.deleted_at`（下の 3）
+- **あわせて当てる**: **`20261001085757_lw2_keep_deleted_rows.sql`**（2026-10-01。マージ済み） の `admin_notes.deleted_at`（下の 3）
 - **当てる時期**: **移行直前**（[migration-spec](migration-spec.md) のフェーズ0）
 - **確認**: `python -m migrator doctor` — この区分が未適用なら `[TODO]` で出る
 
@@ -15,6 +15,12 @@
 > 「最後に直した人」の列（`updated_by`）だけ足す。
 > クーポン（5-2）・お知らせ（5-3）・問い合わせ（5-4）・求人と面談（5-6）・掲示板（5-7）は移行ツールが未実装で、
 > 追加が必要かどうかも決まっていない。
+
+> **school-launcher 側が足した受け皿で、この区分に関わるもの**（2026-10-22。移行ツールはまだ書かない）:
+> `20261020083042_tenant_line_templates.sql`（自動メールの LINE の文面）、`20261020083044_add_line_body_to_announcements.sql`（お知らせの LINE の本文）、
+> career `20261016084938_career_profile_fields.sql` / `20261016084939_desired_prefectures.sql`（就活プロフィールの列・希望勤務地）、
+> `20261013091459_widen_file_key_columns_to_512.sql`（お知らせの添付・コミュニティの添付の列を広げる。値は変わらない）。
+> どれも、対応する移行（自動メール・お知らせ・就活プロフィール）を実装するときに使う。
 
 > **基盤（1）とコンテンツ（2）が先。** 公開対象が基盤の `tenant_groups` と
 > コンテンツの `lessons` を参照する。
@@ -136,6 +142,17 @@ ALTER TABLE admin_notes
 > 新のアプリは `deleted_at` をまだ読まない。
 
 ---
+
+## 4. 未実装だった移行のための追加（2026-10-26。作業ブランチ `feat/lw2-migration-rework`）
+
+[移行仕様の 0 章](migration-spec.md#0-見直し-未実装の移行2026-10-26-決定実装済み)の Q1・Q12。**どちらもアプリの修正と組**（migration だけだと、移した行が正しく扱われない）。
+
+| DB | migration | 中身 | アプリの修正 |
+|---|---|---|---|
+| btoc | `20261026120000_add_inquiry_deleted_at.sql` | `inquiries.deleted_at DATETIME(3) NULL`。旧の削除済みの問い合わせ（6 件）を入れる | 一覧・詳細を `deleted_at IS NULL` で絞る（`inquiry_repo.go`） |
+| career | `20261026120000_nullable_company_industry_contact_email.sql` | `companies.industry` / `contact_email` を NULL 可に。旧の企業（10 社）に値が無い | 読むときは空文字、書くときは NULL のまま（`company_repo.go`） |
+
+必須スキーマ: `inquiries.deleted_at` は `SUPPORT_SCHEMA`、career の表は `CAREER_SCHEMA`（`migrator/steps/schema.py`）。
 
 ## 取り下げた追加
 

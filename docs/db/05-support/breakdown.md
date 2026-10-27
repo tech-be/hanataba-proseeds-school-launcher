@@ -1,5 +1,7 @@
 # サポート機能テーブルの内訳
 
+> **2026-10-26: クーポン・お知らせ・問い合わせ・自動メールの文面・講座のディスカッション・就活プロフィール・企業・面談・掲示板・お仕事募集の扱いは、[移行仕様の 0 章](migration-spec.md#0-見直し-未実装の移行2026-10-26-決定実装済み)が正。** この表の該当の行（「未実装」「受け皿なし」など）は 0 章より前の記述。
+
 移行計画の **5 サポート機能**（LINE 友だち紐付け / クーポン / お知らせ / 問い合わせ / ファイル / 就業支援 / コミュニティ / 利用料の集計 / その他）。
 
 > **S6 / S7 の一部と S8・S9 は、2026-09-30 に「どの区分にも仕分けていなかった旧テーブル」から足した。**
@@ -37,9 +39,9 @@
 
 | 旧テーブル | 新テーブル | データ種 | lw2区分 | ローカルデータ数 | A·B·C | 説明 | 移行の注意 |
 |---|---|---|---|---:|:--:|---|---|
-| `user.line_id` ほか | `line_links` | U06 LINE 連携 | データ | — | C | 会員と LINE の紐付け | **実装済み**（`support.1`）。会員の投入後に流す |
+| `user.line_id` ほか | `line_links` | U06 LINE 連携 | データ | — | C | 会員と LINE の紐付け | **実装済み**（`support.1`）。会員の投入後に流す。形の違う ID は一覧に出し、有効でない会員は `is_friend = FALSE`（05 移行仕様 0R-2） |
 | `line_send` / `line_send_batch` / `line_send_user` / `line_send_user_log` / `line_send_batch_log` | `line_send_logs` | U06 LINE 連携 | イベント・履歴 | 12,798 / 183,739 / 2,127 / 218,736 / 34,997 | C | 配信の履歴。実測 31 / 36 / 0 / 41 / 5 | **`tenant_id` を持たない。** 純ログなので移さない |
-| `line_message` / `line_message_mail_follow_setting` / `line_message_mail_setting` / `line_message_recruit` / `tmp_line_entry` / `tmp_line_message` | — | U06 LINE 連携 | 設定 / データ | 1,310 / 96 / 58 / 23 / 0 / 9 | C | 配信文面・一時データ。実測 1 / — / 1 / 4 / 0 / 0 | 実測はほぼ0件。**同じ LINE 公式アカウントを継続する場合のみ意味がある** |
+| `line_message` / `line_message_mail_follow_setting` / `line_message_mail_setting` / `line_message_recruit` / `tmp_line_entry` / `tmp_line_message` | — | U06 LINE 連携 | 設定 / データ | 1,310 / 96 / 58 / 23 / 0 / 9 | C | 配信文面・一時データ。実測 1 / — / 1 / 4 / 0 / 0 | 実測はほぼ0件。**同じ LINE 公式アカウントを継続する場合のみ意味がある**。**2026-10-22 から、自動メールの LINE の文面（`line_message_mail_setting`）は `tenant_line_templates`、お知らせの LINE の本文（`line_message`）は `announcements.line_body` に受け皿がある**。自動メール・お知らせの移行（未実装）と一緒に移す |
 
 ## S2 クーポン
 
