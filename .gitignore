@@ -8,3 +8,9 @@ out/
 *.sql
 # 暫定対応で決めた値。個人情報（メールアドレス）を含む
 overrides*.csv
+# E2E（テスト用の会員の値は個人情報を含む）
+e2e/node_modules/
+e2e/users.json
+e2e/.personas.json
+e2e/test-results/
+e2e/playwright-report/
