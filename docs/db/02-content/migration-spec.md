@@ -13,6 +13,76 @@
 
 ---
 
+## 0. 見直し（2026-10-26 決定）
+
+移行の見直しの手順 3（[進捗](../rework-progress.md)）。[機能仕様書](functional-spec.md)と[テスト仕様書](test-spec.md)のケースが通るように、移し方を見直す。件数はステージング `tenant_id = 10`（「共有」は、このテナントが使っている共有講座 90 件の分）。
+
+### 0-1. 旧のデータで分かったこと（テスト仕様の「?」の答え）
+
+| ケース | 旧のデータ | 結果 |
+|---|---|---|
+| L-03 ユニットの本文 | 短い説明（`unit.detail`）だけで HTML 0 件。**旧に「テキストのユニット」は無い** | 通る |
+| L-05 drip | すべて 0 | 通る |
+| Q-02 設問 | 本文が空 0 件、配点 0 は 0 件。**選択肢 0 件の単一選択 15 件・正解の番号が範囲外 2 件** | 一部 × |
+| Q-03 合格点 | **旧の `pass_score` は「点」**（`UserLearningLessonModel.class.php:1237`。管理画面も「点」）。満点 100 のものは同じ値、それ以外の 70 件は割合と合わない。合格点 > 満点（旧でも合格できない）8 件 | × |
+| Q-04 記述式 | 正解の候補は全件 1 つ（`|` 区切り 0 件） | 通る |
+| Q-06 時間の制限 | 0 か 5 分以上（60 秒未満 0 件） | 通る |
+| 問題文・解説 | **旧は HTML として表示していた。** 問題文 1,638 件・解説 1,087 件に HTML（`<img>` 約 325 件ずつ） | ×（タグが見える） |
+| S-01 アンケートの並び | ページは ID 順、設問はページの中の `sort_no` 順。通し番号にしないと順が変わるのは 1 件 | × |
+| S-02 アンケート | 必須の添付の設問 1 件、選択肢の重複 1 件 | × |
+| LV-01 削除済みの開催回 | 817 件。**すべて過去**。予約のある回 2 件 | × |
+| LV-02 開催回 | 終了 ≦ 開始 0 件、定員超え 0 件 | 通る |
+| LV-04 リマインド | 未来の回の予約 0 件 | 通る（再送は起きない） |
+| P-02 コース | 公開中なのに公開する講座が 1 件も無いコース 9 件 | × |
+| 0-14 コースの期間 | 30 年・100 年の 2 件が新の上限（120 か月）を超え、**一覧の API 全体が 500** | × |
+| V-01 動画 | p-movie の 40 字のトークン 3,247 件。storage の行は動画ではなく旧サーバーの HTML 教材 約 2,000 件・PDF・p-movie のプレーヤーの URL など。YouTube 5 件、Vimeo 0 件 | × |
+| V-02 尺 | 旧に尺の列が無い | ×（NULL のまま） |
+| L-04 並び | 同じ講座で `sort_no` が重なるレッスン 6 組。新は ID（ULID）の順になり、旧（`unit_id` の順）と変わりうる | × |
+| C-05 削除済みの章 | 27 件。今の移し方では中のレッスンは前の章に付け直されて 0 件だが、新は空の見出しとして出す | × |
+| C-03 カテゴリ | `courses.category` は旧のコード（`lw2-{テナント}-{id}`）。新の `/courses` の絞り込みは recademy の 6 つのコードを見るので合わない | × |
+| テストの設問 0 件（Q-01） | 出題条件なし 20 件（旧でも受験すると例外）、アンケート・講義のユニットに付いたテスト 60 件（中身なし）、問題の無い固定出題 3 件、カテゴリからのランダム出題だけ 5 件 | × |
+
+### 0-2. 決めてほしいこと
+
+| # | 内容 | 推奨 |
+|---|---|---|
+| Q1 | **削除済みの講座 14・コース 29・課題 24**（今は状態 `deleted` で入れていて、受講者に見え、編集で 400）。新の状態に `deleted` に当たるものが無い | 新にある状態 `archived` で入れる。**販売停止と削除が同じ `archived` になる**のを避けたいなら、講座・コースに `deleted_at` を足す（school-launcher の migration とアプリの修正。05 の問い合わせと同じ） |
+| Q2 | **レッスンの種別**（テスト 362・課題 209・資料 216・ディスカッション 24・スキル診断 1。今は旧の種別のまま入れていて、本文が出ず、編集で 400） | **`text` で入れる。** テストは今どおり右パネルのテストのタブで受けられる。旧の種別は `settings` に残す |
+| Q3 | **完了の条件**（旧はテストは合格で、課題は提出か添削で、資料は修了に数えない）。新は種別を区別せず、すべて「完了にする」か本文を読んで完了 | 新の仕様のまま受け入れる（運営に確認）。資料を修了の条件から外したいなら、資料をレッスンにせず、ライブラリ（05 で移し済み）だけにする |
+| Q4 | **並び**（`sort_no` が重なる 6 組） | 講座の中で「章 → `sort_no` → 旧 ID」の通し番号に振り直す（並びの意味は変えない） |
+| Q5 | **削除済みの章**（27 件。中のレッスンは 0 件） | 移さない（一覧に出す） |
+| Q6 | **動画の URL** | p-movie のトークンから `https://….m3u8` を組み立てる規則を p-movie 側に確かめ、`fixups` で直す。storage の行（旧サーバーの HTML 教材・PDF など。動画ではない）は、**種別を `text` にして本文に URL を載せる**か、移行の対象外にするかを決める |
+| Q7 | **動画の尺**（旧に無い） | NULL のまま（途中の進捗率は 0%）。URL を直した後に測るかは後で決める |
+| Q8 | **設問が 0 件になるテスト** | 出題条件なし 20 件・テスト以外のユニットのテスト 60 件・問題の無い 3 件は**移さない**（一覧に出す）。カテゴリからのランダム出題だけの 5 件は、**候補の問題をすべて固定の設問にする**（旧で出うる問題を含む） |
+| Q9 | **合格点**（旧は点、新は割合） | 割合に直す（`floor(合格点 × 100 ÷ 旧の満点)`。**2026-10-26 に `ceil` から変えた**（受講 03 の Q9: 切り上げだと、ちょうど合格点の得点が端数で不合格になる）。満点は出題数 × 配点）。値の作り替えなので **`fixups` で行う**。旧でも合格できない 8 件は直さず一覧に出す |
+| Q10 | **出題数**（旧は固定出題で先頭の N 問、ランダム出題は N 問を選んで出していた） | 固定出題は旧どおり先頭の N 問だけ。ランダム出題の 39 件は**全問を入れる**（合格点は割合なので意味を保てる） |
+| Q11 | **採点できない設問**（選択肢 0 件の単一選択 15 件・正解の番号が範囲外 2 件） | 移さない（一覧に出す）。テストの残りの設問は移す |
+| Q12 | **問題文・解説の HTML**（1,638 件・1,087 件） | 05 のお知らせと同じく、`fixups` でプレーンテキストに直す。画像（`<img>`）は画像の移送（L9）と一緒に決める |
+| Q13 | **アンケート** | 設問の並びをページをまたいだ通し番号にする。必須の添付の設問 1 件は `fixups` で任意にする。選択肢の重複 1 件は `fixups` で区別を付ける |
+| Q14 | **削除済みの開催回**（817 件。すべて過去） | 移さない（予約のある 2 回・2 件の予約も一覧に出す）。05 の Q1 に合わせるなら「新の状態」の `canceled_at` で入れる案もある |
+| Q15 | **コース** | 公開中で公開する講座が無い 9 件は `archived`、期間が 120 か月を超える 2 件は無期限にする。どちらも値の作り替えなので `fixups` で行う |
+| Q16 | **講座のカテゴリ**（`courses.category`） | 新の 6 つのコードとの対応表を運営から受け取るまで NULL（テナントのカテゴリ `course_category_links` は今のまま） |
+| Q17 | **有料でないユニット**（旧の `payment_unit = 0`。t10 1,227・共有 1,307。旧では未購入の人にも見せていた可能性） | 旧の画面で未購入の人に見えていたかを確かめ、見えていたなら `is_preview = TRUE` |
+
+### 0-3. 決まったこと（2026-10-26。すべて推奨どおり）
+
+Q1〜Q17 は 0-2 の推奨どおり。補足:
+
+- **Q1**: 削除済みの講座・コース・課題は `archived`（`deleted_at` は足さない）。販売停止と同じ状態になる
+- **Q6**: storage の行（動画ではない旧サーバーの HTML 教材・PDF など）は **種別を `text` にし、本文に URL を載せる**。p-movie のトークンは、URL を組み立てる規則を p-movie 側に確かめるまで今のまま（[open-questions](../open-questions.md) に載せる）
+- **Q17**: 旧は `payment_unit = 0` のユニットを購入の権限なしで開けた（`PaymentAuthorityModel.class.php:1659` の `OR (UN.payment_unit = 0)`）ので、**`is_preview = TRUE`** にする
+- 値の作り替えになるもの（Q9 合格点・Q12 HTML・Q13 アンケート・Q15 コース）は `fixups` の提案にし、移行ツールは補正データを読むだけ
+
+**追加の決定（2026-10-26。手順 5 で見つけたもの）**: アンケートの削除済みの設問（72 件）・ページが通常の設問として移っていた（受講者に出て、必須なら回答を送れない）。**新に `deleted_at` を足して移し、アプリで除く**（school-launcher `20261026120001_add_survey_deleted_at.sql`・`survey_repo.go`・`course_duplicate_repo.go`。作業ブランチ）。テストの削除済みの出題条件・設問（計 3 件）も出題から外した。
+
+**新システムに機能が無いので移しても効かないもの**（文書に記録する）: 前提条件の鍵 37 件・公開期間 328 件・終了日時 1 件（過去。旧では閉じていた）・受験回数の上限（全件 0）・課題の締切（全件 NULL）・アンケートのページ分け・ライブの繰り返し・講座のタグ。
+
+### 0-4. 後から決まったこと
+
+| 日付 | 内容 |
+|---|---|
+| 2026-10-26 | **テストの題（`quizzes.title`）にユニット名（＝レッスンの題）を入れる。** 全区分の通しの確認で Q-06 を初めて流し、移したテスト 316 件すべてで題が空のため、運営がテストの設定を保存すると 400 になると分かった。旧 `test` に題の列が無く、旧の画面ではユニット名がテストの名前として出ていた |
+
 ## 1. 前提
 
 ### 1-1. 運営への確認事項
@@ -37,6 +107,11 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | カテゴリ未設定の講座（235件中142件） | **そのまま移す**（`courses.category` は NULL 可）。旧の状態をそのまま写すだけで、**カテゴリを整備するかは移行とは別の作業**。cutover 前に「講座一覧の絞り込みが半分以上で効かない」ことは伝える |
 | 模試（`is_mock_test` ほか） | **移行しない。** 対象外（未コミット）区分（X02） |
 | 更新履歴3件（計300万行） | **移行しない。** 受験中の作業データで、採点時に本テーブルへコピーされる。**cutover 時点の中断中の受験だけは失われる** |
+| コース（旧の講座の販売商品） | **`content.5` で `learning_paths` / `learning_path_courses` に移す**（2026-10-22 決定）。school-launcher は「コース＝旧の販売商品（`payment_item`）」という作りにした（`20261009113244`）。対象は `item_type = 0`（講座）で、ステージング 280 件・結び付き 985 件。**購入の記録（`learning_path_enrollments`）は受講・課金の区分で扱う**。課金（04）の `tenant_plans` には移さない（2026-10-23 決定）。対応は 3.2 |
+| 販売停止の講座（`sales_status = 0`） | **`archived` で入れる**（2026-10-22 決定。それまでは `draft`）。新は講座の下書きをやめ（`20261012065004`）、画面から公開にする操作が無い。`archived` ならアーカイブの解除で戻せる。旧の値は `courses.settings.sales_status` に残す（ステージング 4 件。削除済みは `deleted`） |
+| 講座のカテゴリ（テナントごと） | **`tenant_course_categories` と `course_category_links` にも入れる**（2026-10-22）。旧 `lesson_cate` はテナントごとなので、新のテナントごとのカテゴリ（`20261020001030`）が受け皿として合う。全テナント共通の `course_categories` / `courses.category` への書き込みも残す（新アプリの講座の一覧がまだ使っている）。削除済みのカテゴリは `deprecated_at` |
+| 削除済みのレッスン | **`lessons.deleted_at` を入れる**（2026-10-22）。新アプリはレッスンを `deleted_at IS NULL` で絞る（`20261021082002`）。`status = 'deleted'` も残す。値は見出しと同じく旧の `update_date`。ライブのレッスンも同じ |
+| 動画の置き場所（`video_source`） | **種類だけ正しく入れる**（2026-10-22 決定）。`pmovie_chk = 1` でトークンがある → `pmovie`、YouTube / Vimeo のホスト（新アプリと同じ一覧）→ `youtube` / `vimeo`、それ以外 → 既定の `storage`。**`video_url` は旧の値のまま**（トークンから URL を組み立てない）。**このままでは新アプリで再生できない** — 新は `pmovie` を `.m3u8` の URL、`storage` を自前ストレージのキーとして扱うが、旧の値は 40 文字のトークン（ステージング 6,656 件）と旧の自前サーバーの URL（`rome.learning-ware.jp` など）。再生できるようにするのは移行の外の作業（p-movie 側で URL を得る、動画を移す） |
 | 動画の配信先 | **`lecture_path.pc_path` を `video_lessons.video_url` に移す。** `lecture` に URL 列は無いが、**別テーブル `lecture_path` が配信先を持つ**（recademy 2,559行。URL 1,171 / 相対パス 44 / 空 1,344）。`pmovie_chk` が立っていない動画はこちらで配信している |
 | 画像（問題22列・設問21列） | **移す。** L9 でファイルを移送し `image_url` に入れる（A7 / A12） |
 | 添削のファイル・配布ファイル | **5本とも移す**（`submission_feedback_files` / `assignment_materials`）。1本に畳まない（A13 / A14）。旧 `eval_*` は添削者が付けたファイル（2026-09-30 に `submission_files` から改めた） |
@@ -339,7 +414,8 @@ content.1  オンデマンド講座
               │   master.content_statuses.deleted / master.quiz_question_types（free_text）
               │   master.survey_question_kinds（file_upload）
               ├ content.proxy_instructor（代理講師）
-              ├ content.course_categories → content.courses   ※ courses.category が FK
+              ├ content.course_categories → content.tenant_course_categories
+              │   → content.courses → content.course_category_links   ※ courses.category が FK
               ├ content.course_tags → content.course_tag_links
               ├ content.chapters（見出しブロック → course_chapters）
               ├ content.lessons（見出しブロックを除く）→ content.video_lessons
@@ -356,9 +432,13 @@ content.3  アンケート定義
               ↓
 content.4  ライブ講座（→ 4-2）
               content.live_host_course → content.live_lessons → content.live_lesson_details
+                → content.live_reservation_policies
                 → content.live_occurrences → content.live_categories → content.live_category_links
                 → content.live_group_targets → content.live_recurrence_rules → content.live_recurrence_details
                 → content.live_recurrence_exclusions → content.live_exclusion_history
+              ↓
+content.5  コース（旧の講座の販売商品。2026-10-22）
+              content.learning_paths → content.learning_path_courses
 ```
 
 > **番号は `migrator/phases/registry.py` と一致させること。** 指定は `--phase content.2` の形。
@@ -380,6 +460,7 @@ content.4  ライブ講座（→ 4-2）
 - **`course_categories` は `courses` より先。** `courses.category` は `course_categories(code)` への FK で、**新規 DB では空**（既存 `courses.category` からの吸い上げでしか作られない）
 - **`courses` は `lessons` より先**（`lessons.course_id`）、**章（`course_chapters`）は `lessons` より先**（`lessons.chapter_id`）、**`lessons` は quizzes / surveys / assignments より先**
 - **ライブは講座の後。** `lessons.course_id` が NOT NULL で、商品制限のあるライブは `content.1` で入れた講座に置く
+- **コースは講座の後。** `learning_path_courses.course_id` が講座を指す
 - **R3（テスト中断・再開）はこの図に入れない。** 受験中の作業データなので移行しない
 
 ## 2-2. 実行手順
@@ -461,6 +542,10 @@ python -m migrator verify
 | 変換 | 規則 |
 |---|---|
 | `lesson.open_period`（**月**）→ `courses.access_days`（**日**） | **×30 で換算する。** 忘れると受講期間が 1/30 になる |
+| `lesson.sales_status` / `del_chk` → `courses.status` | 削除 → `deleted`、販売中（1）→ `published`、販売停止 → **`archived`**（2026-10-22） |
+| `payment_item`（`item_type = 0`）→ `learning_paths` | `item_name` → `title`、`price`（**税込**）→ `price`、`sort_no` → `sort_order`、`remote_chk` → `remote_pc_enabled`、`extension_price` → `extension_fee`（旧の延長は、この料金で月額の自動継続に切り替える）、`display_chk` 1 → `listed = TRUE`（0・2 は FALSE）。状態は削除 → `deleted`、有効 → `published`、無効 → `archived`（`learning_paths.status` は `content_statuses` への FK）。`sequential` は FALSE |
+| `manual_term` / `manual_term_type` → `access_period_value` / `_unit` | 種類は 0 日間 / 1 週間 / 2 ヶ月 / 3 年間 / 4 期限なし（`PaymentItemController.php:737`）。新は日・月だけなので**週は ×7 日、年は ×12 ヶ月**に直す。`no_limit_chk = 1`・種類 4・**種類が NULL（自動継続の商品。ステージング 92 件）は無期限**（両方 NULL）。数が無いのに種類があるものは作り替えず、CHECK に当たって一覧に出る（ステージング 0 件） |
+| `payment_item_lesson` → `learning_path_courses` | **削除されていない結び付きだけ**を入れる（3.4 の D。削除済みは移行対象外）。`sort_order` は旧の登録順（`item_set_lesson_id`。旧は商品の中の講座に並びを持たない） |
 | `unit.unit_type_id` → `lessons.type` | **畳まない。** 1→`video`、2→`quiz`、3→`survey`、4→`assignment`、6→`document`、**7→`discussion`**、**8→`skill_check`**。**0=見出しは除外**、5=集合研修は対象外区分。**対応表に無い値は止める**（黙って `text` に倒さない） |
 | `unit.sort_no` → `sort_order` | **現状は `sort_no` をそのまま入れている**（講座ごとに採番し直していない。2026-10-02 の確認）。見出しを除いた分の番号が飛び、旧で同じ `sort_no` だった組も同じ値のまま残る（旧は `unit_id` 順で並べていた） |
 | `question.selection1..20` → `quiz_options` | 横持ち → 縦持ち。有効数は `selection_num` |
@@ -512,15 +597,27 @@ python -m migrator verify
 | `lesson.update_date` / `unit.update_date` / `live_lesson.update_date` → `updated_at` | 書いていない（投入時の既定値になる） |
 | `unit.enquete_suspended_chk` | 読んでいない |
 | `unit_precondition.precondition_type_id` | 読むが書いていない（ステージングは全件 `100`） |
-| `lesson_cate.regist_user_id` → `created_by`、`del_chk` の日時 → `deprecated_at` | どちらも NULL（`del_chk = 1` は `active = FALSE` だけ） |
+| `lesson_cate.regist_user_id` → `created_by`、`del_chk` の日時 → `course_categories.deprecated_at` | どちらも NULL（`del_chk = 1` は `active = FALSE` だけ）。テナントごとのカテゴリ（`tenant_course_categories`）には `deprecated_at` を入れる（2026-10-22） |
 | `lesson_tag.del_chk` / `icon_file_name` | `del_chk` は読むが使っていない（削除済みも生きているタグと同じ形で入る）。`icon_file_name` は読んでいない（ステージングは削除済み0件） |
-| `lecture.pmovie_token` の URL 化 | トークンをそのまま `video_url` に入れている |
+| `lecture.pmovie_token` の URL 化 | トークンをそのまま `video_url` に入れている（`video_source = 'pmovie'`。2026-10-22）。新アプリでは再生できない（1-3） |
+| `payment_item.display_chk = 2`（一覧と購入画面に出さない） | `listed = FALSE` にしかならない。「購入画面に出さない」を表す列が無い（ステージング 2 件） |
+| `payment_item.extension_type`（期限切れの後も延長できるか） | 受け皿が無い（ステージング 13 件に値） |
+| `payment_item` のそのほかの列（初回価格・試用・自動継続・支払い方法など） | `learning_paths` に列が無い。名前・講座・自動継続かは決済の `settings.item` に残る（2026-10-23 から課金の `tenant_plans.settings` には入れない） |
+
+**D. 移さず、一覧（`out/not-migrated.csv`）に出すもの（2026-10-22。理由は 2026-10-23 に改めた）**
+
+| 対象 | 件数（ステージング） | 理由 |
+|---|---:|---|
+| 削除済みの `payment_item_lesson`（`content.learning_path_courses`） | 618 | **移行対象外**（2026-10-23 決定）。旧で運営がコースから外した講座で、新もコースから外した講座の結び付きは物理削除で持たない。入れると、外した講座まで購入で受講できるようになる。誰に何を渡したかは受講（03）の `learning_path_enrollment_courses` に残している |
+| 移行の対象に無い講座を指す `payment_item_lesson` | 1 | 旧データの不整合（2026-10-23 までは課金の `billing.plan_courses` にも同じ行が出ていた） |
 
 ### 3.5 検証
 
 | 検証 | 方法 |
 |---|---|
 | 件数の照合 | 抽出時の件数と投入後の件数を突き合わせる（**講座2,208 / ユニット51,463 が目安**。recademy 単体の実数はダンプで確認） |
+| 講座の状態・カテゴリ・削除済みのレッスン・動画の置き場所 | `verify` が旧 DB と直接比べる（販売停止 → `archived`、テナントのカテゴリの結び付き、`lessons.deleted_at`、p-movie の動画が `pmovie` か） |
+| コース | `verify` が旧 DB と直接比べる（漏れ・紛れ、名前・価格・状態・一覧への表示・リモートPC、削除されていない結び付き） |
 | 見出しブロックの除外 | `lessons` に旧 `unit_type_id=0` 由来の行が無いこと |
 | ユニット種別 | `lessons.type` の分布を出し、**全部 `text` になっていないこと**（A20 が効いているか） |
 | 点数 | `quiz_attempts` の `score` / `max_score` を数件抽出し、lw2 の画面表示と突き合わせる |
@@ -608,6 +705,8 @@ content.4  ライブ講座
                 ↓
               content.live_lesson_details   live_lessons（代表日時・旧設定・旧 ID）
                 ↓
+              content.live_reservation_policies  ライブごとの予約・キャンセルの期限（2026-10-22）
+                ↓
               content.live_occurrences      live_lesson_occurrences（削除は deleted_at、中止は予約の stop_chk から）
                 ↓
               content.live_categories → content.live_category_links
@@ -630,7 +729,8 @@ content.4  ライブ講座
 
 - **`courses` が先。** `lessons.course_id` は `courses(id)` への FK で **NOT NULL**。**lw2 のライブは講座に属さないため、置き場所の講座は `content.1` で入れた講座か、移行で作る受け皿講座**
 - **`live_lessons` は `lessons` の子。** PK が `lesson_id` で `lessons(id)` への FK（`ON DELETE CASCADE`）
-- **`live_lesson_occurrences` は `live_lessons` の子**（`fk_llo_lesson`）。`live_lessons` が入っていないと1行も入らない
+- **`live_lesson_occurrences` は `lessons` の子**（`fk_llo_lesson`。school-launcher `20260930013549` で `live_lessons` から付け替わった）。`live_lessons` の行が無いライブ（開催回が 0 件で代表日時が決まらないもの）にも開催回は入れられるが、そういうライブは開催回を持たないので、移す行は変わらない
+- **`live_lesson_reservation_policies` もライブのレッスン（`lessons`）の子**
 - **カテゴリの割当・公開グループ・連日設定はレッスンを参照する**ので、`content.live_lessons` の後
 - **`ticket_type_lessons.lesson_id` と `live_lesson_ticket_requirements.lesson_id` は `lessons` を指す**（`live_lessons` ではない）。`content.4` の後
 - **`live_reservations` は開催回と会員の両方に依存する**（`fk_lr_occurrence` / `fk_lr_user`）。**会員は基盤で入っている**
@@ -718,12 +818,14 @@ python -m migrator verify
 | `live_lesson.live_lesson_url` → `occurrences.meeting_url` | **レッスン側の1つの URL を、そのライブの全開催回に複製する。** 開催回ごとに URL を変える概念は旧に無い |
 | `live_lesson` の `capacity` / `reserve_start_day` / `reserve_end_day` / `reserve_end_time` | **`capacity` だけ、開催回の値が優先・無ければレッスン側**（`0` は NULL）。**`reserve_opens_at` / `reserve_closes_at` は開催回の値だけから作り、レッスン側での補完は現状していない**（実装が無い。2026-10-02 の確認。ステージングは開催回側の NULL が0件）。レッスン側は「開始の何日前」の `int` で単位が違うので、補完するなら `starts_at` から逆算する。レッスン側の生値は `live_lessons.settings.defaults` に残る |
 | `config_live_lesson` → `occurrences.cancel_closes_at` | `starts_at − ticket_cancel_day 日 − ticket_cancel_time 時間`。**テナント設定を開催回ごとの絶対時刻に焼き付ける**。キャンセル不可（`ticket_cancel_chk = 0`）なら `starts_at` |
+| `live_lesson.reserve_start_day` / `reserve_end_day` / `reserve_end_time` → `live_lesson_reservation_policies` | **ライブごとの日数をそのまま入れる**（2026-10-22）。`reserve_open_days_before` / `reserve_close_days_before` / `reserve_close_hours_before`（`reserve_end_time` は「時間前」。`LiveLessonModel.class.php:1262`）。新は、運営が開催回を編集するとここから開催回の日時を計算し直す |
+| `config_live_lesson.ticket_cancel_day` → `live_lesson_reservation_policies.cancel_days_before` | **テナントの値を各ライブに入れる**（2026-10-22 決定）。**日数で表せないときは NULL**（警告を出す）: `ticket_cancel_time` が 0 以外のとき、および**キャンセル不可（`ticket_cancel_chk = 0`）のとき**（旧は受講者がキャンセルできない。`default/LiveLessonController.php:749`。新の NULL は「開始まで可」で、「不可」を表す値が無い）。ステージングは `ticket_cancel_chk = 1`・1 日前・0 時間で当たらない |
 | `live_lesson_date.reserve_start_day`（**date**）→ `reserve_opens_at` | **JST の 00:00:00 として UTC に変換する。** 素で入れると**前日15:00**になり予約開始が1日早まる |
 | `user_ticket.ticket_end_date`（**date**）→ `expires_at` | **JST の 23:59:59 として変換する**（終了日なので日の終わりを補う） |
 | `live_lesson_reserve` の3フラグ → `live_reservations.status` | `stop_chk=1` → **受講 A5 の新値 `host_canceled`**、`cancel_chk=1` → `canceled`、`attendance_chk=1` → `attended`、いずれでもなく**開催回が過去** → `no_show`、**未来** → `reserved`。**元の3フラグは `settings` に残す** |
 | `live_lesson_reserve.stop_chk` → `occurrences.canceled_at` | **予約から開催回へ持ち上げる。** `stop_chk = 1` の予約がある開催回に中止時刻を入れる |
 | `live_lesson_date.del_chk` → `occurrences.deleted_at` | **`canceled_at` ではない**（A25） |
-| `live_lesson.valid_chk` / `del_chk` → `lessons.status` | **`del_chk` を優先。** `del_chk=1` → `deleted`、`valid_chk=1` → `published`、それ以外 → `draft` |
+| `live_lesson.valid_chk` / `del_chk` → `lessons.status` | **`del_chk` を優先。** `del_chk=1` → `deleted`（`lessons.deleted_at` も入れる。2026-10-22）、`valid_chk=1` → `published`、それ以外 → `draft` |
 | `live_lesson.item_ticket_price` → `live_lesson_ticket_requirements` | **`0` なら行を作らない**（`chk_lltr_cost` に当たる）。種別は `ticket_limit_lesson` から逆引きする |
 | `user_ticket.ticket_num` → `quantity` / `remaining_quantity` | **両方に同じ値**。`source = 'manual'`、`note = 'lw2 移行時点の残高'` |
 | `ticket.del_chk` → `ticket_types.active` / `deprecated_at` | `del_chk=1` → `active = FALSE` + `deprecated_at` |
@@ -775,6 +877,7 @@ python -m migrator verify
 | 階層 | `lessons` のうち `type = 'live'` の行がすべて `live_lessons` に対応行を持つこと |
 | 旧 ID | **`lessons.unit_id` にライブ由来の値が入っていないこと**（オンデマンドの `unit_id` と衝突するため） |
 | 開催回 | `live_lesson_occurrences` の件数と、旧 `live_lesson_date`（削除済みを含む）の件数が一致すること |
+| 予約の期限 | 全ライブに `live_lesson_reservation_policies` が1行あり、日数が旧 `live_lesson` と一致すること（`verify`） |
 | 削除と中止 | **`deleted_at` が入った行と `canceled_at` が入った行が混ざっていないこと。** 旧 `del_chk = 1` の817件が `canceled_at` に入っていたら誤り |
 | 予約の状態 | `live_reservations.status` の分布を出し、**全部 `reserved` になっていないこと**（受講 A5 が効いているか） |
 | 日時 | `live_lessons.scheduled_at`（timestamp）と `live_lesson_occurrences.starts_at`（datetime(3)）を数件抽出し、**JST に戻して旧の値と一致すること**（変換の流儀が2つあるため） |

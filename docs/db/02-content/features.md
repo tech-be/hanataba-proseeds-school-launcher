@@ -62,7 +62,7 @@
 |---|---|---|:--:|:--:|---|
 | 講座 | `lesson` | `courses` | ◯ | ◯ | — |
 | 削除 | `lesson.del_chk` | `courses.status = 'deleted'` | ◯ | △ | 一覧には出ないが、詳細は URL で開ける |
-| カテゴリ | `lesson_cate` | `course_categories` / `courses.category` | ◯ | — | 新の絞り込みは固定の9カテゴリ。表を読まない |
+| カテゴリ | `lesson_cate` | `course_categories` / `courses.category`、`tenant_course_categories` / `course_category_links`（2026-10-22 から） | ◯ | ◯ | 新はテナントごとのカテゴリ（複数付けられる）で「講座・コースを探す」を絞り込む（school-launcher `20261020001030`）。講座の一覧（`/courses`）はまだ `courses.category` を使う |
 | カテゴリ画像 | `lesson_cate.lesson_cate_img_file_name` | `course_categories.image_url` | ◯ | — | 旧はトップページだけで使う |
 | タグ | `lesson_tag` / `lesson_lesson_tag` | `course_tags` / `course_tag_links` | ◯ | — | 新は読まない。共有のタグ（`tenant_id = 0`）も、移す講座の割当が指していれば移す（2026-10-02） |
 | サムネイル | `lesson.lesson_img_file_name` | `courses.thumbnail_url` | ◯ | ◯ | 新は保存領域のキーとして読む |
@@ -72,7 +72,7 @@
 
 | 種類 | 深刻度 | 内容 | 対応 |
 |---|:--:|---|---|
-| 参照データ | 中 | カテゴリの絞り込みが固定の9カテゴリで、移したカテゴリが出ない | 新で `course_categories` を読んで絞り込みを作る |
+| 参照データ | 低 | 講座の一覧（`/courses`）の絞り込みは `courses.category` のままで、テナントごとのカテゴリとの対応は新でも決まっていない（`20261020001030` のコメント） | 移行は両方に入れている。新でどちらに寄せるかを決める |
 | 機能 | 中 | タグで絞り込めない | 新でタグを実装する（A2） |
 | 振る舞い | 中 | 旧で削除した講座も、URL を知っていれば詳細を開ける（受講登録は公開中しかできない） | 新で講座の詳細も状態を見る |
 | 振る舞い | 中 | 旧の受講者の講座一覧は**受講登録した講座だけ**を商品ごとにまとめて出す。新は公開中の講座を全部並べ、未購入の講座には購入の導線を出す | 対応不要。新の「講座を1本ずつ売る」作りに合わせた違い。値段が未登録の講座の見え方は [C3](../open-questions.md#c-新環境の制約が意図的かの確認) で決まる |
@@ -120,7 +120,7 @@
 
 | データ | 旧（テーブル.列） | 新（テーブル.列） | 旧で使う | 新で使う | 差分 |
 |---|---|---|:--:|:--:|---|
-| 削除 | `unit.del_chk` | `lessons.status = 'deleted'` | ◯ | — | **受講者向けの一覧は状態を見ない** |
+| 削除 | `unit.del_chk` | `lessons.status = 'deleted'`、`lessons.deleted_at`（2026-10-22 から） | ◯ | ◯ | 新はレッスンを `deleted_at IS NULL` で絞る（`20261021082002`） |
 | 種別 | `unit.unit_type_id` | `lessons.type` | ◯ | △ | 新の受講画面が描くのは動画・ライブ・テキスト・アンケートだけ |
 | 見出し | `unit`（type=0） | `course_chapters`、`lessons.chapter_id` | ◯ | ◯ | 章として移し、後ろのユニットを章に所属させる（削除済みの見出しも `deleted_at` 付きで移す。新はまだ読まない） |
 | 公開期間 | `unit.open_datetime` / `close_datetime` / `open_day` / `close_day_from_lesson_start_date` | `lessons.open_at` / `close_at` / `close_after_days` / `drip_delay_basis` | ◯ | — | 新は受講開始からの日数（`drip_delay_days`）で鍵を表示するだけ |
@@ -132,7 +132,7 @@
 
 | 種類 | 深刻度 | 内容 | 対応 |
 |---|:--:|---|---|
-| 振る舞い | 高 | **旧で削除したユニットが、受講者の講座の中に並ぶ。** 移行は `status = 'deleted'` で入れているが、新の受講者向けの一覧（`ListByCourse`）は状態で絞らない（下書き・アーカイブも出る） | 新で受講者向けの一覧を公開中だけに絞る |
+| 振る舞い | — | （解消）旧で削除したユニットが受講者の講座の中に並んでいた。新が `lessons.deleted_at` で絞るようになり、移行も `deleted_at` を入れる（2026-10-22） | 対応不要 |
 | 機能 | 高 | テスト・課題・講座資料のユニットを開くと本文が空になる。新の受講画面はこれらの種別を描かない（テストは別のタブ、課題は別の画面から開く） | 新で種別ごとの受講画面を出す（A20） |
 | 振る舞い | 中 | ユニットの公開期間（開始・終了の日時、受講開始から N 日後に開く / 閉じる）が効かない。新は受講開始からの日数で鍵を表示するだけで、開くのは止めない | 新で公開期間を実装する（A4） |
 | 画面 | 低 | 新は章（`course_chapters`）で見出しを持つ。旧の「折りたたみ」（`open_close_chk`）は章に列が無い | 対応不要。値はユニットの設定（`lessons.settings`）に残っている |
@@ -151,7 +151,7 @@
 
 | データ | 旧（テーブル.列） | 新（テーブル.列） | 旧で使う | 新で使う | 差分 |
 |---|---|---|:--:|:--:|---|
-| 配信先 | `lecture.pmovie_token`、`lecture_path.pc_path` | `video_lessons.video_url` | ◯ | △ | **新は保存領域のキーとして読み、署名つき URL を作る** |
+| 配信先 | `lecture.pmovie_token`、`lecture_path.pc_path` | `video_lessons.video_url` / `video_source`（2026-10-22 から） | ◯ | △ | 新は置き場所で読み方を変える: `storage` は保存領域のキーとして署名つき URL を作る、`pmovie` は `.m3u8` の URL をそのまま返す、`youtube` / `vimeo` は埋め込みで再生する。**旧のトークン・旧サーバーの URL のままでは再生できない** |
 | スマートフォン用の配信先 | `lecture_path.smartphone_path` | — | — | — | 旧も受講者側では読まない |
 | 完了の条件 | `lecture.lecture_complete_type` / `pmovie_complete_type` | `video_lessons.complete_type` | ◯ | — | 新は90%まで再生したら完了 |
 | 早送り禁止 | `lecture.skip_prevention_setting` | `video_lessons.skip_prevention` | ◯ | — | 新は読まない |
@@ -365,7 +365,9 @@
 | `course_tags` / `course_tag_links` | `lesson_tag` / `lesson_lesson_tag` | F01 講座の一覧 | 新で実装する（A2） |
 | `courses.allowed_ip_address` | `lesson.allowed_ip_address` | F02 講座の管理 | 未決（F02） |
 | `courses.settings` | `lesson` の設定の列 | F01 / F02 | 未決（F02） |
-| `lessons.status = 'deleted'` | `unit.del_chk` | F03 受講画面 | 新で受講者向けの一覧を絞る |
+| `lessons.status = 'deleted'` / `deleted_at` | `unit.del_chk` | F03 受講画面 | 新は `deleted_at` で絞る |
+| `learning_paths` / `learning_path_courses` | `payment_item`（講座）/ `payment_item_lesson` | コースの一覧・購入（2026-10-22 から） | 新で読み書きする |
+| `live_lesson_reservation_policies` | `live_lesson.reserve_*`、`config_live_lesson.ticket_cancel_day` | F11 開催回 | 新は開催回の日時をここから計算し直す |
 | `lessons.open_at` / `close_at` / `close_after_days` / `drip_delay_basis` | `unit` の公開期間 | F03 受講画面 | 新で実装する（A4） |
 | `lessons.complete_message` / `search_keyword` / `duration_min` | `unit` の各列 | F03 受講画面 | 新で実装する（A4） |
 | `video_lessons.complete_type` / `skip_prevention` | `lecture` の各列 | F04 動画の視聴 | 新で実装する（A5） |

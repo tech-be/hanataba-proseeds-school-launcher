@@ -27,7 +27,7 @@
 | — | `instructor_id` char(26) **NOT NULL** + FK → `users` | **テーブル** | **高** | **lw2 に講座単位の講師が無い。** この値が決まらないと**1行も入らない** | **代理講師の `users` 行を1件作り、全講座に割り当てる**（→ A21）。`instructor_id` は NOT NULL のまま触らない。**パスワードを空にしてログインできない行**にし、**講座→講師の対応表を受け取ってから本来の講師に付け替える**。講師の担当範囲は基盤 A18 の `instructor_assignments` が持つので、ここは表示用の代表1名でよい |
 | `lesson_cate_id` int(11) | `category` varchar(50) + FK → `course_categories(code)` | **テーブル** | **高** | **`course_categories` は固定シードを持たない**（`200_courses_category_difficulty_lookup.sql` は既存 `courses.category` からの吸い上げだけ）。**新規 DB では空**なので FK 違反になる | **移行ツールが `lesson_cate` から `course_categories` を作る**（`content.course_categories`。`courses` より先）。`lesson_cate` に行が無い `lesson_cate_id`（旧データの不整合）は分類なし（NULL）で講座を移す |
 | `open_period` smallint(6) **（月）** | `access_days` int **（日）** | **性質** | **高** | **単位が月→日。** そのまま入れると受講期間が 1/30 になる | ETL で `open_period * 30` に換算する。**単位換算をテストで固定する**。ETL設計 §5-2 は `payment_item` 側から引くとしているので、どちらを正とするかを課金（K01）と揃える |
-| `sales_status` tinyint(4) | `status` varchar(32) | 性質 | 中 | `content_statuses` は `draft`/`published`/`archived` の3値 | 販売中→`published`、それ以外→`draft` に変換する（ETL設計 §5-2） |
+| `sales_status` tinyint(4) | `status` varchar(32) | 性質 | 中 | `content_statuses` は `draft`/`published`/`archived` の3値 | 販売中→`published`、それ以外→**`archived`**（2026-10-22 に `draft` から変えた。新は講座の下書きをやめ、画面から公開にできない。school-launcher `20261012065004`）。旧の値は `courses.settings.sales_status` に残す |
 | `allowed_ip_address` text | — | カラム | 中 | **講座単位の IP 制限を入れる列が無い** | `courses.allowed_ip_address` を追加して移す（→ [追加一覧](#新環境に追加するテーブルカラム) A1） |
 | `open_pc_chk` / `open_smartphone_chk` | `courses.settings` | カラム | 中 | **デバイス別の公開設定を入れる列が無い** | A1 の `courses.settings`（json）の `features.open_pc` / `open_smartphone` に移す |
 | `lesson_thumbnail_type` / `img_smartphone` / `lesson_img_file_name` | — | カラム | 中 | サムネイルの種類・スマホ用画像・サムネイル画像 | **現状は移していない**（実装が無い。2026-10-02 の確認）。移行ツールはこの3列を読まない（`thumbnail_url` は NULL。画像は L9 の移送待ち） |
@@ -35,7 +35,7 @@
 | `inquiry_address` / `frame_id` / `disp_type_id` / `frame_height` / `frame_width` / `operating_env` / `inquire_cate_id` | — | カラム | 低 | 問い合わせ先・表示フレーム設定・動作環境・問い合わせカテゴリを入れる列が無い | **現状は移していない**（実装が無い。2026-10-02 の確認）。移行ツールはこの7列を読まない。`settings` に入るのは上の7フラグだけ |
 | `update_date` | `updated_at` | カラム | 低 | 更新日時 | **現状は移していない**（実装が無い。2026-10-02 の確認） |
 | `certificate_id` | `course_certificate_policies` | テーブル | 低 | 修了証の紐付け | [`config_certificate` → `certificate_settings`](../03-enrollment/review.md#config_certificate--certificate_settings) と合わせて移す |
-| — | `price` decimal(10,2) | 性質 | 中 | **lw2 は価格を講座ではなく商品 (`payment_item`) に持つ。** 商品と講座が 1:N なので、どの価格を入れるか決まらない | 未決: **講座→価格の対応表**を受け取ってから埋める。**現状は暫定値（設定 `provisional.course_price`）を全講座に入れ、設定が無ければ NULL**（`courses.price` は NULL 可なので投入は止まらない）。商品が複数ある講座の扱いを課金（K01）と揃える |
+| — | `price` decimal(10,2) | 性質 | 中 | **lw2 は価格を講座ではなく商品 (`payment_item`) に持つ。** 商品と講座が 1:N なので、どの価格を入れるか決まらない | 未決: **講座→価格の対応表**を受け取ってから埋める。**現状は暫定値（設定 `provisional.course_price`）を全講座に入れ、設定が無ければ NULL**（`courses.price` は NULL 可なので投入は止まらない）。商品が複数ある講座の扱いを課金（K01）と揃える。**2026-10-22 から、価格は商品ごとにコース（`learning_paths.price`）へ移す**（[`payment_item` → `learning_paths`](#payment_item--payment_item_lesson--learning_paths--learning_path_courses)）。新アプリは `courses.price` を使わなくなった |
 
 **まとめ**: 受け皿が無い列 12 / 変換規則が要る列 5 / **高 3 件**
 
@@ -86,10 +86,34 @@
 | `lesson_cate_name` varchar(200) | `name_ja` varchar(128) | 型 | 中 | **200 → 128 で桁が足りない** | 抽出時に128文字超の件数を検査する。**超過があれば列を広げる**（切り捨てない）。`code` は旧 ID から作るので名前の長さは効かない |
 | `lesson_cate_img_file_name` varchar(255) | `icon` varchar(64) | 性質 | 低 | **意味が違う。** 旧は画像ファイル名、新はアイコン識別子 | **そのまま入れない。** 画像は L9 で移送し、A3 の `course_categories.image_url` に入れる（移送前のいまは NULL） |
 | `sort_no` | `sort_order` | — | — | 対応あり | そのまま移す |
-| `del_chk` | `active` / `deprecated_at` | 性質 | 低 | **削除状態を2列で持つため二重管理になる** | **現状は `del_chk=1` を `active=FALSE` にするだけで、`deprecated_at` は常に NULL**（日時は入れていない。2026-10-02 の確認） |
+| `del_chk` | `active` / `deprecated_at` | 性質 | 低 | **削除状態を2列で持つため二重管理になる** | **現状は `del_chk=1` を `active=FALSE` にするだけで、`deprecated_at` は常に NULL**（日時は入れていない。2026-10-02 の確認）。テナントごとのカテゴリ（`tenant_course_categories`）には `deprecated_at` を入れる |
 | `regist_user_id` | `created_by` | カラム | 低 | 登録者を入れる列が無い | A3 で `course_categories.created_by` を足したが、**現状は移していない**（実装が無い。常に NULL。2026-10-02 の確認） |
 
+> **2026-10-22 から、テナントごとのカテゴリ（`tenant_course_categories`）と講座との結び付き（`course_category_links`）にも入れる。**
+> school-launcher `20261020001030` で、講座のカテゴリがテナントごとのマスタ（講座に複数付けられる）になった。旧 `lesson_cate` もテナントごとなので、
+> こちらのほうが受け皿として合う。`course_categories` / `courses.category` への書き込みも残す（新アプリの講座の一覧がまだ使っている）。
+> ステージングでは 42 件（共有カテゴリのうち講座が使っている分を含む）・結び付き 143 件。
+
 **まとめ**: 受け皿が無い列 2 / 変換規則が要る列 3 / **高 1 件**
+
+### `payment_item` / `payment_item_lesson` → `learning_paths` / `learning_path_courses`
+
+`payment_item`（`item_type = 0` 講座）→ `learning_paths` ／ ステージング 280 件（削除済み 29）／ 結び付き 985 件（削除済み 619）
+
+**2026-10-22 に足した。** school-launcher は「コース（`learning_paths`）＝旧の販売商品」という作りにした（`20261009113244` / `20261013001351`）。講座はコースを通して売る。
+商品の定義はこの区分（`content.5`）で移し、購入の記録（`learning_path_enrollments`）は受講・課金の区分で扱う。課金（04）の `tenant_plans` には、2026-10-23 から入れない（新の `tenant_plans` は Stripe の継続課金のプラン）。
+
+| 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
+|---|---|---|:--:|---|---|
+| `item_name` / `description` / `sort_no` / `price` | `title` / `description` / `sort_order` / `price` | — | — | 対応あり。`price` は**税込** | そのまま移す |
+| `manual_term` / `manual_term_type` / `no_limit_chk` | `access_period_value` / `access_period_unit` | 性質 | 中 | 旧の単位は 0 日間 / 1 週間 / 2 ヶ月 / 3 年間 / 4 期限なし、新は日・月だけ | **週は ×7 日、年は ×12 ヶ月**に直す。期限なし・`no_limit_chk = 1`・種類が NULL（自動継続の商品。92 件）は無期限 |
+| `valid_chk` / `del_chk` | `status` | 性質 | 中 | `learning_paths.status` は `content_statuses` への FK | 削除 → `deleted`、有効 → `published`、無効 → `archived` |
+| `display_chk` | `listed` | 性質 | 低 | 旧は 1 表示する / 0 一覧に出さない / **2 一覧と購入画面に出さない** | 1 → TRUE、0・2 → FALSE。**「購入画面に出さない」は表せない**（2 件） |
+| `remote_chk` | `remote_pc_enabled` | — | — | 対応あり（8 件） | そのまま移す |
+| `extension_price` / `extension_type` | `extension_fee` / — | 性質 | 低 | 旧の延長は、この料金で月額の自動継続に切り替える（`PaymentController.php:1026`）。新の `extension_fee` も「1 ヶ月の延長費用」 | 料金は移す。**`extension_type`（期限切れの後も延長できるか）は受け皿が無い** |
+| 初回価格・試用・自動継続・支払い方法ほか | — | カラム | 低 | `learning_paths` に列が無い | 受け皿なし。名前・講座・自動継続かは決済の `settings.item` に残る（2026-10-23 から `tenant_plans.settings` には入れない） |
+| `payment_item_lesson`（`del_chk = 0`） | `learning_path_courses` | — | — | 対応あり（366 件） | 移す。並びは旧の登録順（`item_set_lesson_id`） |
+| `payment_item_lesson`（`del_chk = 1`） | — | **性質** | 中 | 旧で運営がコースから外した講座。**新もコースから外した講座の結び付きは物理削除で、持たない**（`learning_path_repo.go` の `Remove`。外すと購入済みの人の受講登録を期限切れにする）。入れると、外した講座まで購入で受講できる | **移さず一覧に出す**（理由「移行対象外」。618 件。2026-10-23 決定）。誰に何を渡したかは受講（03）の `learning_path_enrollment_courses` に、外した講座も含めて残している |
 
 ### なし → `content_statuses`
 
@@ -133,7 +157,7 @@
 | `open_close_chk` / `payment_unit` / `not_skill_result_chk` | `lessons.settings` | カラム | 低 | ユニットの開閉・有料属性・スキル診断結果連動の設定を入れる列が無い | A4 の `lessons.settings`（json）にまとめて移す（`payment_open_day` の生値も入れる） |
 | `enquete_suspended_chk` | — | カラム | 低 | アンケート中断の設定 | **現状は移していない**（実装が無い。2026-10-02 の確認）。移行ツールはこの列を読まない |
 | `enquete_id` | `survey_lessons` | テーブル | 中 | アンケートの紐付け | [`enquete` → `survey_lessons`](#enquete--survey_lessons) を参照 |
-| `del_chk` | `status` | 性質 | 低 | `content_statuses` に `deleted` が無い | A3 で `deleted` を追加し、そこへ移す |
+| `del_chk` | `status` / `deleted_at` | 性質 | 低 | `content_statuses` に `deleted` が無い | A3 で `deleted` を追加し、そこへ移す。**`lessons.deleted_at` にも旧の `update_date` を入れる**（2026-10-22。新アプリはレッスンを `deleted_at IS NULL` で絞るので、status だけでは画面に出る） |
 | — | `is_preview` | カラム | 低 | 旧に対応なし | 既定値に任せる。対応不要 |
 
 **まとめ**: 受け皿が無い列 10 / 変換規則が要る列 6 / **高 1 件**
@@ -145,7 +169,7 @@
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
 | `lecture_id` / `unit_id` | `lesson_id` char(26) **PK** | テーブル | 中 | **`lesson_id` が PK なので 1レッスン1動画。** lw2 は 1:N になりうる（実測では最大1本） | 抽出時に**1ユニットに複数 `lecture` がある件数を検査する**。0件なら PK のまま進め、あれば `video_lessons` の PK を見直す |
-| `pmovie_token` text | `video_url` varchar(512) **NOT NULL** | 性質 | 中 | トークンと URL で形式が違う。**recademy では 2,533件中 1,181件が空**（p-movie を使っていない動画） | **`pmovie_chk` が立っている動画は、トークンをそのまま `video_url` に入れる**（現状は URL に組み立てていない。2026-10-02 の確認）。立っていない動画の配信先は**別テーブル [`lecture_path`](#lecture_path--video_lessonsvideo_url)** |
+| `pmovie_token` text | `video_url` varchar(512) **NOT NULL** | 性質 | 中 | トークンと URL で形式が違う。**recademy では 2,533件中 1,181件が空**（p-movie を使っていない動画） | **`pmovie_chk` が立っている動画は、トークンをそのまま `video_url` に入れる**（現状は URL に組み立てていない。2026-10-02 の確認）。立っていない動画の配信先は**別テーブル [`lecture_path`](#lecture_path--video_lessonsvideo_url)**。**`video_source` は `pmovie`**（2026-10-22）。ただし新は `pmovie` を `.m3u8` の URL として扱うので、トークンのままでは再生できない（移行の外の作業） |
 | `lecture_complete_type` / `pmovie_complete_type` | — | **カラム** | **高** | **「どこまで見たら修了か」の修了設定を入れる列が無い。** 進捗判定の基準が変わり、移行後に修了状態がずれる | `video_lessons.complete_type` を追加して移す（→ A5）。**判定ロジックも旧の基準に合わせる** |
 | `skip_prevention_setting` | — | **カラム** | **高** | **スキップ防止（早送り禁止）の設定を入れる列が無い。** 資格・研修系の要件だった場合、コンプライアンス上の後退になる | A5 の `video_lessons.skip_prevention` を追加して移し、**プレイヤー側の制御も入れる** |
 | `is_continue_watch_chk` | — | カラム | 低 | 続きから再生する設定を入れる列が無い | A5 の `video_lessons.settings`（json）に移す |
@@ -164,7 +188,7 @@
 
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|:--:|---|---|---|
-| `pc_path` varchar(200) | `video_lessons.video_url` varchar(512) | 性質 | 中 | **値が3種類混ざっている。** recademy 2,559行のうち **URL 1,171 / 相対パス 44 / 空 1,344**。相対パスは `/html/contents/<tenant_code>/lesson` からの参照で、そのまま入れても新環境では解決できない | **URL はそのまま移す。** 相対パスは **L9 のファイル移送後に新しい配信先の URL へ書き換える**。空の行は `pmovie_token` 側で配信している動画なので、**`pmovie_token` をそのまま `video_url` に入れる**（URL は組み立てない） |
+| `pc_path` varchar(200) | `video_lessons.video_url` varchar(512) | 性質 | 中 | **値が3種類混ざっている。** recademy 2,559行のうち **URL 1,171 / 相対パス 44 / 空 1,344**。相対パスは `/html/contents/<tenant_code>/lesson` からの参照で、そのまま入れても新環境では解決できない | **URL はそのまま移す。** 相対パスは **L9 のファイル移送後に新しい配信先の URL へ書き換える**。空の行は `pmovie_token` 側で配信している動画なので、**`pmovie_token` をそのまま `video_url` に入れる**（URL は組み立てない）。`video_source` は YouTube・Vimeo のホストならその種類、それ以外は `storage`（2026-10-22）。旧の自前サーバーの URL は新のストレージのキーではないので、そのままでは再生できない |
 | `smartphone_path` varchar(200) | `video_lessons.settings.smartphone_path` | カラム | 低 | **PC と携帯で配信先を分けている。** 新環境は `video_url` 1本 | `video_url` には **PC 用を採用する**（新環境はレスポンシブで、端末別の配信先を持たない）。携帯用は捨てずに `video_lessons.settings.smartphone_path` に残す |
 | `sort_no` | — | カラム | 低 | 1ユニットに複数の配信先を持てる（順序つき） | 新環境は1ユニット1動画。**`sort_no` の最小の行を採用する**（lw2 も `array_shift` で先頭を使っている） |
 
@@ -254,10 +278,10 @@
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
 | `unit_id` | `lesson_id` + **UNIQUE (tenant_id, lesson_id)** | **テーブル** | **高** | **1レッスン1クイズ。** lw2 の `test.unit_id` は MUL で、1ユニットに複数テストを持てる | 抽出時に**複数テストを持つユニットの件数を検査する**。**UNIQUE は外さない**（緩めない方針）。**2件目以降のテストは移らない**ので、件数を数えて規模を記録する |
-| — | `title` varchar(255) **NOT NULL** | カラム | 中 | 旧 `test` にタイトル列が無い | **現状は空文字を入れている**（ユニット名は `lessons.title` にあり、画面の見出しはそちらを使う。2026-10-02 の確認） |
+| — | `title` varchar(255) **NOT NULL** | カラム | 中 | 旧 `test` にタイトル列が無い | ~~空文字を入れている~~ **ユニット名（＝レッスンの題）を入れる**（2026-10-26 決定。空だと新は題が必須で、運営がテストの設定を保存すると 400。テスト仕様 Q-06） |
 | `del_chk` | — | **性質** | 中 | **削除済みのテストを表す列が `quizzes` に無い** | **現状は移していない**（実装が無い。2026-10-02 の確認）。削除済みのテストも生きているテストと同じ形で入る。ステージング（`tenant_id = 10`）で297件中12件 |
 | `exam_limit_times` | `time_limit_sec` int | 型 | 中 | **単位が違う。** 受験画面の残り時間計算が `exam_limit_times * 60 - test_time` なので、**旧は分・`test_time` は秒**（`UserLearningLessonModel`） | **`exam_limit_times * 60` で秒に換算する。** `test_time`（秒）はそのまま `quiz_attempts.duration_sec` へ |
-| `pass_score` | `passing_score` int | — | — | 対応あり | そのまま移す |
+| `pass_score` | `passing_score` int | — | — | 対応あり | ~~そのまま移す~~ **旧は「点」、新は「割合」**（2026-10-26 に旧のコードで確かめた。`UserLearningLessonModel.class.php:1237`）。`fixups text` の提案で割合に直す（移行仕様 0-3 の Q9） |
 | `exam_max_number` / `suspended_chk` | — | カラム | 中 | 受験回数制限（O13）と中断機能（O12）を入れる列が無い | `quizzes.max_attempts` / `suspend_enabled` を追加して移す（→ A8） |
 | `test_result_disp_chk` / `test_score_disp_chk` / `error_disp_chk` / `answer_disp_chk` / `comment_disp_chk` / `disp_question_count` | — | カラム | 中 | **「正解を見せるか」「解説を見せるか」「点数を見せるか」の表示制御6列を入れる列が無い。** 受講者に見える情報が変わる | A8 の `quizzes.display_settings`（json）にまとめて移し、**出題画面の表示制御を実装する** |
 | `is_mock_test` / `mock_post_message` / `mark_type_id` / `ranking_chk` / `repeat_chk` / `test_start_time` | — | カラム | 低 | 模試（X02）・ランキング・開始時刻を入れる列が無い | 模試は[対象外](../06-out-of-scope/review.md)区分なので移行しない。**残りは A8 の `display_settings` に移す** |
@@ -449,7 +473,7 @@
 | — | `live_lessons.scheduled_at` timestamp **NOT NULL** | **性質** | **高** | **1ライブに複数の開催回がある**（ステージング実測 2,840件、最大 1,657回／ライブ）のに、`live_lessons` は単一の開催日時を要求する。**開催回は `live_lesson_occurrences` 側にあるため、この列は重複した情報を持つ** | **直近の開催予定日を入れる**（過去の回しか無ければ最後の回。**削除済みでない回を優先し、全部削除済みのときだけ削除済みの回から選ぶ**）。**ダッシュボードの「今日のライブ」がこの列だけを見ており**（`dashboard_repo.go: ListTodaysLiveLessons`）、開催回テーブルを参照していない。**誰も更新しないので移行の翌日には古くなる** — 導出に変えるかは新環境側の課題（[migration-spec の未確定](migration-spec.md#未確定として残っているもの)） |
 | `live_lesson_type` tinyint(4) | — | 性質 | 中 | **`0` = オンラインレッスン、`1` = 教室レッスン**（`LiveLessonController::$liveLessonTypeList`）。ステージング実測 15 / 3。**入力の必須項目が逆**で、`0` は `live_lesson_url` 必須、`1` は `facility_id` 必須（`LiveLessonController::570`） | **どちらもライブとして移す。** A22 の `live_lessons.settings` に種別と会場を残す。ReCADemy の教室レッスン3件はすべて施設「ご自身のパソコン」で、**対面の教室ではなく自席でソフトを使う予約枠**だった |
 | `live_lesson_url` text | `live_lesson_occurrences.meeting_url` varchar(1000) | 性質 | 中 | **レッスン側の URL → 開催回ごとの URL** へ移す。**`live_lessons.live_room_id`（LiveKit のルーム）とは別物**で、取り違えると会議 URL が消える。text → varchar(1000) の切り捨ても起きうる | 全開催回に同じ URL を複製する。**桁溢れは抽出時に検査**（ステージング実測の最大は 77文字で余裕がある）。`live_room_id` は NULL のままにする |
-| `capacity` / `reserve_start_day` / `reserve_end_day` / `reserve_end_time` | `occurrences.capacity` / `reserve_opens_at` / `reserve_closes_at` | 性質 | 中 | **レッスン側の既定値が落ちる。** 旧は開催回側にも同名の列があり、**開催回の値が優先、無ければレッスン側**という解決をしている。単位も違う（レッスン側は「何日前」の int、開催回側は日付・日時） | **現状、レッスン側で埋めるのは `capacity` だけ**（開催回が NULL ならレッスン側。`0` は NULL）。**`reserve_opens_at` / `reserve_closes_at` は開催回の値だけから作り、レッスン側の `reserve_start_day` / `reserve_end_day` / `reserve_end_time` での補完は現状していない**（実装が無い。2026-10-02 の確認。ステージングは開催回側の NULL が0件なので影響なし）。**レッスン側の生値は A22 の `live_lessons.settings.defaults` に残す** |
+| `capacity` / `reserve_start_day` / `reserve_end_day` / `reserve_end_time` | `occurrences.capacity` / `reserve_opens_at` / `reserve_closes_at` | 性質 | 中 | **レッスン側の既定値が落ちる。** 旧は開催回側にも同名の列があり、**開催回の値が優先、無ければレッスン側**という解決をしている。単位も違う（レッスン側は「何日前」の int、開催回側は日付・日時） | **現状、レッスン側で埋めるのは `capacity` だけ**（開催回が NULL ならレッスン側。`0` は NULL）。**`reserve_opens_at` / `reserve_closes_at` は開催回の値だけから作り、レッスン側の `reserve_start_day` / `reserve_end_day` / `reserve_end_time` での補完は現状していない**（実装が無い。2026-10-02 の確認。ステージングは開催回側の NULL が0件なので影響なし）。**レッスン側の生値は A22 の `live_lessons.settings.defaults` に残す**。**2026-10-22 から、レッスン側の日数は `live_lesson_reservation_policies` にそのまま入れる**（school-launcher `20261013093100`。新は開催回の日時をここから計算し直す）。キャンセルの期限はテナントの値（`config_live_lesson.ticket_cancel_day`）を各ライブに入れる |
 | `reserve_max_count` / `reserve_max_count_start_date` | — | カラム | 中 | **1人あたりの予約上限が落ちる。** 「1人◯回まで」の運用ができなくなる | A22 の `live_lessons.settings`（json）に移す。**判定する機能は新環境に無い**ので、機能を作るかは別途決める |
 | `detail_tag_head` / `detail_tag_body` text **NOT NULL** | — | カラム | 中 | 詳細画面に埋め込む HTML タグが落ちる | A22 の `live_lessons.settings` に移す |
 | `live_lesson_cate_id` int(11) | — | カラム | 低 | ライブ側が持つカテゴリ ID。**ステージング実測では全件 NULL か 0 で、使われていない**（実際の紐付けは `live_lesson_lesson_cate`） | **移さない。** 値が入っていない列で、同じ意味の中間表が別にある。本番ダンプで値が入っていれば移す |
@@ -459,7 +483,7 @@
 | `facility_id` | — | 性質 | 中 | **教室レッスンの開催場所。** `facility` は集合研修（X01、対象外）のテーブル。ステージング実測は3件とも `facility_id = 1`（施設名「ご自身のパソコン」、住所・TEL・URL すべて空） | **施設名と説明を A22 の `live_lessons.settings` に文字列で残す**（`facility` テーブルごとは移さない）。**本番に住所や地図が要る施設があれば別表の追加が要る**（[migration-spec 1-3](migration-spec.md#1-4-本番ダンプ受領後に確認すること)） |
 | `save_file_name1..3` / `disp_file_name1..3` | `live_lessons.settings.files` | カラム | 低 | 配布ファイル3組が落ちる | **A22 の `live_lessons.settings.files` に移す**（2026-10-02）。`{slot, save_file_name, disp_file_name}` の並びで、空の枠は詰める（表示名が空なら実ファイル名）。**ファイル本体は L9 の移送が要る**。ステージング実測0件。本番で件数を確認する |
 | `public_chk` / `valid_chk` / `send_pc_chk` / `send_mobile_chk` / `sort_no` | `lessons.status` / `sort_order` ほか | カラム | 低 | 外部公開・有効フラグ・メール送信設定が落ちる。`valid_chk` は `lessons.status` に写せるが、**残り4列は受け皿が無い** | `valid_chk` → `status`（有効→`published` / 無効→`draft`）、`sort_no` → `lessons.sort_order`。残りは A22 の `live_lessons.settings` に移す |
-| `del_chk` | `lessons.status = 'deleted'` | 性質 | 中 | 削除済みのライブ（ステージング実測3件）を表す先 | `content_statuses.deleted`（オンデマンドで追加済み）を使う。**`valid_chk` より `del_chk` を優先**する |
+| `del_chk` | `lessons.status = 'deleted'` | 性質 | 中 | 削除済みのライブ（ステージング実測3件）を表す先 | `content_statuses.deleted`（オンデマンドで追加済み）を使う。**`valid_chk` より `del_chk` を優先**する。`lessons.deleted_at` も入れる（2026-10-22） |
 | `regist_user_id` / `update_user_id` | — | カラム | 低 | 登録者・更新者が落ちる | A22 の `live_lessons.settings` に移す |
 | — | `live_lessons.live_room_id` varchar(255) | カラム | 低 | LiveKit のルーム ID。旧に対応概念なし | NULL のまま。cutover 後に新環境が採番する |
 

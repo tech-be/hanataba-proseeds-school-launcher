@@ -3,14 +3,25 @@
 [突き合わせ](review.md#新環境に追加するテーブルカラム) の追加一覧（A1〜A27）を、**school-launcher に当てる migration の単位**に落としたもの。
 
 - **当てる先**: `school-launcher/btoc-backend/db/migrations/`（goose 形式。雛形は `make migrate-create`）
-- **実物**（2026-10-02 時点。`20260930044959` までは `hanataba_dev` にマージ済み — `022810` は PR #127、`190305` は PR #137、`20260928072918` / `20260929091539` / `20260929102209` は PR #135、`044959` は PR #139）:
+- **実物**（2026-10-22 時点。school-launcher `hanataba_dev` の `26fc5be9`。下の表はどれもマージ済み — `022810` は PR #127、`190305` は PR #137、`20260928072918` / `20260929091539` / `20260929102209` は PR #135、`044959` は PR #139）:
 
   | migration | 中身 |
   |---|---|
   | `20260924022810_lw2_content_additions.sql` | 1〜9（この区分の追加の本体） |
   | `20260926190305_create_course_chapters.sql` | 10 講座の章（`course_chapters`、`lessons.chapter_id`） |
   | `20260930044959_rename_lw2_legacy_id_on_chapters_and_tags.sql` | 10 `course_chapters.unit_id`（`legacy_id` から改名） |
-  | **`20261001085757_lw2_keep_deleted_rows.sql`**（2026-10-01。`feat/lw2-support-schema` にコミット・push 済み。`hanataba_dev` には未マージ） | 11 削除済みも移すための列と、除外日の全行の表 |
+  | `20261001085757_lw2_keep_deleted_rows.sql`（2026-10-01） | 11 削除済みも移すための列と、除外日の全行の表 |
+- **school-launcher 側が足した受け皿で、移行ツールが書き込むもの**（2026-10-22 から。移行のための migration ではないが、`common.0` の必須に入れてある）:
+
+  | migration | 移行ツールが書く列・表 |
+  |---|---|
+  | `20261009113244_learning_path_pricing.sql` / `20261013001351_add_course_order_to_learning_paths.sql` | `learning_paths` の価格・受講期間・リモートPC・延長費用・一覧への表示・受講順（`content.5`） |
+  | `20261020001030_tenant_course_categories.sql` | `tenant_course_categories` / `course_category_links` |
+  | `20261021082002_add_lesson_deleted_at.sql` | `lessons.deleted_at` |
+  | `20261008112033_add_video_source_to_video_lessons.sql` | `video_lessons.video_source` |
+  | `20261013093100_live_lesson_reservation_policies.sql` | `live_lesson_reservation_policies` |
+  | `20260930013549_live_occurrences_fk_to_lessons.sql` | 書く先は変わらない（開催回の親が `live_lessons` から `lessons` に変わった） |
+  | `20261012065004_publish_draft_courses.sql` | 書く先は変わらない（講座の下書きを公開にそろえる。移行は販売停止を `archived` で入れる） |
 - **当てる時期**: **移行直前**（[migration-spec](migration-spec.md) のフェーズ0）
 - **確認**: `python -m migrator doctor` / `python -m migrator run --phase common.0`
 
@@ -308,6 +319,14 @@ CREATE TABLE live_lesson_exclusion_date_history (
 > **新のアプリは足した `deleted_at` と全行の表をまだ読まない。**
 
 ---
+
+## 12. アンケートの削除済みの設問・ページ（2026-10-26。作業ブランチ `feat/lw2-migration-rework`）
+
+| migration | 中身 | アプリの修正 |
+|---|---|---|
+| `20261026120001_add_survey_deleted_at.sql` | `survey_questions.deleted_at` / `survey_pages.deleted_at`（DATETIME(3) NULL） | 設問と選択肢の読み取り（`survey_repo.go`）と講座の複製（`course_duplicate_repo.go`）を `deleted_at IS NULL` で絞る |
+
+必須スキーマは `CONTENT_SCHEMA`（`migrator/steps/schema.py`）。
 
 ## 計画（移行では使わない）
 

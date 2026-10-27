@@ -26,8 +26,9 @@
 | `lesson_is_used` | `courses.is_used` | O01 講座 | データ | 2,066 | C | 講座の利用可否 | **`lesson_is_used` に行がある講座を `courses.is_used = TRUE` にする**（A1）。`status`（公開状態）とは別の列 |
 | `lesson_system` | — | O01 講座 | データ | 243 | C | **講座をテナントに公開する対応表**（列は `lesson_id` / `tenant_id` の2つだけ） | 設定は持っていない。移行では**共有講座（`tenant_id = 0`）のどれを移すかの判定**にだけ使う（`SourceDatabase.shared_lessons`）。行そのものの移し先は無い |
 | `lesson_tag` / `lesson_lesson_tag` | `course_tags` / `course_tag_links` | O01 講座 | データ / 中間 | 31 / 281 | C | 講座タグと割当 | A2 で受け皿を足して移す。**共有のタグ（`tenant_id = 0`）も、移す講座の割当が指していれば、このテナントのタグとして移す**（2026-10-02。ステージングは共有のタグ3件・割当9件）。**`lesson_tag.del_chk` と `icon_file_name` は現状は移していない**（実装が無い。2026-10-02 の確認。ステージングは削除済み0件） |
-| `lesson_cate` | `course_categories` | O02 講座カテゴリ | データ | 482 | C | 講座カテゴリ | **移行ツールが `lesson_cate` から作る**（コードは `lw2-<旧テナントID>-<旧ID>`）。`courses` より先に入れる（`courses.category` は FK） |
+| `lesson_cate` | `course_categories`、`tenant_course_categories` | O02 講座カテゴリ | データ | 482 | C | 講座カテゴリ | **移行ツールが `lesson_cate` から作る**（コードは `lw2-<旧テナントID>-<旧ID>`）。`courses` より先に入れる（`courses.category` は FK）。2026-10-22 から、テナントごとのカテゴリ（`tenant_course_categories`）と講座との結び付き（`course_category_links`）にも入れる |
 | — | `content_statuses` | O01 講座 | マスタ | — | — | `courses.status` の値 | migration で投入。`draft`/`published`/`archived` の3値に、**移行で `deleted` を足す**（A3） |
+| `payment_item`（`item_type = 0`）/ `payment_item_lesson` | `learning_paths` / `learning_path_courses` | O01 講座 | データ | — | C | 講座の販売商品（コース） | **2026-10-22 から `content.5` で移す**（school-launcher はコース＝旧の販売商品とした）。削除済みの結び付きは移行対象外として一覧に出す（新もコースから外した結び付きは持たない。2026-10-23）。課金（04）の `tenant_plans` には 2026-10-23 から入れない |
 | — | `course_difficulties` | O01 講座 | マスタ | — | — | 講座の難易度 | 旧に対応列なし |
 
 ## C2 ユニット・動画
@@ -36,7 +37,7 @@
 |---|---|---|---|---:|:--:|---|---|
 | `unit` | `lessons` | O04 講義ユニット | データ | 51,463 | C | 講座内のユニット。**`unit_type_id` で動画/テスト/アンケート/課題/見出しを分岐** | **見出しブロック（type=0）は `lessons` に入れない**（2026-09-30 から **`course_chapters`（講座の章）に入れ**、後ろのユニットを `lessons.chapter_id` で所属させる）。 除外しないと FK 違反（ETL設計 §5-0） |
 | `lecture` | `video_lessons` | O06 講義動画 | データ | 26,402 | C | 動画の実体 | `video_lessons.lesson_id` が PK なので**1ユニット1動画**。実測は最大1 |
-| `lecture_path` | `video_lessons.video_url` | O04 講義ユニット | データ | 26,953 | C | **動画の配信先**（`pc_path` / `smartphone_path`） | **`lecture` に URL 列は無く、配信先はこちら。** recademy 2,559行（URL 1,171 / 相対パス 44 / 空 1,344）。**URL はそのまま移し、相対パスは L9 の移送後に書き換える** |
+| `lecture_path` | `video_lessons.video_url` | O04 講義ユニット | データ | 26,953 | C | **動画の配信先**（`pc_path` / `smartphone_path`） | **`lecture` に URL 列は無く、配信先はこちら。** recademy 2,559行（URL 1,171 / 相対パス 44 / 空 1,344）。**URL はそのまま移し、相対パスは L9 の移送後に書き換える**。`video_source`（2026-10-22）は YouTube・Vimeo のホストならその種類、p-movie は `pmovie`、それ以外は `storage` |
 | `lecture_path_test` | — | O04 講義ユニット | データ | - | — | 動画パスの検証用 | 2026-07-28 以降に追加。実測値なし |
 | — | `lesson_types` | O04 講義ユニット | マスタ | — | — | `lessons.type` の値 | migration で投入。既存は `video`/`live`/`text`/`survey`。**移行で `quiz`/`assignment`/`document`/`discussion`/`skill_check` を足す**（A20） |
 
