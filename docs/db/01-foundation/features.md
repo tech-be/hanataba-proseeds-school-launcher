@@ -178,7 +178,7 @@
 | 運営メモ | `user.user_memo` | `users.admin_memo` | ◯ | — | 新は読まない |
 | 人数の上限 | `tenant_limit_value` | `tenant_limits` | ◯ | — | 新は読まない（`platform_plans.max_learners` も未使用） |
 | 登録時の既定値 | `user_item_default` | `tenant_field_defaults` | ◯ | — | 新は読まない |
-| 会員番号 | `user_personal_no.personal_no` | `users.member_no` | ◯ | — | F11 |
+| 会員番号・スカウトでの名前の出し方 | `user_personal_no` | `user_personal_numbers` | ◯ | ◯ | F11 |
 
 #### 差分
 
@@ -284,16 +284,16 @@
 
 ### F11 会員の一意 ID（会員番号）
 
-利用者: 管理者・受講者 ／ データ種: B11 マイナンバー（実体は会員の一意 ID）／ 判定: **X 新に無い**
+利用者: 管理者・受講者 ／ データ種: B11 マイナンバー（実体は会員の一意 ID）／ 判定: **△ 一部ある**（2026-10-22 の school-launcher `hanataba_dev`）
 
 - 旧: `UserModel` が会員の作成時に `personal_no` を振る。管理画面の会員一覧・詳細・スカウト、受講者自身のプロフィールに出し、検索・CSV にも使う
-- 新: 無い（`users.member_no` に移してあるが、表示も検索もしない）
+- 新: `user_personal_numbers` に持つ。スカウトで相手に見せる名前（名前 / ニックネーム / 個別番号）を本人と運営が選べる（`/api/v1/scout-display`、`/api/v1/tenant/users/:id/scout-display`）。番号の無い会員には、テナント内の `regist_no` の最大 + 1 を振る。会員一覧・検索・CSV での番号の扱いは未確認
 
 #### 差分
 
 | 種類 | 深刻度 | 内容 | 対応 |
 |---|:--:|---|---|
-| 機能 | 中 | 会員番号が新のどこにも出ない。旧は受講者自身にも見せていたので、問い合わせで番号を伝える運用があれば困る | 新で会員番号を管理画面とプロフィールに出し、検索できるようにする |
+| 機能 | 中 | 会員番号はスカウトでの名前の出し方の設定には出るが、会員一覧・検索・CSV に出るかは未確認（2026-10-22）。旧は受講者自身にも見せていたので、問い合わせで番号を伝える運用があれば困る | 新の会員一覧・検索で番号を扱うかを確かめる |
 
 ### F12 テナントの設定
 
@@ -395,7 +395,7 @@
 | `user_roles` の旧ロール4つ、`users.is_career_counselor` | `role_master`、`career_counselor_chk` | F08 権限 | 未決（F08） |
 | `instructor_assignments` | `instructor_set_*` | F08 講師の担当範囲 | 新で実装する（A18） |
 | `tenant_groups` / `tenant_group_members` | `group` / `user_group` | F09 グループ | 未決（F09） |
-| `users.member_no` | `user_personal_no.personal_no` | F11 会員番号 | 新で表示・検索する |
+| `user_personal_numbers` | `user_personal_no` | F11 会員番号・スカウトでの名前の出し方 | 新で読み書きする（2026-10-22） |
 | `notification_optouts.channel` | `sendmail_pc_chk` / `sendmail_mobile_chk` | F13 通知 | 新で読み書きする |
 | `users.mobile_email` | `user.mobile_mail_add` | F02 再設定、F13 通知 | 未決（F13） |
 | `users.user_id`、`tenants.tenant_id` | `user.user_id`、`tenant.tenant_id` | F14 バッジ | 未決（F14） |

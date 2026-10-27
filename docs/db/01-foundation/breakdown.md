@@ -85,7 +85,7 @@
 | `profile_item` | `tenant_profile_items` | B06 会員プロフィール | データ | 3,123 | C | **項目の定義**（`tenant_id` + 表示/編集/必須/公開の各フラグ）。会員データではないためマスターに置く | 項目定義を移す（A9）。`profile_cate_id=0` は分類なしで NULL。固定の印（`*_static_chk`）は**現状は移していない**（受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた） |
 | `profile_item_label` | `tenant_profile_item_labels` | B06 会員プロフィール | データ | 3,187 | C | 項目のラベル | `locale` 付きで移す（A9）。**親の項目が無いラベルは落とす**（実測1件） |
 | `user_item_default` | `tenant_field_defaults` | B06 会員プロフィール | データ | 10 | C | `item_name` + `tenant_id` + `value`。**テナント単位の既定値**。名前に反して会員データではない | `tenant_field_defaults` を新設して**旧の構造のまま移す**（A23）。`tenant_profile_items.default_value` とは別物 |
-| — | `user_statuses` | B06 会員プロフィール | マスタ | — | — | `users.status` の値。`active`/`inactive`/`pending`/`deleted` | `del_chk` / `valid_chk` からの変換先（期間は `status` に使わない） |
+| — | `user_statuses` | B06 会員プロフィール | マスタ | — | — | `users.status` の値。`active`/`inactive`/`pending`/`deleted` | `del_chk` / `valid_chk` と、旧でログインできたか（ロックアウト・利用期間）からの変換先（2026-10-26 決定。移行した日で判定） |
 
 > **M4 の旧4件は受け皿を追加して移す**（A9）。`profile_cate` → `tenant_profile_item_categories`、`profile_item` → `tenant_profile_items`、`profile_item_label` → `tenant_profile_item_labels`、`user.user_profile1..20` の**値** → `user_profile_values`。**項目定義と値の両方を移す。**
 
@@ -95,7 +95,7 @@
 |---|---|---|---|---:|:--:|---|---|
 | `group` | `tenant_groups` | B07 グループ | データ | 1,009 | C | グループの定義 | `parent_id` + `depth` で階層ごと移す（A10）。`system_sort_no` は**現状は移していない**（受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた） |
 | `group_structure` | — | B07 グループ | 中間 | 1,313 | C | `group_id` + `slave_group_id` の2列。**グループの階層定義**で会員には紐づかないためマスターに置く | **派生データなので移行しない。** `group.parent_group_id` が正本（対象外 B） |
-| `attribute` | `user_tags` | B08 属性 | データ | 427 | C | 属性の定義 | **旧の「属性」を新の「タグ」として移す**（A11。`config.attributes`）。削除済みの属性も `user_tags.deleted_at` 付きで移す |
+| `attribute` | `user_tags` | B08 属性 | データ | 427 | C | 属性の定義 | **旧の「属性」を新の「タグ」として移す**（A11。`config.attributes`）。**削除済みの属性は移さず、理由「移行対象外」で一覧に出す**（新はタグの `deleted_at` を見ない。2026-10-26 決定。以前は `deleted_at` 付きで移していた） |
 | `attribute_lesson` | — | B08 属性 | データ | 332 | C | `lesson_id` + `attribute_id`。属性に必須講座を紐づける**定義** | **移さない。** 旧でも講座を結んでいない（作成時に `attribute_id` だけの行を作る）。ステージング実測5行 |
 
 > **M5 は調査時点で新側が0件だった**ため、`tenant_groups` と `user_tags` で受けるようにした。グループ・属性は lw2 の配信対象の絞り込み（お知らせ・フォローメール・掲示板・自動割当）の土台なので、**ここが落ちると他区分の機能も連鎖して落ちる**（U05 / U11 / J05 など）。
@@ -117,7 +117,7 @@
 
 | 旧テーブル | 新テーブル | データ種 | lw2区分 | ローカルデータ数 | A·B·C | 説明 | 移行の注意 |
 |---|---|---|---|---:|:--:|---|---|
-| `user_personal_no` | `users.member_no` | B11 マイナンバー | データ | 53,568 | C | **会員に振る一意の ID**（運用担当に確認済み）。`personal_no` は `int(11)` で12桁のマイナンバーは格納できず、PDF のデータ種名が実体と合っていない | `personal_no` を列として移す（A12）。`scout_display_type` は**現状は移していない**（受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた）。**`regist_no` は現状は移していない**（実装が無い。2026-10-02 の確認。ステージングは 3,155名全員に値がある） |
+| `user_personal_no` | `user_personal_numbers` | B11 マイナンバー | データ | 53,568 | C | **会員に振る一意の ID**（運用担当に確認済み）。`personal_no` は `int(11)` で12桁のマイナンバーは格納できず、PDF のデータ種名が実体と合っていない | `regist_no` / `personal_no` / `scout_display_type` の3列を `user_personal_numbers` に移す（school-launcher `20261016030602`。2026-10-22 から）。`scout_display_type` は 0/1/2 を `name` / `nickname` / `personal_no` に置き換える。それまで入れていた `users.member_no` には書かない（新アプリが読まない） |
 
 ## U3 認証情報・セキュリティ
 
@@ -142,7 +142,7 @@
 | 旧テーブル | 新テーブル | データ種 | lw2区分 | ローカルデータ数 | A·B·C | 説明 | 移行の注意 |
 |---|---|---|---|---:|:--:|---|---|
 | `user_group` | `tenant_group_members` | B07 グループ | 中間 | 10,492 | C | 会員のグループ割当 | 会員のグループ割当を移す（A10） |
-| `user_attribute` | `user_tag_assignments` | B08 属性 | 中間 | 48,600 | C | 会員の属性割当 | 会員の属性割当を**タグの割当として**移す（A11）。削除済みの属性への割当も移す。**会員が存在しない行は移せない**（実測36件） |
+| `user_attribute` | `user_tag_assignments` | B08 属性 | 中間 | 48,600 | C | 会員の属性割当 | 会員の属性割当を**タグの割当として**移す（A11）。**削除済みの属性への割当は移さず、一覧に出す**（2026-10-26 決定）。**会員が存在しない行は移せない**（実測36件） |
 
 ## U6 権限・担当範囲の割当
 
@@ -179,7 +179,8 @@ foundation.1 マスター
   M3 認証設定       tenant_sso_configs / tenant_login_windows
   ↓
 foundation.2 ユーザ
-  U1 / U2           users（member_no・is_career_counselor・language_code を合流）→ external_user_links
+  U1                users（is_career_counselor・language_code を合流）→ external_user_links
+  U2                user_personal_numbers
   U1 会員に紐づく   user_addresses / user_profile_values / user_field_visibility / notification_optouts
   U5 / U6 割当      tenant_group_members / user_tag_assignments / instructor_assignments
 ```
@@ -191,7 +192,7 @@ foundation.2 ユーザ
 ## 新側に受け皿が無い中分類
 
 調査時点では M5 / U2 / U3 / U5 / U6 の14件に受け皿が無かったが、**いまは追加した受け皿で受けている。**
-受け皿が無いまま、または移していないのは次のもの（2026-10-02 の確認）。
+受け皿が無いまま、または移していないのは次のもの（2026-10-02 の確認。`user_personal_no` の2列は 2026-10-22 から移す）。
 
 | 旧 | 扱い |
 |---|---|
@@ -200,8 +201,8 @@ foundation.2 ユーザ
 | `password_reminder` / `twostepverification_log` / `user_login_log` / `user_login_log_monthly` / `user_login_chk_log` / `edit_form_data` | 一時データ・ログのため移行しない |
 | `twostepverification` | 受け皿（`user_two_factor_secrets`）だけ作り、移す行は無い |
 | `system_admin_role` | **現状は移していない**（実装が無い） |
-| `user_personal_no.regist_no`、`user_attached_info.personal_record_chk` / `line_entry_chk` | **現状は移していない**（実装が無い） |
-| `profile_item.*_static_chk`、`group.system_sort_no`、`user.new_skill_user_chk` / `live_lesson_preview_icon`、`user_personal_no.scout_display_type` | **現状は移していない**（受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた） |
+| `user_attached_info.personal_record_chk` / `line_entry_chk` | **現状は移していない**（実装が無い） |
+| `profile_item.*_static_chk`、`group.system_sort_no`、`user.new_skill_user_chk` / `live_lesson_preview_icon` | **現状は移していない**（受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた） |
 
 ---
 

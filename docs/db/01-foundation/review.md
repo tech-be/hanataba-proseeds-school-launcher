@@ -179,7 +179,7 @@
 
 `tenant_secrets` (7列)
 
-**旧に対応テーブルなし。** テナントごとの機密値（DB DSN・Webhook シークレット等）。**移行ツールが入れるのは3か所の値**（`config.secrets`）: `site.linkpreview_api_key`、`sns_setting` の6列（A7）、`application_config` の `line_channel_sercret` / `send_line_chanel_token`（→ `line_channel_secret` / `line_channel_access_token`）。値はログに出さない（長さだけ記録する）。lw2 の `site` が持つ DB 接続情報は**移行元としては使わない**（上記 `site` の項を参照）。
+**旧に対応テーブルなし。** テナントごとの機密値（DB DSN・Webhook シークレット等）。**移行ツールが入れるのは3か所の値**（`config.secrets`）: `site.linkpreview_api_key`、`sns_setting` の6列（A7）、`application_config` の `line_channel_sercret` / `send_line_chanel_token`（→ `line_login_channel_secret` / `line_channel_access_token`。**`line_channel_sercret` は LINE ログインのチャネルのもの**なので、公式アカウントの `line_channel_secret` には入れない。2026-10-22 に直した）。値はログに出さない（長さだけ記録する）。lw2 の `site` が持つ DB 接続情報は**移行元としては使わない**（上記 `site` の項を参照）。
 
 ### なし → `tenant_secret_kinds`
 
@@ -389,7 +389,7 @@
 
 | 旧カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|:--:|---|---|
-| `user.del_chk` / `valid_chk` / `entry_date` | 性質 | 中 | 新側は状態ごとに**ログイン可否フラグ**（`can_login` / `is_active_like`）を持つ4値のマスタ。**旧の3列を `status` 1列に畳むと、`valid_chk=0` と `del_chk=1` の組み合わせや有効期間そのものが復元できなくなる** | `status` は**判定結果**として `del_chk=1`→`deleted` / `valid_chk=0`→`inactive` / それ以外→`active` を入れる（`users._status_of`）。**`limit_date` は `status` の判定に使わない**（`login_end_date` に入れるだけ）。以前の記述（ETL設計 §5-1）は「`limit_date` 超過→`inactive`」だったが、実装はそうなっておらず、**ステージングでは期限切れの有効会員 39名が `active` で入る**（2026-10-02 の確認）。**元の3列は畳まず `users.is_valid` / `login_start_date` / `login_end_date` に残す**（→ [追加一覧](#新環境に追加するテーブルカラム) A20） |
+| `user.del_chk` / `valid_chk` / `entry_date` | 性質 | 中 | 新側は状態ごとに**ログイン可否フラグ**（`can_login` / `is_active_like`）を持つ4値のマスタ。**旧の3列を `status` 1列に畳むと、`valid_chk=0` と `del_chk=1` の組み合わせや有効期間そのものが復元できなくなる** | `status` は**判定結果**として `del_chk=1`→`deleted` / `valid_chk=0`→`inactive` / それ以外→`active` を入れる（`users._status_of`）。**2026-10-26 に見直し:** 新は `status` だけでログインを決めるので、**旧でログインできなかった会員（ロックアウト中・利用開始日が空か未来・利用終了日を過ぎた。旧 `AuthModel.class.php:149-154`）も `inactive` にする**（移行した日で判定。ステージングでは利用終了日を過ぎた 39名・開始日が空の 1名）。以前は `limit_date` を判定に使わず、期限切れの会員が `active` で入っていた。**元の3列は畳まず `users.is_valid` / `login_start_date` / `login_end_date` に残す**（→ [追加一覧](#新環境に追加するテーブルカラム) A20） |
 
 ---
 
@@ -479,7 +479,7 @@
 | `role_id` | `users.role` | [ロール対応表](#ロール対応表)で8値を1対1 |
 | `name_sei` / `name_mei` | **`users.name_last` / `name_first`（追加）** | `name` は連結した表示用として生成 |
 | `kana_sei` / `kana_mei` | **`users.name_kana_last` / `name_kana_first`（追加）** | A12 |
-| `mail_add` | `users.email` | 欠損・重複の対処が要る（下表の「高」。ステージング実測 欠損 2,698名 / 重複 389名） |
+| `mail_add` | `users.email` | 欠損は NULL、重複は組の 1 人に残してほかを NULL（2026-10-26 決定。下表）。削除済みの会員は NULL |
 | `mobile_mail_add` | **`users.mobile_email`（追加）** | 携帯メール。`email` に畳まない |
 | `tel` / `mobile_tel` | `users.phone` / **`mobile_phone`（追加）** | 固定と携帯を分けたまま |
 | `zip_code` / `pref_id` / `city_name` / `address` ＋ 同 `*2` | **`user_addresses`（新設）** | 4項目 × 2組。A12 |
@@ -491,7 +491,7 @@
 | `user_img_file_name` / `user_img_file_name1` | `users.avatar_url`（**データは移行しない**） | 画像は移行対象外。列は使うが空で始める |
 | `user_profile1`〜`20` | **`user_profile_values`（新設）** | A9。`profile_item.field_name` と突き合わせる |
 | `profile_open_chk` / `name_open_chk` / `address_open_chk` / `birthday_open_chk` / `diary_open_chk` / `lesson_open_chk` | **`user_field_visibility`（新設）** | A13 |
-| `sendmail_pc_chk` / `sendmail_mobile_chk` / `sendmail_scout_chk` / `notify_footprint_pc_chk` / `notify_footprint_mobile_chk` | `notification_optouts`（**`channel` と不足種別を追加**） | **全件移す。極性を反転**。A21 |
+| `sendmail_pc_chk` / `sendmail_mobile_chk` / `sendmail_scout_chk` / `notify_footprint_pc_chk` / `notify_footprint_mobile_chk` | `notification_optouts`（**`channel` と不足種別を追加**） | **極性を反転して移す。携帯（`*_mobile_chk`）は移さず、理由「移行対象外」で一覧に出す**（新は `channel` を見ず、携帯だけ止めた会員の PC まで止まる。2026-10-26 決定）。A21 |
 | `sendmail_bbs_comment_pc_chk` / `sendmail_bbs_comment_mobile_chk` | — | **現状は移していない**（実装が無い。2026-10-02 の確認）。`email_kinds` に `bbs_comment` は足したが、`OPTOUT_SOURCES` にこの2列が無い。ステージングは 3,155名中 PC 3,154名・携帯 3,155名が `0`（受け取らない） |
 | `entry_date` / `limit_date` | **`users.login_start_date` / `login_end_date`（追加）** | `status` に畳まない |
 | `user_memo` | **`users.admin_memo`（追加）** | 運営メモ |
@@ -513,7 +513,7 @@
 
 | 旧カラム | 新カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|---|:--:|---|---|
-| `mail_add` varchar(200) **NULL可・UNIQUE無し** | `email` varchar(255) **NOT NULL** + `UNIQUE (tenant_id, email)` | **型** | **高** | **欠損と重複がそのままでは入らない。** ステージング（2026-09-18 取得）の実測で**欠損 2,698名・重複 389名＝会員の 98%**。旧は NULL 可・UNIQUE 無しのため、同じアドレスを数十名が共有している（最大 57名） | **移行ツールは旧の値をそのまま入れ、当たった会員は移さない**（[移行仕様 3.3](migration-spec.md#33-投入load)）。**合成アドレスをツールが作ることはしない** — 作ると何が本物か分からなくなる。アドレスの割り当ては**暫定対応**（`fixups`）で `overrides.csv` に書き、移行ツールはそれを読むだけ。ステージングでは `ext-<user_id>@lw2.invalid`（新環境のブリッジの `syntheticEmail` と同じ形式）を当て、重複した組の**いちばん古い会員は現在の値のまま**にした |
+| `mail_add` varchar(200) **NULL可・UNIQUE無し** | `email` varchar(255) **NULL 可（`20260928061152` で任意になった）** + `UNIQUE (tenant_id, email)` | **型** | **高** | **欠損と重複がそのままでは入らない。** ステージング（2026-09-18 取得）の実測で**欠損 2,698名・重複 389名＝会員の 98%**。旧は NULL 可・UNIQUE 無しのため、同じアドレスを数十名が共有している（最大 57名） | **移行ツールは旧の値をそのまま入れ、当たった会員は移さない**（[移行仕様 3.3](migration-spec.md#33-投入load)）。**合成アドレスをツールが作ることはしない** — 作ると何が本物か分からなくなる。アドレスの割り当ては**暫定対応**（`fixups`）で `overrides.csv` に書き、移行ツールはそれを読むだけ。ステージングでは `ext-<user_id>@lw2.invalid`（新環境のブリッジの `syntheticEmail` と同じ形式）を当て、重複した組の**いちばん古い会員は現在の値のまま**にした。**2026-10-26 に見直し:** 新でメールが任意になったので合成アドレスはやめる。欠損は NULL、重複は組の中で最も新しくログインした会員に残し、ほかは NULL（どれに残すかは運営に確認中。[D11](../open-questions.md)）。メールの無い会員はログイン ID でログインする |
 | `name_sei` + `name_mei` | `name` varchar(255) | 性質 | 中 | 新は `name` 1列。**lw2 は入力と CSV が姓/名の2欄**（会員登録フォーム・プロフィール編集・管理画面 `user/edit.phtml`・CSV インポート）で、**表示は常に `CONCAT(name_sei,' ',name_mei)`**。連結して1列に入れると**姓/名の2欄に戻せない**。両方 NULL の行があると連結結果が空になる | **`users` に `name_last` / `name_first` を追加し、分割のまま移す**（→ [追加一覧](#新環境に追加するテーブルカラム) A12）。`name` は表示用に連結した値を入れるが、**分割列を正とし `name` は保存時に生成する**（二重管理を避ける）。**両方 NULL でも停止しない** — `name` を NULL にして入れる（ステージングは0件） |
 | `kana_sei` / `kana_mei` | — | **カラム** | **高** | **フリガナを入れる列が無い。** lw2 はフリガナを**入力・表示・会員検索**に使っている（`name_sei LIKE … OR kana_sei LIKE …`）。なお**五十音順ソートは lw2 に実装されていない**（`ORDER BY kana*` が1件も無い）ので、並べ替えは移行で失われる機能ではない | `users` に `name_kana_last` / `name_kana_first` を追加して移す（→ [追加一覧](#新環境に追加するテーブルカラム) A12） |
 | `zip_code` / `pref_id` / `city_name` / `address` ＋ 同 `*2` | — | **カラム** | **高** | **住所2組・計8列を入れる列が無い。** lw2 のフォームは1組につき**郵便番号 / 都道府県（コードの select）/ 市区町村 / 以下住所**の4項目（`user/edit.phtml`、CSV も同じ4列×2組）。`pref_id` は tinyint の**都道府県コード**、`address` は text で**番地・建物名を1欄にまとめている**。2組の用途（自宅 / 勤務先など）は定義されておらず「住所1 / 住所2」としか書かれていない | `user_addresses` を新設し、**`postal_code` / `prefecture` / `city` / `street`（番地・建物名）**の4列＋種別で2組を移す（→ [追加一覧](#新環境に追加するテーブルカラム) A12）。**`pref_id` はコードなので都道府県名に展開して入れる**（新環境は就職支援の `desired_prefecture varchar(10)` のように文字列で持っている）。展開表は**旧 DB の `pref_master` から引く**（48行。`pref_name` はコード `PREF_CODE_01` で、**名称は `description`**。`99=海外`）。**`pref_id=0` は「未選択」なので NULL**（`pref_master` は 1 始まりで 0 の行は無い。ステージング実測で住所1に465件・住所2に569件）。海外住所（`foreign_*`）は都道府県が無いので `country` + `city` + `street` で受ける |
@@ -526,7 +526,7 @@
 | `user_img_file_name` / `user_img_file_name1` | `avatar_url` varchar(512) | 型 | 低 | lw2 は画像列が2本ある（`user_img_file_name` / `user_img_file_name1`）。**プロフィール画像は移行対象外**と決めたので、列は要るがデータは入れない | **例外: プロフィール画像のデータは移行しない**（運営の判断）。列は既存の `avatar_url` をそのまま使い、**L9 のファイル移送からも外す**。2枚目の受け皿は作らない。cutover 後は空で始まり、会員が登録し直す |
 | `*_open_chk` 6列 / 通知受取の7列（`sendmail_*_chk` 5列・`notify_footprint_*_chk` 2列） / `is_lockout` 系 3列 / `recent_login_date` 系 3列 | — | カラム | 中 | **公開制限・通知受取・ロックアウト状態・最終ログインを入れる列が無い**（計19列）。通知受取は新 `notification_optouts` で**極性が反転**する。さらに **`notification_optouts` は `kind` 1列で PC / 携帯の区別が無く、`email_kinds` の13種別にもお知らせ・スカウト・足あと・掲示板コメントが無い** | **全列を移す。** 公開制限は `user_field_visibility` を新設し、`user` の `*_open_chk` 6列を**短いコード（`profile` / `name` / `address` / `birthday` / `diary` / `lesson`）の `field_code`** にして移す（→ [追加一覧](#新環境に追加するテーブルカラム) A13）。ロックアウト3列・最終ログイン3列は `users` に同じ粒度で追加（A14）。通知受取は `email_kinds` に不足種別を追加し、`notification_optouts` に `channel` を足したうえで極性を反転して移す（A21）。**移しているのは7列のうち5列**（`sendmail_pc_chk` / `sendmail_mobile_chk` / `sendmail_scout_chk` / `notify_footprint_pc_chk` / `notify_footprint_mobile_chk`）で、`sendmail_bbs_comment_pc_chk` / `_mobile_chk` の2列は[現状は移していない](#現状は移していないもの実装が無い) |
 | `line_id` varchar(100) | `line_links` | テーブル | 中 | **LINE 公式アカウントは継続すると決まった**ので移行対象。`line_links.line_user_id` は Messaging API の userId（`U` で始まる33文字）で、**lw2 の `line_id` が別プロバイダー発行だと値が一致せず push が届かない**。友だち状態に相当する列も lw2 に無い | ETL で `line_links` を作る（`user_id` + `line_user_id` + `is_friend` + `linked_at`）。**移行前に `line_id` が `U` 始まり33文字かを検査**し、形式が違うものは移さず一覧を運営に渡す。`is_friend` は `TRUE` で入れ、**初回 push の 403 で落とす**運用にする |
-| `employment_status` / `job_category` / `desired_job_*` / `job_career_*` / `education` / `qualification` | career:`learner_career_profiles` | テーブル | 中 | **別DB（career）へ行く。** 就職支援（未コミット） S05 を参照 | career-backend の移行時期（Wave 4 / Step 2）が決まってから着手する |
+| `employment_status` / `job_category` / `desired_job_*` / `job_career_*` / `education` / `qualification` | career:`learner_career_profiles` | テーブル | 中 | **別DB（career）へ行く。** 就職支援（未コミット） S05 を参照 | career-backend の移行時期（Wave 4 / Step 2）が決まってから着手する。**2026-10-22 に career 側に `education` / `employment_status` / `job_category` / `qualification` の列と、希望勤務地（複数）の表ができた**（career `20261016084938` / `20261016084939`）。移行ツールは career に書かない取り決めのまま（[05 の review](../05-support/review.md#job_career-ほか--careerlearner_career_profiles--careerlearner_career_skills)） |
 | `company_id` | career:`companies` | テーブル | 低 | 就職支援（未コミット） S02 を参照 | 同上。career-backend 側で `companies` を作ってから紐付ける |
 
 **まとめ**: 受け皿が無い列 約60（**すべて列追加かサイドテーブルで受ける**。[全列の行き先](#全列の行き先)）/ 変換規則が要る列 9 / **高 4 件**
@@ -574,20 +574,20 @@
 
 内訳: [breakdown.md](breakdown.md) の同名の節
 
-### `user_personal_no` → なし
+### `user_personal_no` → `user_personal_numbers`
 
 `user_personal_no` (6列) ／ ローカルデータ数 53,568 / C
 
-**該当テーブルなし。**
+**school-launcher `20261016030602` で受け皿ができた**（2026-10-22。それまでは `personal_no` だけを `users.member_no` に入れていた）。新アプリは `user_personal_numbers` だけを読み、`users.member_no` は使っていない。
 
 > **`personal_no` はマイナンバーではなく、会員に振る一意の ID**（運用担当に確認済み）。PDF のデータ種名「マイナンバー」が実体と合っていない。スキーマ側もそれを裏付けていて、`int(11)` は signed int の最大が 2,147,483,647（10桁）なので**12桁のマイナンバーはそもそも格納できない**。列コメントも「登録番号」「個別番号」（[data-type-findings.md](../data-type-findings.md) §3）。
 
 | 旧カラム | 観点 | 深刻度 | 内容 | 修正方法 |
 |---|---|:--:|---|---|
-| `personal_no` int(11) / `regist_no` int(11) | **テーブル** | **中** | **会員の一意 ID が落ちる。** 新環境で会員を外部から指すキーは `external_user_links.external_id`（= lw2 の `user_id`）であって `personal_no` ではない。**会員向けの画面・帳票・外部連携でこの番号を見せていたなら、移行後に同じ番号を提示できなくなる。** 用途を運用に確認し、必要なら `external_user_links` を種別違い（`external_system='lw2_personal_no'` など）でもう1行持つか、CSV で運営に渡す | `personal_no` は `users.member_no` を追加して移す（→ [追加一覧](#新環境に追加するテーブルカラム) A12）。**`regist_no` は現状は移していない**（実装が無い。2026-10-02 の確認。ステージングは 3,155名全員に値がある）。外部連携のキーは従来どおり `external_user_links.external_id`（= lw2 の `user_id`）を使う |
-| `scout_display_type` | 性質 | 中 | スカウト画面での名前表示設定。**就職支援（S03）側の設定がこのテーブルに入っている**ので、`personal_no` がスカウト時に実名の代わりに出す匿名 ID だった可能性がある | **現状は移していない**（受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた）。ステージングは `0` 3,154名 / `2` 1名。就職支援（S03 スカウト）側でどう使うかは、**用途確認を `personal_no` と併せて行う**（就職支援（未コミット） を参照） |
+| `personal_no` int(11) / `regist_no` int(11) | **テーブル** | **中** | **会員の一意 ID が落ちる。** 新環境で会員を外部から指すキーは `external_user_links.external_id`（= lw2 の `user_id`）であって `personal_no` ではない。**会員向けの画面・帳票・外部連携でこの番号を見せていたなら、移行後に同じ番号を提示できなくなる。** 用途を運用に確認し、必要なら `external_user_links` を種別違い（`external_system='lw2_personal_no'` など）でもう1行持つか、CSV で運営に渡す | `regist_no` / `personal_no` を `user_personal_numbers` にそのまま移す（`personal_no` は新では文字列）。新システムは新しい会員に「テナント内の `regist_no` の最大 + 1」を振るので、`regist_no` も旧の値が要る。`users.member_no` には書かない。外部連携のキーは従来どおり `external_user_links.external_id`（= lw2 の `user_id`）を使う |
+| `scout_display_type` | 性質 | 中 | スカウト画面での名前表示設定。**就職支援（S03）側の設定がこのテーブルに入っている**ので、`personal_no` がスカウト時に実名の代わりに出す匿名 ID だった可能性がある | `user_personal_numbers.scout_display_type` に移す。旧は数値の直書きで 0 名前 / 1 ニックネーム / 2 個別番号（旧 `UserModel.class.php` の会員検索）なので、`name` / `nickname` / `personal_no` に置き換える。ステージングは `0` 3,154名 / `2` 1名 |
 
-**まとめ**: 受け皿が無い列 6 / 高 0 件。**機微情報ではないので廃棄方針の議論は不要**
+**まとめ**: 受け皿が無い列 0（2026-10-22 から）/ 高 0 件。**機微情報ではないので廃棄方針の議論は不要**
 
 ---
 
@@ -847,7 +847,7 @@
 
 | # | 追加するもの | 旧環境の対応 | 変更が必要な機能 |
 |---|---|---|---|
-| **A12** | `users.name_last` / `name_first` / `name_kana_last` / `name_kana_first` / `member_no`<br>`user_addresses`（`kind`（`primary`/`secondary`）+ `postal_code` + `prefecture` + `city` + `street`（番地・建物名）+ `country` / `nationality`、1会員2組） | `user.name_sei` / `name_mei` / `kana_sei` / `kana_mei`、`user_personal_no.personal_no`（`regist_no` は現状は移していない）、住所2組（`zip_code` / `pref_id` / `city_name` / `address` ＋ 同 `*2`）、国籍・海外住所 | ・**会員登録フォームとプロフィール編集を姓/名の2欄にする**（現状は `name` 1欄）<br>・**住所入力を4項目に分ける**（郵便番号 / 都道府県は選択式 / 市区町村 / 番地・建物名）。郵便番号からの住所補完を入れるかを決める<br>・`users.name` を分割列から生成する扱いに変え、二重管理にしない<br>・**ブリッジの DTO（`internal/dto/requests_external_user.go` の `Name`）も姓/名に分ける** — 現状は結合済みの1文字列を受けており、**ブリッジ経由で作られた行は後から分割できない**<br>・会員番号の表示・検索（会員に見せていた番号かを確認する）<br>・領収書の宛先と郵送物の送付先<br>・会員 CSV の列（lw2 は姓/名・住所4項目×2組がそれぞれ独立した列）
+| **A12** | `users.name_last` / `name_first` / `name_kana_last` / `name_kana_first` / `member_no`（**2026-10-22 から書かない。** 個別番号は school-launcher が足した `user_personal_numbers` に移す）<br>`user_addresses`（`kind`（`primary`/`secondary`）+ `postal_code` + `prefecture` + `city` + `street`（番地・建物名）+ `country` / `nationality`、1会員2組） | `user.name_sei` / `name_mei` / `kana_sei` / `kana_mei`、住所2組（`zip_code` / `pref_id` / `city_name` / `address` ＋ 同 `*2`）、国籍・海外住所 | ・**会員登録フォームとプロフィール編集を姓/名の2欄にする**（現状は `name` 1欄）<br>・**住所入力を4項目に分ける**（郵便番号 / 都道府県は選択式 / 市区町村 / 番地・建物名）。郵便番号からの住所補完を入れるかを決める<br>・`users.name` を分割列から生成する扱いに変え、二重管理にしない<br>・**ブリッジの DTO（`internal/dto/requests_external_user.go` の `Name`）も姓/名に分ける** — 現状は結合済みの1文字列を受けており、**ブリッジ経由で作られた行は後から分割できない**<br>・会員番号の表示・検索（会員に見せていた番号かを確認する）<br>・領収書の宛先と郵送物の送付先<br>・会員 CSV の列（lw2 は姓/名・住所4項目×2組がそれぞれ独立した列）
 | **A13** | `user_field_visibility`（`user_id` + `field_code` + `visible`） | `user.*_open_chk` 6列（`field_code` は `profile` / `name` / `address` / `birthday` / `diary` / `lesson`）。`user_attached_info.personal_record_chk`（`personal_record`）は**現状は移していない**（実装が無い。2026-10-02 の確認） | ・プロフィールの他ユーザーへの公開制御<br>・掲示板 / コミュニティでの表示名・属性の出し分け<br>・会員の設定画面（8項目のまま出す）
 | **A14** | `users.is_lockout` / `failed_login_started_at` / `failed_login_count` / `last_login_at` / `last_access_at` / `total_login_count` | `user.is_lockout` / `start_date_failing_login` / `number_of_failing_login` / `recent_login_date` / `recent_access_time` / `total_login_count` | ・ログイン失敗時のロックアウト判定としきい値（lw2 は開始日時と連続失敗回数の2本立て）<br>・管理画面からのロック解除<br>・最終ログイン / 最終アクセスの表示と休眠会員の抽出<br>・`total_login_count` の加算箇所（ログイン成功時）
 | **A22** | `users.language_code` | `user_nationality_info.language_code`（ステージング実測 `ja` 133名 / `th` 1名） | ・**言語の判定を「cookie → 会員の既定 → テナントの既定（A2）→ `defaultLocale`」に直す**（`btoc-frontend/src/i18n/request.ts`）<br>・会員値をフロントに渡す経路（バックエンドの構造体 / repo / DTO / フロント型の4か所）<br>・プロフィール編集での言語選択 |
@@ -910,7 +910,6 @@
 | `user_attached_info.personal_record_chk` | A13 の `user_field_visibility`（`personal_record`）で受ける想定だったが、Step は `user` の6列しか読まない | 87名に値あり |
 | `user_attached_info.line_entry_chk` | `line_links` の Step が参照しない | — |
 | `user.sendmail_bbs_comment_pc_chk` / `_mobile_chk` | `notification_optouts` の Step が読む5列に入っていない | 全員に値あり（ほぼ全員が `0`） |
-| `user_personal_no.regist_no` | `personal_no` だけを `users.member_no` に入れている | 3,155名全員に値あり |
 | `system_admin_role` | 読む実装が無い | 0行 |
 | `attribute.kiracari_user_chk` | `user_tags` に受け皿が無い | 7件中1件が `1` |
 | `instructor_assignments.target_id`（`scope='course'`） | NULL のまま。講座の移行後に埋める Step が無い（`legacy_target_id` に旧 `lesson_id` は残る） | — |
@@ -918,7 +917,6 @@
 | `group.system_sort_no` | 受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた | 28行すべてに値 |
 | `user.new_skill_user_chk` | 受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた | 全員 NULL |
 | `user.live_lesson_preview_icon` | 受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた | 3名に値 |
-| `user_personal_no.scout_display_type` | 受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた | `2` が1名（残りは `0`） |
 
 ---
 
@@ -957,7 +955,7 @@
 
 | 旧 | `tenants.settings` のキー | 備考 |
 |---|---|---|
-| `application_config` | `lw2_config` | 秘密の値は入れない。LINE のチャネルシークレット・アクセストークンは `tenant_secrets`（`line_channel_secret` / `line_channel_access_token`）。`special_pass_word` / `kanri_db_name` は移行できないもの（上の「移行の対象外 A」） |
+| `application_config` | `lw2_config` | 秘密の値は入れない。LINE のシークレットは `tenant_secrets`（ログインのチャネルシークレット → `line_login_channel_secret`、公式アカウントのアクセストークン → `line_channel_access_token`）。`line_chk` / `line_id` / `line_channel_id` は、新アプリが読む `line` キー（`enabled` / `official_account_id` / `login_channel_id`）にも入れる（2026-10-22）。`special_pass_word` / `kanri_db_name` は移行できないもの（上の「移行の対象外 A」） |
 | `account_setting` | `lw2_account` | パスワードの規則・ロックアウト（新は読まない。features F01 / F02） |
 | `login_setting` | `lw2_login` | ログイン画面の文言・ログイン後のお知らせ |
 | `registration_setting` | `lw2_registration` | 会員登録画面の文言・画像 |

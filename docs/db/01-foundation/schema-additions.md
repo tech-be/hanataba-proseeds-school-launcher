@@ -4,9 +4,9 @@
 
 - **当てる先**: `school-launcher/btoc-backend/db/migrations/`（goose 形式。雛形は `make migrate-create`）
 - **当てた日**: M1〜M10 は 2026-09-22。M11〜M13 はその後に足した。どれも school-launcher の実ファイルと一致する
-- **実物**（2026-10-02 時点）:
-  - `20260930044959` までは `hanataba_dev` にマージ済み（PR #125 / #127 / #134 / #135 / #137 / #139）
-  - `20260930052453` と `20261001085757` は `feat/lw2-support-schema` にコミット・push 済み（`hanataba_dev` には未マージ）
+- **実物**（2026-10-22 時点。school-launcher `hanataba_dev` の `26fc5be9`）:
+  - 下の表はどれも `hanataba_dev` にマージ済み
+  - 移行ツールが書き込む先のうち、school-launcher 側の都合で入ったもの（下の表の後ろ3本）も載せる
 
   | migration | 中身 |
   |---|---|
@@ -18,6 +18,9 @@
   | `20260927105511_user_tags_and_auto_assign_rules.sql` | M13 のタグの表（新システムの機能。移行で書き込む先） |
   | `20260930044959_rename_lw2_legacy_id_on_chapters_and_tags.sql` | M13 `user_tags.attribute_id` |
   | `20261001085757_lw2_keep_deleted_rows.sql`（2026-10-01） | M13 `user_tags.deleted_at` |
+  | `20261015021737_line_login_channel_secret_kind.sql`（school-launcher 側） | `tenant_secret_kinds` に `line_login_channel_secret`。旧 `line_channel_sercret` の移し先 |
+  | `20261016030602_create_user_personal_numbers.sql`（school-launcher 側） | `user_personal_numbers` と `scout_display_types`。旧 `user_personal_no` の移し先（M4 の `users.member_no` に代わる） |
+  | `20261016064734_widen_profile_item_no_to_smallint.sql`（school-launcher 側） | M3 `tenant_profile_items.item_no` を SMALLINT に広げる |
 - **確認**: `python -m migrator doctor` / `python -m migrator run --phase common.0`
 
 > **ここに載っているのは案ではなく、当たったもの。** 最初の版は「DDL は案」と断っていたが、
@@ -238,6 +241,8 @@ CREATE TABLE tenant_profile_item_labels (
   COMMENT = '[プロフィール項目の表示名] 旧 profile_item_label。言語ごとのラベルと説明。';
 ```
 
+> **`item_no` は今は SMALLINT。** school-launcher の `20261016064734`（2026-10-16）が広げた。広げただけなので、移す値は変わらない。
+
 > **`profile_item` は値ではなく画面制御の定義**で、`field_code` が値の在処（`user` の列名）を指す。
 > 値は `item_type=0` なら `users` の対応列、`item_type=1` なら `user_profile_values`（M5）。
 >
@@ -311,6 +316,10 @@ ALTER TABLE users
 >
 > `login_id` と `member_no` はどちらも NULL 可。MySQL の UNIQUE は NULL を重複扱いしないので、
 > これらを持たない会員が並存できる。
+>
+> **`member_no` は 2026-10-22 から使わない。** school-launcher が旧 `user_personal_no` の受け皿
+> `user_personal_numbers`（`20261016030602`）を作り、新アプリはそちらだけを読む。移行ツールも
+> そちらに移す。列は残っている（消す migration は、確認を取ってから作る）。
 
 ---
 

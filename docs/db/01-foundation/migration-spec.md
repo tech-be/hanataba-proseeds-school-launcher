@@ -10,6 +10,41 @@
 
 ---
 
+## 0. 見直し（2026-10-26 決定）
+
+移行の見直しの手順 3（[進捗](../rework-progress.md)）で決めたこと。[テスト仕様書](test-spec.md)のケースが通るための移し方と、暫定対応の本番の対応。
+件数はステージング `tenant_id = 10`（補正データを当てた後）。**下の 1〜3 章とずれる場合は、この章が正**（手順 5 の実装で 1〜3 章も直す）。
+
+### 0-1. テスト仕様に対する移し方
+
+| ID | 問題 | 件数 | 決めたこと |
+|---|---|---:|---|
+| F-15 | 旧でログインできなかった会員が、新ではログインできる。旧のログインは、ロックアウト中・利用開始日が空か未来・利用終了日を過ぎた会員を止めていた（旧 `AuthModel.class.php:149-154`）。新は `status` しか見ない | 利用終了日を過ぎた 39 名（受講者 34・全体管理者 4・求人企業 1）、開始日が空 1 名、ロックアウト中 0 | **旧でログインできない会員は `status = inactive` で入れる。** 利用期間・ロックアウトの列はそのまま残す。移行した日で判定するので、cutover の直前に流し直す。運営が管理画面で active に戻せる |
+| F-22 / F-23 | 削除済みの会員のメールが旧のまま残り、そのアドレスで新しく登録できない | 51 名 | **削除済みの会員のメールは NULL で入れる** |
+| F-31 | 旧で管理画面に入れたロールの会員が、新では受講者と同じ扱いになる | system_admin 16 / group_manager 19 / company_manager 40 | **今のまま旧のロールで入れ、どう扱うかを運営に確かめる**（[確認事項 D10](../open-questions.md#d-cutover-の運用で決めておきたいこと)） |
+| F-43 | 旧の固定項目の表示・必須の設定が、新に効かない（新は `settings.profile_fields` を読む） | 固定項目 34 | **新の設定には入れない（新の既定値のまま）。** 必須にするかは cutover 後に運営が画面で決める。`tenant_profile_items` の `item_type = 0` の行は今のまま残す。テスト F-43 は対象外にする |
+| F-51 | 旧で「携帯には送らない」だけだった会員の受け取り設定が、新では PC も止める（新は `channel` を見ない） | お知らせ 441 名 | **携帯の受け取り設定（`channel = 'mobile'`）は移さず、一覧に出す**（理由「移行対象外」。新は携帯のアドレスに送らない） |
+| F-60 | 旧で削除したタグ（属性）が、新の一覧・会員の詳細・選択肢に出る（新は `deleted_at` を見ない） | 1 件「掲示板書き込みテスト」（割当 2,550 件） | **削除済みのタグと、その割当は移さず、一覧に出す**（理由「移行対象外」）。共通のルール「削除済みも移す」の例外 |
+| F-14 | ログイン ID が別の会員のメールと同じで、その会員がログイン ID でログインできない（新はメールを先に引く） | 6 名 | **一覧に出し、どちらを直すかを運営に決めてもらう**（[確認事項 D12](../open-questions.md#d-cutover-の運用で決めておきたいこと)。直すのは `fixups`） |
+| F-64 | 受講者のコース別進捗の CSV の「属性名」が空になる（CSV は `tenant_attributes` を読み、移行と新アプリのタグは `user_tags`） | — | **新アプリ側の課題にする**（新で作ったタグも CSV に出ない） |
+
+### 0-2. 暫定対応の本番の対応
+
+| 暫定対応 | 件数 | 決めたこと |
+|---|---:|---|
+| メールが空の会員に合成アドレス（`ext-<user_id>@lw2.invalid`）を入れる（補正データ） | 2,698 名前後 | **入れない（NULL にする）。** 新はメールを任意にした（`20260928061152`） |
+| メールが重複する会員に合成アドレスを入れる（補正データ） | 342 名前後 | **重複した組のどれにメールを残すかを運営に決めてもらい、ほかは NULL にする**（[確認事項 D11](../open-questions.md#d-cutover-の運用で決めておきたいこと)。決まるまでは、組の中で最も新しく使われた会員に残す） |
+| LINE を共有する 4 名のうち 3 名の LINE を外す（補正データ） | 4 名 | 区分 05 の LINE で扱う |
+| ロールが空の会員（`user_id = 911`）を移さない | 1 名 | 今のまま（2026-09-22 に決定済み） |
+
+### 0-3. 移行の外の課題（新アプリ・運営）
+
+- メールの無い会員（2,635 名）は、パスワードの再設定（メール）を使えない（[確認事項 D13](../open-questions.md#d-cutover-の運用で決めておきたいこと)）。
+- 新の個別番号の採番（`MAX(regist_no)+1`）は、旧の番号（テナント ID ＋「0」＋連番。例 `1003155`）と桁が揃わない（次の会員は `3156`）。番号は重ならない。新アプリの設計（「桁が揃う」）とずれているので、開発チームに伝える。
+- 受講者のコース別進捗の CSV の属性名（F-64）。
+
+---
+
 ## 1. 前提
 
 ### 1-1. 運営への確認事項
@@ -31,6 +66,8 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | 事項 | 決定 |
 |---|---|
 | LINE 公式アカウント | **継続する。** `user.line_id` → `line_links` を移行対象にする |
+| LINE 連携の設定 | **新アプリが読む `tenants.settings` の `line` に入れる**（2026-10-22）。`application_config` の `line_chk` → `enabled`、`line_id` → `official_account_id`、`line_channel_id` → `login_channel_id`。`notification_kinds` は空（旧に対応する設定が無い）。**旧の `line_channel_id` / `line_channel_sercret` は LINE ログインのチャネル**（旧 `LoginController` が組で使う）なので、シークレットは `tenant_secrets` の `line_login_channel_secret`（school-launcher `20261015021737`）に入れる。`send_line_chanel_token` は公式アカウントの `line_channel_access_token`。**旧に公式アカウントのチャネルシークレットは無い**ので、`line_channel_secret` は入らない |
+| 会員の個別番号 | **`user_personal_numbers` に移す**（school-launcher `20261016030602`。2026-10-22）。`regist_no` / `personal_no`（新では文字列）/ `scout_display_type`（0/1/2 → `name` / `nickname` / `personal_no`）。新システムは新しい会員に「テナント内の `regist_no` の最大 + 1」を振るので、`regist_no` も旧の値のまま入れる。それまで入れていた `users.member_no` には書かない（新アプリが読まない。列を消す migration は別に確認を取ってから作る） |
 | プロフィール画像 | **データは移行しない。** `avatar_url` の列は使うが空で始め、会員が登録し直す |
 | プロフィール項目 | **非表示のものも含めて全項目を移す**（固定34・自由記述15）。`show_flag` などの制御はそのまま移し（固定の印 `*_static_chk` は現状は移していない。受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた）、**新環境の画面に出ないことは移行の問題としない**。ステージング実測では非表示7項目に値は0件だったが、あれば値も移す |
 | `site` の運用値 | **`tenants.settings` に移す**（A3）。`legacy_site_id`、`service`（名称・説明・提供期間・URL・`application_path`）と `features`（`lw_type` / テスト分析 / ランキング / 日次メール）。`linkpreview_api_key` は `tenant_secrets` へ。テナントの設定9表（`lw2_config` など7キー。ライブの設定 `config_live_lesson` → `lw2_live` を含む）と決済の設定（`lw2_payment`）も同じ `settings` に入る（[review.md のテナントの設定](review.md#テナントの設定2026-09-30-に仕分け)）。**新環境に対応する機能が無くても移す** — 参照されないことは移行しない理由にならない |
@@ -63,7 +100,7 @@ NOT NULL / UNIQUE / CHECK に当たるものと、参照先が物理削除され
 | 当たった行の処理 | **移さず `out/not-migrated.csv` に出し、暫定対応で直してから再実行する。** **どこが当たるか**は [確認事項](../open-questions.md)の確認事項に挙げる |
 | 投入前の検査 | **NOT NULL / UNIQUE / 外部キーを、変換した直後に移行先のスキーマと突き合わせる。** dry-run では INSERT が実行されないので、ここで見ないと違反が本番まで見つからない |
 | 暫定対応の置き場所 | **移行ツールには入れない。** 別ツール `fixups`（`plan` / `sql` / `template` / `check`）が、移行元を直す SQL と、運営が値を決める補正データ（`overrides.csv`）を作る。移行ツールは補正データを**読むだけ**で、値は作らない |
-| メールアドレス | **旧の値をそのまま入れる。** 欠損・重複した会員は移らない。**合成アドレスはツールで作らない**（作ると何が本物か分からなくなる）。割り当ては暫定対応で決める |
+| メールアドレス | **旧の値をそのまま入れる。** 新はメールを任意にした（`20260928061152`）ので、**欠損した会員は NULL で移る**（ログイン ID でログインする）。重複した組は、補正データで 1 人に残し、ほかは NULL にする（0 章 0-2・[D11](../open-questions.md)）。**合成アドレスは作らない**（2026-10-26 決定。以前は `ext-<user_id>@lw2.invalid` を補正データで入れていた）。削除済みの会員は NULL |
 | `role_id` が NULL の会員 | **既定ロールに倒さない**（権限が静かに変わる）。その会員は移らず、[3.4 の B](#34-移行の対象外)に理由つきで対象外として記録する。ステージングの該当は `user_id=911` の1名（受講0件・未ログインの重複アカウント）。**本番ダンプでは該当者を取り直す** |
 | 同じ LINE アカウントを持つ会員 | **どの会員にも紐付けない**（`(tenant_id, line_user_id)` が UNIQUE）。一覧に出し、暫定対応で1人に決めてから再実行する |
 | 親の無いプロフィールラベル | **落とす**（対応する `profile_item` が無く、`item_id` の FK 先を作れない）。落とした内容を警告に出す |
@@ -226,7 +263,7 @@ dry-run は INSERT を実行しないため、制約違反は出ない。実際�
 | 当てたもの | 内容 |
 |---|---|
 | SQL（移行元 DB） | 会員が存在しない `user_attribute` 36件を削除 ／ `login_id` の重複12件に `#<user_id>` を付与（各組の最小 `user_id` はそのまま） |
-| 補正データ（`overrides.csv`） | メール欠損 2,698名・重複 342名に合成アドレス（`ext-<user_id>@lw2.invalid`。ブリッジと同じ形式）／ LINE を共有する4名のうち3名の `line_id` を `NULL` |
+| 補正データ（`overrides.csv`） | メール欠損 2,698名・重複 342名に合成アドレス（`ext-<user_id>@lw2.invalid`。ブリッジと同じ形式）／ LINE を共有する4名のうち3名の `line_id` を `NULL`。**2026-10-26 に見直し:** 合成アドレスはやめ、欠損は空のまま（NULL）、重複は組の 1 人に残してほかを NULL にする（0 章） |
 
 **実投入の予行（INSERT → ロールバック）も完走**し、35,572行が実際に INSERT できることを確認した
 （移行先はシード状態のまま）。
@@ -295,7 +332,7 @@ foundation.1   マスター
 foundation.2   ユーザ（会員より先に定義が入っていること）
                  ├ users → external_user_links
                  │   ↓  ※ 既存ブリッジ（external_user_import_service）が正本。cutover 前夜にフル同期
-                 ├ user_addresses / user_profile_values / user_field_visibility
+                 ├ user_addresses / user_personal_numbers / user_profile_values / user_field_visibility
                  ├ notification_optouts（極性を反転）
                  └ tenant_group_members / user_tag_assignments / instructor_assignments
 
@@ -434,7 +471,8 @@ python -m migrator run --dry-run --section foundation
 
 - `tenant` は設定 `tenant.legacy_id` の1行だけ（本番 12 / ステージング 10）。`user` 以下の会員テーブルも同じ条件で絞る
 - `role_master` / `profile_cate` は **`tenant_id` を持たない全テナント共通のマスタ**。テナントで絞らず全行読み、移すときに recademy 用として扱う
-- 削除済み会員（`del_chk=1`）も**移す**。`users.status='deleted'` で表現する
+- 削除済み会員（`del_chk=1`）も**移す**。`users.status='deleted'` で表現する。`login_id` と `email` は NULL（0 章 0-1）
+- 削除済みの属性（`attribute.del_chk=1`）は**移さない**。その属性の割当・自動割当の条件も移さず、理由「移行対象外」で一覧に出す（新はタグの `deleted_at` を見ない。0 章 F-60）
 
 **SELECT してはいけない列**
 
@@ -479,10 +517,10 @@ python -m migrator run --dry-run --section foundation
 | ゼロ日付 (`0000-00-00`) | **NULL として扱う**（日時列すべて共通）。件数を警告に出す |
 | `user.birth_date` | `birth_year` / `birth_month` / `birth_day` に分解（時刻部は捨てる。全件 `00:00:00`） |
 | `user.role_id` が NULL | **既定値に倒さず、停止もしない。** `users.role` を NULL のまま投入前の制約検査に当て、NOT NULL 違反としてその会員を `out/not-migrated.csv` に出す（移らない） |
-| `user.del_chk` / `valid_chk` / `limit_date` | `status` は判定結果で、`del_chk=1`→`deleted` / `valid_chk=0`→`inactive` / それ以外→`active`。**`limit_date` は判定に使わない**（期限切れでも `active`。ステージングでは有効会員 39名が該当。以前の記述は「期限切れ→`inactive`」だった）。**元の列は `is_valid` / `login_start_date` / `login_end_date` に残す** |
+| `user.del_chk` / `valid_chk` / `is_lockout` / `entry_date` / `limit_date` | `status` は判定結果で、`del_chk=1`→`deleted` / `valid_chk=0`→`inactive` / **旧でログインできない会員**（ロックアウト中・利用開始日が空か未来・利用終了日を過ぎた。旧 `AuthModel.class.php:149-154`）→`inactive` / それ以外→`active`。**判定は移行した日（JST）で行う**ので、cutover の直前に流し直す（2026-10-26 決定。以前は `limit_date` を判定に使わなかった）。**元の列は `is_valid` / `login_start_date` / `login_end_date` に残す** |
 | `user.login_id` → `users.login_id` | **`del_chk=1`（削除済み）は NULL。** それ以外はそのまま入れる（2026-10-02 決定） |
 | `users.must_change_password` | **移す会員はすべて TRUE**（初回ログインでパスワードの変更を求める）。新システムの既存会員は書き換えない（投入は既存行を飛ばす） |
-| `sendmail_*_chk` ほか通知系 | **極性を反転**して `notification_optouts` へ（`channel` で PC / 携帯を分ける） |
+| `sendmail_*_chk` ほか通知系 | **極性を反転**して `notification_optouts` へ。**PC（`channel = 'pc'`）だけを入れる。** 携帯の受け取り設定は移さず、理由「移行対象外」で一覧に出す（新は `channel` を見ないので、携帯だけ止めた会員の PC まで止まって見える。0 章 F-51） |
 
 > **取り違え注意**
 > - **`role_index` と `role_id` を混同しない。** 取り違えると求人企業とグループ管理者が入れ替わる
@@ -536,11 +574,10 @@ python -m migrator run --dry-run --section foundation
 |---|---|
 | `user_attached_info.personal_record_chk` / `line_entry_chk` | どの Step も読まない（`personal_record_chk` はステージングで87名に値あり） |
 | `user.sendmail_bbs_comment_pc_chk` / `_mobile_chk` | `notification_optouts` の Step が読む5列に入っていない |
-| `user_personal_no.regist_no` | `personal_no` だけを `users.member_no` に入れている（ステージングは 3,155名全員に値あり） |
 | `system_admin_role` | 読む実装が無い（ステージングの対象テナントは0行） |
 | `attribute.kiracari_user_chk` | `user_tags` に受け皿が無い |
 | `instructor_assignments.target_id`（`scope='course'`） | NULL のまま。講座の移行後に埋める Step が無い（`legacy_target_id` に旧 `lesson_id` は残る） |
-| `profile_item.*_static_chk`（4列）、`group.system_sort_no`、`user.new_skill_user_chk` / `live_lesson_preview_icon`、`user_personal_no.scout_display_type` | **受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた**（ステージングは `*_static_chk` が49項目中13項目、`system_sort_no` が28行すべて、`live_lesson_preview_icon` が3名、`scout_display_type` の `2` が1名。`new_skill_user_chk` は全員 NULL） |
+| `profile_item.*_static_chk`（4列）、`group.system_sort_no`、`user.new_skill_user_chk` / `live_lesson_preview_icon` | **受け皿が無い。2026-10-02 に受け皿の migration を検討したが取り下げた**（ステージングは `*_static_chk` が49項目中13項目、`system_sort_no` が28行すべて、`live_lesson_preview_icon` が3名。`new_skill_user_chk` は全員 NULL） |
 
 ### 3.5 検証
 
@@ -550,9 +587,13 @@ python -m migrator run --dry-run --section foundation
 | 会員の件数 | 抽出時の件数と `SELECT COUNT(*) FROM users` を照合（ステージング実測 3,155名） |
 | ロールの分布 | `users.role` ごとの人数を出し、運営に確認してもらう（ステージング実測は [1-5](#1-5-ステージングダンプでの実測2026-09-22-実施)） |
 | `platform_admin` が0件か | 1件でもあれば停止して原因を追う |
-| メールの一意性 | `UNIQUE (tenant_id, email)` 違反が出ないこと。**移さなかった会員の件数**を `not-migrated.csv` と突き合わせる |
+| メールの一意性 | `UNIQUE (tenant_id, email)` 違反が出ないこと。空文字・合成アドレス（`@lw2.invalid`）が無いこと。削除済みの会員のメールが NULL であること（`verify` のテスト仕様の確認 F-12・F-22） |
+| 会員の状態 | 旧でログインできなかった会員が `active` でないこと（`verify` の F-15） |
+| 会員の自然キー | `(tenant_id, user_id)`。メールが NULL の会員がいるので、メールでは既存の行を引かない（0 章） |
 | 削除済み会員のログイン ID | `del_chk=1` の会員の `users.login_id` がすべて NULL で、それ以外は旧と一致すること（`verify`） |
 | パスワード変更の要求 | 移した会員の `must_change_password` がすべて TRUE であること（`verify`） |
+| 会員の個別番号 | 旧 `user_personal_no` の行が `user_personal_numbers` にすべてあり、`regist_no` / `personal_no` / `scout_display_type` が旧と一致すること（`verify`） |
+| LINE 連携の設定 | `settings.line` の `enabled` / `official_account_id` / `login_channel_id` が旧と一致し、`line_login_channel_secret` の長さが旧と同じこと（`verify`。値は比べない） |
 | 通知設定の極性 | 数名分を lw2 と突き合わせ、**真逆になっていない**ことを確認する |
 
 ---
